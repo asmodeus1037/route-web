@@ -45,6 +45,11 @@ MASTER_CREDENTIALS = {
 }
 
 # ============================================================
+# ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
+# ============================================================
+uid_index = {}
+
+# ============================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================================
 def get_msk_now():
@@ -131,8 +136,6 @@ def build_uid_index(tickets):
                 'ticket': t
             }
     return index
-
-uid_index = {}
 
 def get_ticket_row_by_uid(uid):
     if uid in uid_index:
@@ -698,7 +701,7 @@ def master_overview(name):
         return render_template('master_empty.html', name=name)
     for t in master_tickets:
         t['hours_since'] = get_hours_since(t.get('created', ''))
-        t['is_today_done'] = t.get('status') in ['done', 'fail']  # упрощённо
+        t['is_today_done'] = t.get('status') in ['done', 'fail']
     groups_dict = {}
     for t in master_tickets:
         darks_num = t.get('darks') or 'без номера'
@@ -798,7 +801,6 @@ def master_done(name, darks_number, uid):
         tickets = cache_data.get('tickets', [])
         tickets = [t for t in tickets if t.get('uid') != uid]
         save_master_cache(name, tickets, '')
-    # Здесь должна быть логика очереди, упрощённо
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/fail/<uid>')
@@ -884,7 +886,6 @@ if __name__ == "__main__":
     logger.info("🚀 Запуск приложения...")
     try:
         tickets = get_tickets_from_sheets()
-        global uid_index
         uid_index = build_uid_index(tickets)
         save_admin_cache(tickets)
         logger.info("✅ Кеш загружен")
