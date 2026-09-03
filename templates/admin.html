@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="icon" href="/data/vanta.png" type="image/png">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Админ-панель</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+<div class="container" id="appContainer">
+    <h1>📋 Админ-панель 
+        <span class="last-update">🔄 {{ now }}</span>
+        <a href="#" class="logout-btn" onclick="adminLogout(event)">🚪 Выйти</a>
+    </h1>
+    <div class="subtitle">Назначение мастеров и отправка маршрутов</div>
+    <div class="top-actions">
+        <button class="btn btn-view" onclick="showRoutes()">🗺️ Просмотр маршрутов</button>
+        <button class="btn btn-send" onclick="openSendModal()">📤 Обновить кэш мастера</button>
+        <button class="btn btn-clear-master" onclick="openClearMasterModal()">🧹 Снять заявки</button>
+        <button class="btn btn-danger" onclick="clearAllDates()">🗑️ Очистить мастеров</button>
+        <button class="btn btn-notify" onclick="openNotifyModal()">📢 Уведомить кураторов</button>
+        <button class="btn btn-primary" onclick="syncAll()">🔄 Синхронизировать</button>
+        <a href="/logout" class="btn btn-danger" onclick="adminLogout(event)">🚪 Выйти</a>
+    </div>
+    <div class="tabs" id="tabHeaders">
+        {% for dir_name, dir_data in directions.items() %}
+            <button class="tab-btn {% if loop.first %}active{% endif %}" data-tab="tab-{{ loop.index }}">📍 {{ dir_name }} <span class="count">({{ dir_data.active_count }})</span></button>
+        {% endfor %}
+    </div>
+    <div class="filters">
+        <label>Мастер:</label>
+        <select id="masterFilter" onchange="renderCurrentTab()">
+            <option value="all">Все</option>
+            <option value="unassigned">Не назначены</option>
+            {% for m in masters %}
+            <option value="{{ m }}">{{ m }}</option>
+            {% endfor %}
+        </select>
+        <label>Источник:</label>
+        <select id="sourceFilter" onchange="renderCurrentTab()">
+            <option value="all">Все</option>
+            <option value="Заявки">Заявки</option>
+            <option value="Импорт М4">Импорт М4</option>
+        </select>
+        <input type="text" id="searchInput" placeholder="🔍 Поиск..." oninput="renderCurrentTab()">
+        <button class="btn btn-outline btn-sm" onclick="resetFilters()">Сброс</button>
+    </div>
+    <div class="stats">
+        <div class="stat-card"><div class="num" id="totalCount">0</div><div class="label">Всего</div></div>
+        <div class="stat-card"><div class="num" id="pendingCount">0</div><div class="label">🟡 В работе</div></div>
+        <div class="stat-card"><div class="num" id="todoCount">0</div><div class="label">🔧 Доделать</div></div>
+        <div class="stat-card"><div class="num" id="unassignedCount">0</div><div class="label">Не назначены</div></div>
+    </div>
+    <div class="sync-bar">
+        <div class="info">👥 Мастера: <strong>{{ masters|join(', ') }}</strong></div>
+        <div class="status" id="syncStatus">✅ Готово</div>
+        <div class="spinner" id="syncSpinner"></div>
+    </div>
+    <div id="tabContent">
+        {% for dir_name, dir_data in directions.items() %}
+        <div class="tab-content {% if loop.first %}active{% endif %}" id="tab-{{ loop.index }}">
+            <div id="renderDir{{ loop.index }}"></div>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="save-bar">
+        <div class="info" id="changesInfo">💡 Изменения сохраняются по кнопке</div>
+        <button class="btn btn-success" onclick="saveAllChanges()">💾 Сохранить все</button>
+    </div>
+</div>
+
+<!-- Модалки -->
+<div class="modal" id="notifyModal">
+    <div class="modal-content">
+        <button class="close-btn" onclick="closeNotifyModal()">×</button>
+        <h3>📢 Оповестить кураторов</h3>
+        <div id="notifyPreview"></div>
+        <div style="margin-top:12px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
+            <button class="btn btn-outline" onclick="closeNotifyModal()">Отмена</button>
+            <button class="btn btn-notify" onclick="sendNotification()">📢 Отправить</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal" id="sendModal">
+    <div class="modal-content">
+        <button class="close-btn" onclick="closeSendModal()">×</button>
+        <h3>📤 Обновить кэш мастера</h3>
+        <p style="color:#64748b;margin-bottom:12px;">Выберите мастера для обновления кэша</p>
+        <div id="sendMasterList"></div>
+        <div style="margin-top:12px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
+            <button class="btn btn-send" id="sendToAllBtn" onclick="sendRouteToAll()">📤 Обновить ВСЕХ</button>
+            <button class="btn btn-send" id="sendToMasterBtn" style="display:none;" onclick="sendRoute()">📤 Обновить</button>
+            <button class="btn btn-outline" onclick="closeSendModal()">Отмена</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal" id="routesModal">
+    <div class="modal-content">
+        <button class="close-btn" onclick="closeRoutesModal()">×</button>
+        <h3>🗺️ Маршруты мастеров</h3>
+        <div id="routesContent"></div>
+    </div>
+</div>
+
+<div class="modal" id="clearMasterModal">
+    <div class="modal-content">
+        <button class="close-btn" onclick="closeClearMasterModal()">×</button>
+        <h3>🧹 Снять заявки с мастеров</h3>
+        <p style="color:#64748b;margin-bottom:12px;">Выберите мастера для снятия заявок</p>
+        <div id="clearMasterList"></div>
+        <div style="margin-top:12px;text-align:right;">
+            <button class="btn btn-outline" onclick="closeClearMasterModal()">Отмена</button>
+            <button class="btn btn-danger" onclick="clearMaster()">🧹 Снять</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal" id="actionModal">
+    <div class="modal-content">
+        <button class="close-btn" onclick="closeActionModal()">×</button>
+        <h3>⚙️ Действия с заявкой</h3>
+        <p style="color:#64748b;margin-bottom:12px;">Выберите действие для заявки <strong id="actionUidDisplay"></strong></p>
+        <div id="actionButtons">
+            <button class="btn btn-done" onclick="selectAction('done')">✅ Выполнено</button>
+            <button class="btn btn-evacuation" onclick="selectAction('evacuation')">🚚 Эвакуация</button>
+            <button class="btn btn-fail" onclick="selectAction('fail')">🚫 Вело отсутствует</button>
+            <button class="btn btn-warning" onclick="selectAction('todo')">🔧 Доделать</button>
+            <button class="btn btn-taken" onclick="selectAction('taken')">📦 Забрал без замены</button>
+        </div>
+        <div id="actionExtra" style="display:none;margin-top:12px;">
+            <input type="text" id="actionExtraInput" placeholder="Дополнительная информация...">
+        </div>
+        <div style="margin-top:12px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
+            <button class="btn btn-outline" onclick="closeActionModal()">Отмена</button>
+            <button class="btn btn-success" onclick="submitAction()">✅ Подтвердить</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Передаём данные с сервера
+    window.__DATA__ = {
+        masters: {{ masters|tojson }},
+        directions: {{ directions|tojson }},
+        now: '{{ now }}'
+    };
+</script>
+<script src="/static/js/admin.js"></script>
+</body>
+</html>

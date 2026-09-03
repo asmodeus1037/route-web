@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+/data/cache/
+credentials.json
+.env
+venv/
+*.log

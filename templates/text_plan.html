@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Текстовый план - {{ name }}</title>
+    <link rel="icon" href="/data/vanta.png" type="image/png">
+    <link rel="stylesheet" href="/static/css/text_plan.css">
+</head>
+<body>
+    <div class="header">
+        <h1>📋 План</h1>
+        <a href="/master/{{ name }}" class="back-link">← Назад</a>
+    </div>
+    
+    <div class="stats">
+        <span>📌 Всего: {{ tickets|length }}</span>
+        <span>🟡 В работе: {{ pending_count }}</span>
+        <span>🔧 Доделать: {{ todo_count }}</span>
+    </div>
+    
+    <div id="tickets-list">
+        {% for t in tickets %}
+        {% set is_battery = t.type in ['Аккумуляторная батарея', 'Зарядное устройство'] %}
+        <div class="ticket-item {% if is_battery %}battery{% endif %}">
+            <div class="top">
+                <span class="type {% if is_battery %}battery-type{% endif %}">
+                    {% if is_battery %}
+                        {{ t.type }}
+                    {% else %}
+                        {{ t.gos or 'Без номера' }}
+                    {% endif %}
+                </span>
+                <span class="status status-{{ t.status }}">
+                    {% if t.status == 'pending' %}⏳ В работе
+                    {% elif t.status == 'todo' %}🔧 Доделать
+                    {% elif t.status == 'done' %}✅ Выполнено
+                    {% elif t.status == 'fail' %}🚫 Обработано
+                    {% endif %}
+                </span>
+            </div>
+            <div class="desc">{{ t.desc }}</div>
+            <div class="meta">
+                <span>{{ t.bike_type }}</span>
+                <span>⏱️ {{ t.hours_since }} ч</span>
+                <span>🆔 {{ t.uid }}</span>
+            </div>
+        </div>
+        {% else %}
+        <div class="no-tickets">📭 Нет активных заявок</div>
+        {% endfor %}
+    </div>
+    
+    <div class="footer">Обновлено: {{ now }}</div>
+</body>
+</html>

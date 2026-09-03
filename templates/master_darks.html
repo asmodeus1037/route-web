@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="icon" href="/data/vanta.png" type="image/png">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Даркстор #{{ darks_number }}</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="/static/css/master.css">
+</head>
+<body>
+    <div id="toast" class="toast">✅ Заявка закрыта</div>
+    <h1>📍 {{ address }}</h1>
+    <div class="sub-title">
+        <span>#{{ darks_number }} · {{ tickets|length }} заявок</span>
+        <span>
+            <a href="/master/{{ name }}" class="back-link">← Назад к маршруту</a>
+        </span>
+        <span>🕒 {{ now }}</span>
+    </div>
+    {% if contact %}
+    <div class="contact">📞 <a href="tel:{{ contact }}">{{ contact }}</a></div>
+    {% endif %}
+
+    <div id="tickets-container">
+        {% for t in tickets %}
+        {% set is_battery = t.type in ['Аккумуляторная батарея', 'Зарядное устройство'] %}
+        <div class="ticket {{ t.status }} {% if is_battery %}battery-ticket{% endif %}" id="ticket-{{ t.uid }}">
+            <div class="ticket-header">
+                <span class="ticket-id">
+                    {% if is_battery %}
+                        {{ t.type }}
+                    {% else %}
+                        {{ t.gos or 'Без номера' }}
+                    {% endif %}
+                </span>
+                <span class="status-badge status-{{ t.status if t.status != 'pending' else 'pending' }}">
+                    {% if t.status == 'done' %}✅ Выполнено
+                    {% elif t.status == 'fail' %}🚫 Вело отсутствует
+                    {% elif t.status == 'todo' %}🔧 Доделать
+                    {% else %}⏳ В работе{% endif %}
+                </span>
+            </div>
+            <div class="ticket-desc">{{ t.desc }}</div>
+            <div><span class="ticket-type">{{ t.bike_type }}</span></div>
+            <div class="ticket-meta">
+                <span>⏱️ {{ t.hours_since }} ч</span>
+                <span>🆔 {{ t.uid }}</span>
+            </div>
+            <div class="ticket-actions">
+                {% if t.status == 'pending' or t.status == 'todo' %}
+                    {% if t.type == 'Аккумуляторная батарея' or t.type == 'Зарядное устройство' %}
+                        <form action="/master/{{ name }}/darks/{{ darks_number }}/replace_yes/{{ t.uid }}" method="POST" style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;">
+                            <input type="number" name="parts" placeholder="Кол-во" value="0" min="0" required style="width:60px;padding:2px 8px;border:1px solid #d1d5db;border-radius:30px;font-size:12px;outline:none;background:#f8fafc;height:32px;text-align:center;">
+                            <button type="submit" class="btn btn-done">✅ Да</button>
+                        </form>
+                        <form action="/master/{{ name }}/darks/{{ darks_number }}/taken_no_replace/{{ t.uid }}" method="POST" style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;">
+                            <input type="number" name="parts" placeholder="Кол-во" value="0" min="0" required style="width:60px;padding:2px 8px;border:1px solid #d1d5db;border-radius:30px;font-size:12px;outline:none;background:#f8fafc;height:32px;text-align:center;">
+                            <button type="submit" class="btn btn-taken">📦 Забрал без замены</button>
+                        </form>
+                        <a href="#" class="btn btn-fail" onclick="openModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'replace_no', '❌ Причина, почему замена не произведена')">❌ Нет</a>
+                    {% else %}
+                        <form action="/master/{{ name }}/darks/{{ darks_number }}/done/{{ t.uid }}" method="POST" class="parts-form">
+                            <input type="text" name="parts" placeholder="Запчасти..." value="{{ t.parts or '' }}" required>
+                            <button type="submit" class="btn btn-done">✅ Выполнено</button>
+                        </form>
+                        <a href="#" class="btn btn-evacuation" onclick="openModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'evacuation', '🚚 Причина эвакуации')"><span class="icon">🚚</span> Эвакуация</a>
+                        <a href="#" class="btn btn-fail" onclick="closeTicketInstant('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'fail')">🚫 Вело отсутствует</a>
+                    {% endif %}
+                {% else %}
+                    <a href="/master/{{ name }}/darks/{{ darks_number }}/reset/{{ t.uid }}" class="btn btn-reset">↩️ Вернуть</a>
+                {% endif %}
+            </div>
+        </div>
+        {% else %}
+        <div class="no-tickets">Нет заявок</div>
+        {% endfor %}
+    </div>
+
+    <div class="modal" id="reasonModal">
+        <div class="modal-content">
+            <h3 id="modalTitle">❌ Укажите причину</h3>
+            <form id="reasonForm" method="POST">
+                <textarea name="reason" id="reasonInput" placeholder="Укажите причину..." required></textarea>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-reset" onclick="closeModal()">Отмена</button>
+                    <button type="submit" class="btn btn-fail">Подтвердить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="footer">Обновлено: {{ now }}</div>
+    
+    <script src="/static/js/master.js"></script>
+</body>
+</html>

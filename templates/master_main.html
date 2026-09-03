@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="icon" href="/data/vanta.png" type="image/png">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Маршрут: {{ name }}</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="/static/css/master.css">
+</head>
+<body>
+    <div id="toast" class="toast">✅ Заявка закрыта</div>
+    <div class="header">
+        <h1>🛵 Маршрут: {{ name }}</h1>
+        <a href="/logout" class="logout-btn" onclick="logout(event)">🚪 Выйти</a>
+    </div>
+    <div class="sub-title">
+        <span>📍 {{ total_tickets }} заявок, {{ groups|length }} дарксторов</span>
+        <span>
+            <a href="{{ route_url }}" target="_blank" class="route-btn">🗺️ Маршрут</a>
+            <a href="/master/{{ name }}/text_plan" class="text-plan-btn">📋 План</a>
+        </span>
+        <span>🕒 {{ now }}</span>
+    </div>
+    <a href="#" class="back-link" onclick="history.back()">← Назад</a>
+    <div class="darks-grid" id="darksGrid">
+        {% for group in groups %}
+        <div class="darks-card" onclick="location.href='/master/{{ name }}/darks/{{ group.darks_number }}'">
+            <div class="address">{{ group.address }}</div>
+            <div class="number">#{{ group.darks_number }}</div>
+            {% if group.contact %}
+            <div class="contact">📞 <a href="tel:{{ group.contact }}">{{ group.contact }}</a></div>
+            {% endif %}
+            <div class="stats">
+                <span class="pending-count">🟡 {{ group.pending }}</span>
+                <span class="done-count">✅ {{ group.done }}</span>
+            </div>
+            <div style="margin-top:8px;">
+                {% for t in group.tickets[:2] %}
+                <div class="ticket-preview">
+                    <span>{{ t.gos or 'Без номера' }}</span>
+                    <span>{{ t.desc[:30] }}{% if t.desc|length > 30 %}...{% endif %}</span>
+                </div>
+                {% endfor %}
+                {% if group.tickets|length > 2 %}
+                <div style="font-size:12px;color:#94a3b8;padding-top:4px;">+ ещё {{ group.tickets|length - 2 }}</div>
+                {% endif %}
+            </div>
+        </div>
+        {% else %}
+        <div class="no-tickets">Нет активных заявок</div>
+        {% endfor %}
+    </div>
+    <div class="footer">Обновлено: {{ now }}</div>
+    
+    <script src="/static/js/master.js"></script>
+</body>
+</html>
