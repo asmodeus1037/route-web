@@ -1114,7 +1114,9 @@ def api_master_history(name):
 @app.route('/master/<name>/darks/<darks_number>/done/<uid>', methods=['POST'])
 @login_required
 def master_done(name, darks_number, uid):
+    logger.info(f"📝 master_done вызван: name={name}, uid={uid}, session={session}")
     if session.get('master_name') != name:
+        logger.warning(f"❌ Сессия не совпадает: {session.get('master_name')} != {name}")
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
     parts = request.form.get('parts', '')
     if not parts.strip():
