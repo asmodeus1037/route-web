@@ -19,6 +19,7 @@
         <span>
             <a href="{{ route_url }}" target="_blank" class="route-btn">🗺️ Маршрут</a>
             <a href="/master/{{ name }}/text_plan" class="text-plan-btn">📋 План</a>
+            <a href="/master/{{ name }}/history" class="text-plan-btn" style="background:#8b5cf6;">📜 История</a>
         </span>
         <span>🕒 {{ now }}</span>
     </div>
@@ -28,9 +29,16 @@
         <div class="darks-card" onclick="location.href='/master/{{ name }}/darks/{{ group.darks_number }}'">
             <div class="address">{{ group.address }}</div>
             <div class="number">#{{ group.darks_number }}</div>
+            
+            <!-- КОНТАКТ: телефон или телеграм -->
             {% if group.contact %}
-            <div class="contact">📞 <a href="tel:{{ group.contact }}">{{ group.contact }}</a></div>
+            <div class="contact">
+                <a href="#" onclick="event.stopPropagation(); openContact('{{ group.contact }}'); return false;">
+                    📞 {{ group.contact }}
+                </a>
+            </div>
             {% endif %}
+            
             <div class="stats">
                 <span class="pending-count">🟡 {{ group.pending }}</span>
                 <span class="done-count">✅ {{ group.done }}</span>

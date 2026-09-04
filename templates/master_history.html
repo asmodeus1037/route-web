@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="icon" href="/data/vanta.png" type="image/png">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>История: {{ name }}</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="/static/css/master.css">
+    <style>
+        .history-item {
+            background: white;
+            border-radius: 12px;
+            padding: 12px 16px;
+            margin-bottom: 8px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+            border-left: 4px solid #3b82f6;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .history-item .date {
+            font-size: 11px;
+            color: #94a3b8;
+            min-width: 140px;
+        }
+        .history-item .action {
+            font-weight: 600;
+            font-size: 13px;
+        }
+        .history-item .action.done { color: #22c55e; }
+        .history-item .action.evacuation { color: #ea580c; }
+        .history-item .action.fail { color: #94a3b8; }
+        .history-item .action.replace_yes { color: #22c55e; }
+        .history-item .action.taken_no_replace { color: #8b5cf6; }
+        .history-item .action.replace_no { color: #f59e0b; }
+        .history-item .detail {
+            font-size: 12px;
+            color: #64748b;
+        }
+        .history-item .uid {
+            font-size: 11px;
+            color: #94a3b8;
+            background: #f1f5f9;
+            padding: 0 8px;
+            border-radius: 30px;
+            line-height: 20px;
+        }
+        .empty-history {
+            text-align: center;
+            color: #94a3b8;
+            padding: 60px 20px;
+        }
+        .back-link-history {
+            color: #3b82f6;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 14px;
+            display: inline-block;
+            margin: 8px 0 16px;
+        }
+        .back-link-history:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📜 История: {{ name }}</h1>
+        <a href="/logout" class="logout-btn" onclick="logout(event)">🚪 Выйти</a>
+    </div>
+    
+    <a href="/master/{{ name }}" class="back-link-history">← Назад к маршруту</a>
+    
+    <div id="historyContainer">
+        <div style="text-align:center;padding:20px;color:#94a3b8;">⏳ Загрузка...</div>
+    </div>
+    
+    <div class="footer">Обновлено: {{ now }}</div>
+
+    <script>
+        function logout(event) {
+            event.preventDefault();
+            localStorage.removeItem('master_login');
+            localStorage.removeItem('master_name');
+            window.location.href = '/logout';
+        }
+        
+        function getActionLabel(action) {
+            var labels = {
+                'done': '✅ Выполнено',
+                'evacuation': '🚚 Эвакуация',
+                'fail': '🚫 Вело отсутствует',
+                'replace_yes': '✅ Заменено',
+                'taken_no_replace': '📦 Забрано без замены',
+                'replace_no': '❌ Куратор не предоставил'
+            };
+            return labels[action] || action;
+        }
+        
+        function getActionClass(action) {
+            var classes = {
+                'done': 'done',
+                'evacuation': 'evacuation',
+                'fail': 'fail',
+                'replace_yes': 'done',
+                'taken_no_replace': 'taken_no_replace',
+                'replace_no': 'replace_no'
+            };
+            return classes[action] || '';
+        }
+        
+        function formatDate(dateStr) {
+            try {
+                var d = new Date(dateStr);
+                return d.toLocaleString('ru-RU', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            } catch {
+                return dateStr;
+            }
+        }
+        
+        fetch('/api/master_history/{{ name }}')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var container = document.getElementById('historyContainer');
+                if (!data.success || !data.history || data.history.length === 0) {
+                    container.innerHTML = '<div class="empty-history">📭 История пуста</div>';
+                    return;
+                }
+                
+                var html = '';
+                // Показываем последние 50 записей (сначала новые)
+                var history = data.history.reverse().slice(0, 50);
+                for (var i = 0; i < history.length; i++) {
+                    var item = history[i];
+                    var actionData = item.action || {};
+                    var action = actionData.action || '';
+                    var detail = '';
+                    
+                    if (action === 'done') {
+                        detail = 'Запчасти: ' + (actionData.parts || '-');
+                    } else if (action === 'evacuation') {
+                        detail = 'Причина: ' + (actionData.reason || '-');
+                    } else if (action === 'replace_yes') {
+                        detail = 'Количество: ' + (actionData.parts || '0') + ' шт.';
+                    } else if (action === 'taken_no_replace') {
+                        detail = 'Количество: ' + (actionData.parts || '0') + ' шт.';
+                    } else if (action === 'replace_no') {
+                        detail = 'Куратор не предоставил';
+                    } else if (action === 'fail') {
+                        detail = 'Вело отсутствует';
+                    }
+                    
+                    var actionLabel = getActionLabel(action);
+                    var actionClass = getActionClass(action);
+                    
+                    html += '<div class="history-item">';
+                    html += '<div>';
+                    html += '<div class="action ' + actionClass + '">' + actionLabel + '</div>';
+                    if (detail) {
+                        html += '<div class="detail">' + detail + '</div>';
+                    }
+                    html += '</div>';
+                    html += '<div style="text-align:right;">';
+                    html += '<div class="date">' + formatDate(item.timestamp) + '</div>';
+                    if (actionData.uid) {
+                        html += '<div class="uid">' + actionData.uid + '</div>';
+                    }
+                    html += '</div>';
+                    html += '</div>';
+                }
+                container.innerHTML = html;
+            })
+            .catch(function() {
+                document.getElementById('historyContainer').innerHTML = '<div class="empty-history">❌ Ошибка загрузки истории</div>';
+            });
+    </script>
+</body>
+</html>

@@ -1,3 +1,7 @@
+/* ============================================================
+   МАСТЕР - НОВЫЙ ДИЗАЙН (мягкий, бело-красный)
+   ============================================================ */
+
 * {
     box-sizing: border-box;
     margin: 0;
@@ -6,21 +10,32 @@
 
 :root {
     --primary: #dc3545;
-    --primary-dark: #c0392b;
     --primary-light: #fde8e8;
-    --bg: #f8f9fa;
+    --primary-dark: #c0392b;
+    --bg: #f4f6f9;
+    --card-bg: #ffffff;
     --text: #1e293b;
     --text-muted: #64748b;
+    --shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+    --shadow-hover: 0 4px 20px rgba(0, 0, 0, 0.08);
+    --radius: 16px;
+    --radius-sm: 10px;
 }
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #f4f6f9;
+    background: var(--bg);
     padding: 16px;
     max-width: 600px;
     margin: 0 auto;
-    color: #1e293b;
+    color: var(--text);
     padding-bottom: 80px;
+}
+
+/* ===== ШАПКА ===== */
+.header {
+    position: relative;
+    padding-right: 80px;
 }
 
 h1 {
@@ -29,11 +44,34 @@ h1 {
     display: flex;
     align-items: center;
     gap: 8px;
+    color: var(--text);
 }
 
+.logout-btn {
+    background: transparent;
+    color: #94a3b8;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 400;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+    position: absolute;
+    top: 0;
+    right: 0;
+    transition: 0.2s;
+}
+
+.logout-btn:hover {
+    color: var(--primary);
+}
+
+/* ===== ПОДЗАГОЛОВОК ===== */
 .sub-title {
     font-size: 14px;
-    color: #64748b;
+    color: var(--text-muted);
     padding: 0 4px 12px 4px;
     border-bottom: 1px solid #e2e8f0;
     display: flex;
@@ -42,7 +80,7 @@ h1 {
 }
 
 .route-btn {
-    background: #22c55e;
+    background: var(--primary);
     color: white;
     border: none;
     border-radius: 30px;
@@ -54,10 +92,12 @@ h1 {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    transition: 0.2s;
 }
 
 .route-btn:hover {
-    background: #16a34a;
+    background: var(--primary-dark);
+    transform: scale(0.97);
 }
 
 .text-plan-btn {
@@ -73,12 +113,15 @@ h1 {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    transition: 0.2s;
 }
 
 .text-plan-btn:hover {
     background: #2563eb;
+    transform: scale(0.97);
 }
 
+/* ===== КАРТОЧКИ ДАРКСТОРОВ (плоские, лёгкая тень) ===== */
 .darks-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -93,27 +136,34 @@ h1 {
 }
 
 .darks-card {
-    background: white;
-    border-radius: 16px;
+    background: var(--card-bg);
+    border-radius: var(--radius);
     padding: 16px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    box-shadow: var(--shadow);
     cursor: pointer;
-    transition: 0.2s;
+    transition: 0.25s ease;
+    border: 1px solid rgba(0, 0, 0, 0.02);
+}
+
+.darks-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-hover);
 }
 
 .darks-card:active {
-    transform: scale(0.97);
+    transform: scale(0.98);
 }
 
 .darks-card .address {
-    font-size: 18px;
+    font-size: 17px;
     font-weight: 700;
-    color: #0f172a;
+    color: var(--text);
+    line-height: 1.3;
 }
 
 .darks-card .number {
     font-size: 13px;
-    color: #64748b;
+    color: var(--text-muted);
     font-weight: 400;
     margin-top: 2px;
 }
@@ -122,7 +172,7 @@ h1 {
     display: flex;
     gap: 12px;
     font-size: 13px;
-    color: #64748b;
+    color: var(--text-muted);
     margin-top: 8px;
 }
 
@@ -131,11 +181,12 @@ h1 {
     padding: 0 12px;
     border-radius: 30px;
     line-height: 26px;
+    font-size: 12px;
 }
 
 .darks-card .stats .pending-count {
-    background: #fef3c7;
-    color: #92400e;
+    background: var(--primary-light);
+    color: var(--primary-dark);
 }
 
 .darks-card .stats .done-count {
@@ -143,110 +194,53 @@ h1 {
     color: #166534;
 }
 
+/* ===== КОНТАКТ (телефон/телеграм) ===== */
+.contact {
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 4px 0;
+    margin-top: 4px;
+}
+
+.contact a {
+    color: #3b82f6;
+    text-decoration: none;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    transition: 0.2s;
+}
+
+.contact a:hover {
+    color: var(--primary);
+    text-decoration: underline;
+}
+
+/* ===== ПРЕВЬЮ ЗАЯВОК ===== */
 .ticket-preview {
     font-size: 13px;
-    color: #1e293b;
+    color: var(--text);
     padding: 4px 0;
     border-bottom: 1px solid #f1f5f9;
+    display: flex;
+    justify-content: space-between;
 }
 
 .ticket-preview:last-child {
     border-bottom: none;
 }
 
-.no-tickets {
-    text-align: center;
-    color: #94a3b8;
-    padding: 40px 20px;
-    font-size: 16px;
-}
-
-.footer {
-    margin-top: 20px;
-    font-size: 12px;
-    color: #94a3b8;
-    text-align: center;
-    padding: 12px;
-    border-top: 1px solid #e2e8f0;
-}
-
-.contact {
-    font-size: 12px;
-    color: #64748b;
-    padding: 4px 0;
-}
-
-.contact a {
-    color: #3b82f6;
-    text-decoration: none;
-}
-
-.back-link {
-    color: #3b82f6;
-    text-decoration: none;
-    font-weight: 600;
-    font-size: 14px;
-    display: inline-block;
-    margin-top: 8px;
-}
-
-.back-link:hover {
-    text-decoration: underline;
-}
-
-.toast {
-    position: fixed;
-    bottom: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: #22c55e;
-    color: white;
-    padding: 12px 24px;
-    border-radius: 10px;
-    font-weight: 600;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    z-index: 1000;
-    display: none;
-}
-
-.toast.error {
-    background: #ef4444;
-}
-
-.logout-btn {
-    background: transparent;
-    color: #94a3b8;
-    border: none;
-    border-radius: 10px;
-    padding: 4px 10px;
-    font-size: 12px;
-    font-weight: 400;
-    cursor: pointer;
-    text-decoration: none;
-    display: inline-block;
-    margin-top: 8px;
-    position: absolute;
-    top: 12px;
-    right: 12px;
-}
-
-.logout-btn:hover {
-    color: #64748b;
-}
-
-.header {
-    position: relative;
-    padding-right: 80px;
-}
-
+/* ===== САМИ ЗАЯВКИ (КАРТОЧКИ) ===== */
 .ticket {
-    background: white;
-    border-radius: 14px;
+    background: var(--card-bg);
+    border-radius: var(--radius);
     padding: 14px 16px;
     margin-bottom: 12px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    box-shadow: var(--shadow);
     border-left: 5px solid #3b82f6;
     transition: 0.2s;
+    border: 1px solid rgba(0, 0, 0, 0.02);
 }
 
 .ticket.done {
@@ -264,6 +258,7 @@ h1 {
     background: #f0fdf4;
 }
 
+/* ===== АКБ И ЗАРЯДКИ (оранжевая подсветка) ===== */
 .ticket.battery-ticket {
     border-left-color: #f59e0b !important;
     background: #fffbeb !important;
@@ -276,6 +271,7 @@ h1 {
     font-weight: 700 !important;
 }
 
+/* ===== ШАПКА ЗАЯВКИ ===== */
 .ticket-header {
     display: flex;
     justify-content: space-between;
@@ -288,7 +284,7 @@ h1 {
 .ticket-id {
     font-weight: 700;
     font-size: 15px;
-    color: #0f172a;
+    color: var(--text);
     background: #f1f5f9;
     padding: 0 12px;
     border-radius: 30px;
@@ -299,7 +295,7 @@ h1 {
 .ticket-desc {
     font-size: 14px;
     margin: 4px 0;
-    color: #1e293b;
+    color: var(--text);
     line-height: 1.4;
 }
 
@@ -316,7 +312,7 @@ h1 {
 
 .ticket-meta {
     font-size: 12px;
-    color: #64748b;
+    color: var(--text-muted);
     display: flex;
     flex-wrap: wrap;
     gap: 4px 10px;
@@ -331,6 +327,44 @@ h1 {
     font-size: 12px;
 }
 
+/* ===== СТАТУСЫ ===== */
+.status-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 30px;
+    display: inline-block;
+}
+
+.status-done {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.status-fail {
+    background: #f1f5f9;
+    color: #475569;
+}
+
+.status-pending {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.status-todo {
+    background: #fef3c7;
+    color: #d97706;
+}
+
+.today-badge {
+    background: #dbeafe;
+    color: #1d4ed8;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 30px;
+}
+
+/* ===== КНОПКИ ===== */
 .ticket-actions {
     display: flex;
     flex-wrap: wrap;
@@ -350,7 +384,7 @@ h1 {
     font-weight: 600;
     cursor: pointer;
     text-decoration: none;
-    transition: 0.15s;
+    transition: 0.2s;
     min-width: 36px;
     height: 32px;
     white-space: nowrap;
@@ -404,6 +438,24 @@ h1 {
     background: #7c3aed;
 }
 
+.btn-taken-no-replace {
+    background: #8b5cf6;
+    color: white;
+    border: 2px solid #7c3aed;
+}
+.btn-taken-no-replace:hover {
+    background: #7c3aed;
+}
+
+.btn-replace-no {
+    background: #f59e0b;
+    color: white;
+}
+.btn-replace-no:hover {
+    background: #d97706;
+}
+
+/* ===== ПОЛЯ ВВОДА ===== */
 .parts-form {
     display: flex;
     flex: 1;
@@ -421,6 +473,12 @@ h1 {
     background: #f8fafc;
     height: 32px;
     min-width: 60px;
+    transition: 0.2s;
+}
+
+.parts-form input[type="text"]:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.1);
 }
 
 .parts-form input[type="number"] {
@@ -435,8 +493,13 @@ h1 {
     text-align: center;
 }
 
+.parts-form input[type="number"]:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.1);
+}
+
 .parts-form button {
-    background: #3b82f6;
+    background: var(--primary);
     color: white;
     border: none;
     border-radius: 30px;
@@ -444,44 +507,14 @@ h1 {
     font-size: 14px;
     cursor: pointer;
     height: 32px;
+    transition: 0.2s;
 }
 
-.status-badge {
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 10px;
-    border-radius: 30px;
-    display: inline-block;
+.parts-form button:hover {
+    background: var(--primary-dark);
 }
 
-.status-done {
-    background: #dcfce7;
-    color: #166534;
-}
-
-.status-fail {
-    background: #f1f5f9;
-    color: #475569;
-}
-
-.status-pending {
-    background: #fef3c7;
-    color: #92400e;
-}
-
-.status-todo {
-    background: #fef3c7;
-    color: #d97706;
-}
-
-.today-badge {
-    background: #dbeafe;
-    color: #1d4ed8;
-    font-size: 10px;
-    padding: 2px 8px;
-    border-radius: 30px;
-}
-
+/* ===== МОДАЛКА ===== */
 .modal {
     display: none;
     position: fixed;
@@ -493,6 +526,7 @@ h1 {
     z-index: 1000;
     justify-content: center;
     align-items: center;
+    backdrop-filter: blur(4px);
 }
 
 .modal.active {
@@ -502,23 +536,48 @@ h1 {
 .modal-content {
     background: white;
     padding: 24px;
-    border-radius: 16px;
+    border-radius: var(--radius);
     max-width: 400px;
     width: 90%;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
 }
 
 .modal-content h3 {
     margin-bottom: 12px;
+    color: var(--text);
 }
 
 .modal-content textarea {
     width: 100%;
     padding: 10px;
     border: 1px solid #d1d5db;
-    border-radius: 10px;
+    border-radius: var(--radius-sm);
     font-size: 14px;
     min-height: 60px;
     resize: vertical;
+    transition: 0.2s;
+}
+
+.modal-content textarea:focus {
+    border-color: var(--primary);
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.1);
+}
+
+.modal-content input[type="number"] {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #d1d5db;
+    border-radius: var(--radius-sm);
+    font-size: 16px;
+    text-align: center;
+    transition: 0.2s;
+}
+
+.modal-content input[type="number"]:focus {
+    border-color: var(--primary);
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.1);
 }
 
 .modal-actions {
@@ -534,6 +593,73 @@ h1 {
     font-size: 14px;
 }
 
+/* ===== TOAST ===== */
+.toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #22c55e;
+    color: white;
+    padding: 12px 24px;
+    border-radius: var(--radius-sm);
+    font-weight: 600;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
+    display: none;
+    animation: slideUp 0.3s ease;
+}
+
+.toast.error {
+    background: #ef4444;
+}
+
+@keyframes slideUp {
+    from {
+        transform: translateX(-50%) translateY(20px);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(-50%) translateY(0);
+        opacity: 1;
+    }
+}
+
+/* ===== ПУСТОЙ СОСТОЯНИЕ ===== */
+.no-tickets {
+    text-align: center;
+    color: #94a3b8;
+    padding: 40px 20px;
+    font-size: 16px;
+}
+
+/* ===== ФУТЕР ===== */
+.footer {
+    margin-top: 20px;
+    font-size: 12px;
+    color: #94a3b8;
+    text-align: center;
+    padding: 12px;
+    border-top: 1px solid #e2e8f0;
+}
+
+/* ===== КНОПКА НАЗАД ===== */
+.back-link {
+    color: #3b82f6;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 14px;
+    display: inline-block;
+    margin-top: 8px;
+    transition: 0.2s;
+}
+
+.back-link:hover {
+    text-decoration: underline;
+    color: var(--primary);
+}
+
+/* ===== АДАПТАЦИЯ ПОД ТЕЛЕФОН ===== */
 @media (max-width: 480px) {
     body {
         padding: 10px 8px 80px 8px;
@@ -547,9 +673,14 @@ h1 {
     }
     .btn {
         height: 40px;
+        font-size: 13px;
+        padding: 4px 16px;
     }
     .parts-form input {
         height: 40px;
         font-size: 14px;
+    }
+    .darks-card .address {
+        font-size: 15px;
     }
 }

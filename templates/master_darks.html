@@ -18,8 +18,14 @@
         </span>
         <span>🕒 {{ now }}</span>
     </div>
+    
+    <!-- КОНТАКТ: телефон или телеграм -->
     {% if contact %}
-    <div class="contact">📞 <a href="tel:{{ contact }}">{{ contact }}</a></div>
+    <div class="contact">
+        <a href="#" onclick="openContact('{{ contact }}'); return false;">
+            📞 {{ contact }}
+        </a>
+    </div>
     {% endif %}
 
     <div id="tickets-container">
@@ -49,25 +55,41 @@
             </div>
             <div class="ticket-actions">
                 {% if t.status == 'pending' or t.status == 'todo' %}
-                    {% if t.type == 'Аккумуляторная батарея' or t.type == 'Зарядное устройство' %}
-                        <form action="/master/{{ name }}/darks/{{ darks_number }}/replace_yes/{{ t.uid }}" method="POST" style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;">
+                    
+                    {% if is_battery %}
+                        <!-- ===== АКБ И ЗАРЯДКИ - НОВАЯ ЛОГИКА ===== -->
+                        <!-- 1. КНОПКА "ДА" (сразу вводим количество) -->
+                        <form action="/master/{{ name }}/darks/{{ darks_number }}/replace_yes/{{ t.uid }}" method="POST" style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;" onsubmit="return validateQuantity(this)">
                             <input type="number" name="parts" placeholder="Кол-во" value="0" min="0" required style="width:60px;padding:2px 8px;border:1px solid #d1d5db;border-radius:30px;font-size:12px;outline:none;background:#f8fafc;height:32px;text-align:center;">
                             <button type="submit" class="btn btn-done">✅ Да</button>
                         </form>
-                        <form action="/master/{{ name }}/darks/{{ darks_number }}/taken_no_replace/{{ t.uid }}" method="POST" style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;">
-                            <input type="number" name="parts" placeholder="Кол-во" value="0" min="0" required style="width:60px;padding:2px 8px;border:1px solid #d1d5db;border-radius:30px;font-size:12px;outline:none;background:#f8fafc;height:32px;text-align:center;">
-                            <button type="submit" class="btn btn-taken">📦 Забрал без замены</button>
-                        </form>
-                        <a href="#" class="btn btn-fail" onclick="openModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'replace_no', '❌ Причина, почему замена не произведена')">❌ Нет</a>
+                        
+                        <!-- 2. КНОПКА "ЗАБИРАЮ БЕЗ ЗАМЕНЫ" — открывает модалку -->
+                        <button class="btn btn-taken-no-replace" onclick="openTakenModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'taken_no_replace', '📦 Забираю без замены', true)">
+                            📦 Забираю без замены
+                        </button>
+                        
+                        <!-- 3. КНОПКА "КУРАТОР НЕ СМОГ ПРЕДОСТАВИТЬ" — открывает модалку -->
+                        <button class="btn btn-replace-no" onclick="openReplaceNoModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">
+                            ❌ Куратор не смог предоставить
+                        </button>
+                        
                     {% else %}
-                        <form action="/master/{{ name }}/darks/{{ darks_number }}/done/{{ t.uid }}" method="POST" class="parts-form">
+                        <!-- ===== ВЕЛОСИПЕДЫ - СТАНДАРТНАЯ ЛОГИКА ===== -->
+                        <form action="/master/{{ name }}/darks/{{ darks_number }}/done/{{ t.uid }}" method="POST" class="parts-form" onsubmit="return closeTicket(this, 'done')">
                             <input type="text" name="parts" placeholder="Запчасти..." value="{{ t.parts or '' }}" required>
                             <button type="submit" class="btn btn-done">✅ Выполнено</button>
                         </form>
-                        <a href="#" class="btn btn-evacuation" onclick="openModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'evacuation', '🚚 Причина эвакуации')"><span class="icon">🚚</span> Эвакуация</a>
-                        <a href="#" class="btn btn-fail" onclick="closeTicketInstant('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'fail')">🚫 Вело отсутствует</a>
+                        <button class="btn btn-evacuation" onclick="openModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'evacuation', '🚚 Причина эвакуации')">
+                            <span class="icon">🚚</span> Эвакуация
+                        </button>
+                        <button class="btn btn-fail" onclick="closeTicketInstant('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'fail')">
+                            🚫 Вело отсутствует
+                        </button>
                     {% endif %}
+                    
                 {% else %}
+                    <!-- ЗАЯВКА УЖЕ ЗАКРЫТА -->
                     <a href="/master/{{ name }}/darks/{{ darks_number }}/reset/{{ t.uid }}" class="btn btn-reset">↩️ Вернуть</a>
                 {% endif %}
             </div>
@@ -77,14 +99,29 @@
         {% endfor %}
     </div>
 
+    <!-- ===== МОДАЛКА ДЛЯ ПРИЧИН (эвакуация, и т.д.) ===== -->
     <div class="modal" id="reasonModal">
         <div class="modal-content">
             <h3 id="modalTitle">❌ Укажите причину</h3>
             <form id="reasonForm" method="POST">
                 <textarea name="reason" id="reasonInput" placeholder="Укажите причину..." required></textarea>
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-reset" onclick="closeModal()">Отмена</button>
+                    <button type="button" class="btn btn-reset" onclick="closeModal('reasonModal')">Отмена</button>
                     <button type="submit" class="btn btn-fail">Подтвердить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ===== МОДАЛКА ДЛЯ "ЗАБИРАЮ БЕЗ ЗАМЕНЫ" ===== -->
+    <div class="modal" id="takenModal">
+        <div class="modal-content">
+            <h3 id="takenModalTitle">📦 Забираю без замены</h3>
+            <form id="takenForm" method="POST">
+                <input type="number" id="takenInput" placeholder="Введите количество..." min="1" required>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-reset" onclick="closeModal('takenModal')">Отмена</button>
+                    <button type="submit" class="btn btn-taken">📦 Подтвердить</button>
                 </div>
             </form>
         </div>
