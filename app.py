@@ -21,7 +21,7 @@ app.secret_key = secrets.token_hex(16)
 # ============================================================
 # НАСТРОЙКА
 # ============================================================
-CREDENTIALS_FILE = "/data/credentials.json"  # ← ИСПРАВЛЕНО!
+CREDENTIALS_FILE = "/data/credentials.json"
 SHEET_NAME = "Учет ремонта ВкусВилл"
 START_COORDS = "55.775267, 37.745690"
 MASTERS = ['Антон', 'Сергей', 'Руслан', 'Транзит', 'Алексей']
@@ -36,18 +36,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 MASTER_CREDENTIALS = {
-    'admin': {'password': 'admin123', 'name': 'Админ'},
-    'anton': {'password': 'anton1987', 'name': 'Антон'},
-    'sergey': {'password': 'sergey1992', 'name': 'Сергей'},
-    'ruslan': {'password': 'ruslan1985', 'name': 'Руслан'},
-    'transit': {'password': 'transit2024', 'name': 'Транзит'},
-    'alexey': {'password': 'alexey0304', 'name': 'Алексей'}
+    'admin': {'password': 'admin123', 'name': 'Админ', 'role': 'admin'},
+    'anton': {'password': 'anton1987', 'name': 'Антон', 'role': 'master'},
+    'sergey': {'password': 'sergey1992', 'name': 'Сергей', 'role': 'master'},
+    'ruslan': {'password': 'ruslan1985', 'name': 'Руслан', 'role': 'master'},
+    'transit': {'password': 'transit2024', 'name': 'Транзит', 'role': 'master'},
+    'alexey': {'password': 'alexey0304', 'name': 'Алексей', 'role': 'master'}
 }
 
 # ============================================================
 # ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
 # ============================================================
 uid_index = {}
+darks_ref = {}
 
 # ============================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -180,6 +181,7 @@ def get_sheet_client():
     return client.open(SHEET_NAME)
 
 def load_darks_reference():
+    global darks_ref
     darks_ref = {}
     try:
         sheet_client = get_sheet_client()
@@ -234,6 +236,7 @@ def generate_ticket_id(date_str):
         return None
 
 def get_tickets_from_sheets():
+    global darks_ref
     sheet_client = get_sheet_client()
     tickets = []
     darks_ref = load_darks_reference()
@@ -466,6 +469,22 @@ def clear_master_assignments(master_name=None):
     except:
         return 0
 
+def write_to_master_history(master_name, action_data):
+    """Записывает действие мастера в историю"""
+    try:
+        history_file = os.path.join(CACHE_DIR, f"history_{master_name}.json")
+        history = read_cache(f"history_{master_name}.json") or []
+        history.append({
+            'timestamp': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
+            'action': action_data
+        })
+        # Храним только последние 100 записей
+        if len(history) > 100:
+            history = history[-100:]
+        write_cache(f"history_{master_name}.json", history)
+    except:
+        pass
+
 # ============================================================
 # ОТПРАВКА УВЕДОМЛЕНИЙ
 # ============================================================
@@ -508,17 +527,29 @@ def api_login():
     login = data.get('login', '').strip().lower()
     password = data.get('password', '').strip()
     if login in MASTER_CREDENTIALS and MASTER_CREDENTIALS[login]['password'] == password:
-        return jsonify({'success': True, 'master': MASTER_CREDENTIALS[login]['name'], 'login': login})
+        role = MASTER_CREDENTIALS[login].get('role', 'master')
+        return jsonify({
+            'success': True, 
+            'master': MASTER_CREDENTIALS[login]['name'], 
+            'login': login,
+            'role': role
+        })
     return jsonify({'success': False, 'error': 'Неверный логин или пароль'})
 
 @app.route('/auto_login/<login>')
 def auto_login(login):
     if login in MASTER_CREDENTIALS:
         master_name = MASTER_CREDENTIALS[login]['name']
+        role = MASTER_CREDENTIALS[login].get('role', 'master')
         session['master_login'] = login
         session['master_name'] = master_name
         session['authenticated'] = True
-        return redirect(url_for('master_overview', name=master_name))
+        session['role'] = role
+        
+        if role == 'admin':
+            return redirect(url_for('admin_panel'))
+        else:
+            return redirect(url_for('master_overview', name=master_name))
     return redirect(url_for('login_page'))
 
 @app.route('/logout')
@@ -543,6 +574,8 @@ def data_files(filename):
 @app.route('/admin')
 @login_required
 def admin_panel():
+    if session.get('role') != 'admin':
+        return redirect(url_for('master_overview', name=session.get('master_name')))
     cache_data = get_admin_cache()
     if cache_data and 'directions' in cache_data:
         directions = cache_data.get('directions', {})
@@ -627,26 +660,93 @@ def api_notify_curators():
 @app.route('/api/admin_action', methods=['POST'])
 @login_required
 def api_admin_action():
+    """API для действий админа над заявками (как у мастеров)"""
     data = request.json
     uid = data.get('uid')
     action = data.get('action')
     extra = data.get('extra', '')
+    master_name = session.get('master_name', 'Админ')
+    
     if not uid or not action:
         return jsonify({'success': False, 'error': 'Недостаточно данных'})
+    
     try:
-        if action == 'done':
-            update_ticket_in_admin_cache(uid, 'done', extra or 'Выполнено админом')
-        elif action == 'evacuation':
-            update_ticket_in_admin_cache(uid, 'todo', f'ЭВАКУАЦИЯ: {extra}')
-        elif action == 'fail':
-            update_ticket_in_admin_cache(uid, 'fail', 'Вело отсутствует')
-        elif action == 'todo':
-            update_ticket_in_admin_cache(uid, 'todo', 'Доделать')
-        elif action == 'taken':
-            update_ticket_in_admin_cache(uid, 'todo', f'ЗАБРАЛИ: {extra} АКБ',
-                                        f'Вернуть {extra} АКБ (забирали на ремонт)')
+        # Получаем информацию о заявке, чтобы определить тип техники
+        admin_cache = get_admin_cache()
+        ticket_info = None
+        for dir_name, dir_data in admin_cache.get('directions', {}).items():
+            for t in dir_data.get('tickets', []):
+                if t.get('uid') == uid:
+                    ticket_info = t
+                    break
+            if ticket_info:
+                break
+        
+        if not ticket_info:
+            return jsonify({'success': False, 'error': 'Заявка не найдена'})
+        
+        ticket_type = ticket_info.get('type', '')
+        is_battery = ticket_type in ['Аккумуляторная батарея', 'Зарядное устройство']
+        
+        # Обработка действий в зависимости от типа
+        if is_battery:
+            if action == 'replace_yes':
+                if not extra or int(extra) <= 0:
+                    return jsonify({'success': False, 'error': 'Укажите количество'})
+                update_ticket_in_admin_cache(uid, 'done', f'Заменено {extra} шт.')
+                note = f'Заменено {extra} шт.'
+            elif action == 'taken_no_replace':
+                if not extra or int(extra) <= 0:
+                    return jsonify({'success': False, 'error': 'Укажите количество'})
+                update_ticket_in_admin_cache(
+                    uid, 'todo', 
+                    f'ЗАБРАЛИ: {extra} АКБ',
+                    f'Вернуть {extra} АКБ (забирали на ремонт)'
+                )
+                note = f'ЗАБРАЛИ: {extra} АКБ'
+            elif action == 'replace_no':
+                update_ticket_in_admin_cache(uid, 'todo', 'Куратор не предоставил')
+                note = 'Куратор не предоставил'
+            else:
+                return jsonify({'success': False, 'error': 'Неизвестное действие для АКБ'})
         else:
-            return jsonify({'success': False, 'error': 'Неизвестное действие'})
+            # Для велосипедов
+            if action == 'done':
+                if not extra:
+                    return jsonify({'success': False, 'error': 'Укажите запчасти'})
+                update_ticket_in_admin_cache(uid, 'done', extra)
+                note = extra
+            elif action == 'evacuation':
+                if not extra:
+                    return jsonify({'success': False, 'error': 'Укажите причину эвакуации'})
+                update_ticket_in_admin_cache(uid, 'todo', f'ЭВАКУАЦИЯ: {extra}')
+                note = f'ЭВАКУАЦИЯ: {extra}'
+            elif action == 'fail':
+                update_ticket_in_admin_cache(uid, 'fail', 'Вело отсутствует')
+                note = 'Вело отсутствует'
+            else:
+                return jsonify({'success': False, 'error': 'Неизвестное действие'})
+        
+        # Записываем в историю
+        write_to_master_history('admin', {
+            'uid': uid,
+            'action': action,
+            'note': note,
+            'type': ticket_type
+        })
+        
+        # Добавляем в очередь для синхронизации
+        add_to_queue({
+            'uid': uid,
+            'source': 'Заявки',
+            'type': action,
+            'data': {
+                'extra': extra,
+                'note': note,
+                'admin_action': True
+            }
+        })
+        
         threading.Thread(target=refresh_admin_cache).start()
         threading.Thread(target=refresh_all_master_caches).start()
         return jsonify({'success': True})
@@ -659,21 +759,34 @@ def api_build_route_for_master():
     master = request.args.get('master', '')
     if not master:
         return 'Нет мастера', 400
+    
+    # Загружаем координаты дарксторов
+    darks_ref = load_darks_reference()
+    
     cache_data = get_master_cache(master)
     if cache_data:
         master_tickets = cache_data.get('tickets', [])
     else:
         tickets = get_tickets_from_sheets()
         master_tickets = [t for t in tickets if t.get('master') == master and is_active_status(t.get('status'))]
+    
+    # Собираем координаты дарксторов
     coords_set = set()
     for t in master_tickets:
-        if t.get('coords'):
-            coords_set.add(t['coords'])
+        darks_num = t.get('darks')
+        if darks_num and darks_num in darks_ref:
+            coords = darks_ref[darks_num].get('coords', '')
+            if coords:
+                coords_set.add(coords)
+    
     coords_list = list(coords_set)
     if not coords_list:
         return 'Нет координат', 400
+    
+    # Формируем маршрут с координатами
     user_agent = request.headers.get('User-Agent', '').lower()
     is_mobile = any(x in user_agent for x in ['android', 'iphone', 'ipad', 'mobile'])
+    
     if is_mobile:
         coords_list_str = '~'.join([START_COORDS] + coords_list)
         url = f'yandexnavi://build_route_on_map?lat_lon={coords_list_str}'
@@ -681,6 +794,52 @@ def api_build_route_for_master():
         points = [START_COORDS] + coords_list
         url = 'https://yandex.ru/maps/?rtext=' + '~'.join(points)
     return redirect(url)
+
+@app.route('/api/master_history/<name>')
+@login_required
+def api_master_history(name):
+    """Возвращает историю действий мастера"""
+    if session.get('master_name') != name and session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Доступ запрещён'})
+    
+    history = read_cache(f"history_{name}.json") or []
+    return jsonify({'success': True, 'history': history})
+
+# ============================================================
+# ОЧЕРЕДЬ ЗАДАЧ
+# ============================================================
+def get_queue_path():
+    return os.path.join(CACHE_DIR, "queue.json")
+
+def read_queue():
+    try:
+        path = get_queue_path()
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except:
+        pass
+    return {'tasks': [], 'last_sync': None}
+
+def write_queue(queue_data):
+    try:
+        path = get_queue_path()
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(queue_data, f, ensure_ascii=False, indent=2)
+        return True
+    except:
+        return False
+
+def add_to_queue(task):
+    queue_data = read_queue()
+    for existing in queue_data['tasks']:
+        if existing.get('uid') == task.get('uid'):
+            return
+    queue_data['tasks'].append(task)
+    write_queue(queue_data)
+
+def clear_queue():
+    write_queue({'tasks': [], 'last_sync': get_msk_now().strftime('%Y-%m-%d %H:%M:%S')})
 
 # ============================================================
 # МАРШРУТЫ МАСТЕРОВ
@@ -722,20 +881,11 @@ def master_overview(name):
     groups = []
     for darks_num in sorted(groups_dict.keys(), key=lambda x: int(x) if x.isdigit() else 999999):
         groups.append(groups_dict[darks_num])
-    addresses = []
-    for g in groups:
-        addr = g['address'].replace('📍', '').strip()
-        if addr:
-            addresses.append(addr)
-    if addresses:
-        route_url = 'https://yandex.ru/maps/?rtext=55.775267,37.745690~' + '~'.join([urllib.parse.quote(a) for a in addresses])
-    else:
-        route_url = ''
     return render_template('master_main.html',
                           name=name,
                           groups=groups,
                           total_tickets=len(master_tickets),
-                          route_url=route_url,
+                          route_url=f'/api/build_route_for_master?master={name}',
                           now=get_msk_now().strftime('%H:%M:%S'))
 
 @app.route('/master/<name>/darks/<darks_number>')
@@ -785,6 +935,13 @@ def master_text_plan(name):
                           todo_count=todo_count,
                           now=get_msk_now().strftime('%H:%M:%S'))
 
+@app.route('/master/<name>/history')
+@login_required
+def master_history(name):
+    if session.get('master_name') != name:
+        return redirect(url_for('login_page'))
+    return render_template('master_history.html', name=name, now=get_msk_now().strftime('%H:%M:%S'))
+
 # ============================================================
 # API ДЛЯ МАСТЕРОВ
 # ============================================================
@@ -801,6 +958,21 @@ def master_done(name, darks_number, uid):
         tickets = cache_data.get('tickets', [])
         tickets = [t for t in tickets if t.get('uid') != uid]
         save_master_cache(name, tickets, '')
+    
+    # Записываем в историю
+    write_to_master_history(name, {
+        'uid': uid,
+        'action': 'done',
+        'parts': parts,
+        'darks': darks_number
+    })
+    
+    add_to_queue({
+        'uid': uid,
+        'source': 'Заявки',
+        'type': 'done',
+        'data': {'parts': parts, 'master': name, 'darks_number': darks_number}
+    })
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/fail/<uid>')
@@ -813,6 +985,19 @@ def master_fail(name, darks_number, uid):
         tickets = cache_data.get('tickets', [])
         tickets = [t for t in tickets if t.get('uid') != uid]
         save_master_cache(name, tickets, '')
+    
+    write_to_master_history(name, {
+        'uid': uid,
+        'action': 'fail',
+        'darks': darks_number
+    })
+    
+    add_to_queue({
+        'uid': uid,
+        'source': 'Заявки',
+        'type': 'fail',
+        'data': {'master': name, 'darks_number': darks_number}
+    })
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/evacuation/<uid>', methods=['POST'])
@@ -828,6 +1013,20 @@ def master_evacuation(name, darks_number, uid):
         tickets = cache_data.get('tickets', [])
         tickets = [t for t in tickets if t.get('uid') != uid]
         save_master_cache(name, tickets, '')
+    
+    write_to_master_history(name, {
+        'uid': uid,
+        'action': 'evacuation',
+        'reason': reason,
+        'darks': darks_number
+    })
+    
+    add_to_queue({
+        'uid': uid,
+        'source': 'Заявки',
+        'type': 'evacuation',
+        'data': {'reason': reason, 'master': name, 'darks_number': darks_number}
+    })
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/taken_no_replace/<uid>', methods=['POST'])
@@ -843,6 +1042,20 @@ def master_taken_no_replace(name, darks_number, uid):
         tickets = cache_data.get('tickets', [])
         tickets = [t for t in tickets if t.get('uid') != uid]
         save_master_cache(name, tickets, '')
+    
+    write_to_master_history(name, {
+        'uid': uid,
+        'action': 'taken_no_replace',
+        'parts': parts,
+        'darks': darks_number
+    })
+    
+    add_to_queue({
+        'uid': uid,
+        'source': 'Заявки',
+        'type': 'taken_no_replace',
+        'data': {'parts': parts, 'master': name, 'darks_number': darks_number}
+    })
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/reset/<uid>')
@@ -865,6 +1078,20 @@ def master_replace_yes(name, darks_number, uid):
         tickets = cache_data.get('tickets', [])
         tickets = [t for t in tickets if t.get('uid') != uid]
         save_master_cache(name, tickets, '')
+    
+    write_to_master_history(name, {
+        'uid': uid,
+        'action': 'replace_yes',
+        'parts': parts,
+        'darks': darks_number
+    })
+    
+    add_to_queue({
+        'uid': uid,
+        'source': 'Заявки',
+        'type': 'replace_yes',
+        'data': {'parts': parts, 'master': name, 'darks_number': darks_number}
+    })
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/replace_no/<uid>', methods=['POST'])
@@ -877,6 +1104,19 @@ def master_replace_no(name, darks_number, uid):
         tickets = cache_data.get('tickets', [])
         tickets = [t for t in tickets if t.get('uid') != uid]
         save_master_cache(name, tickets, '')
+    
+    write_to_master_history(name, {
+        'uid': uid,
+        'action': 'replace_no',
+        'darks': darks_number
+    })
+    
+    add_to_queue({
+        'uid': uid,
+        'source': 'Заявки',
+        'type': 'replace_no',
+        'data': {'master': name, 'darks_number': darks_number}
+    })
     return jsonify({'success': True})
 
 # ============================================================
@@ -885,6 +1125,7 @@ def master_replace_no(name, darks_number, uid):
 if __name__ == "__main__":
     logger.info("🚀 Запуск приложения...")
     try:
+        load_darks_reference()
         tickets = get_tickets_from_sheets()
         uid_index = build_uid_index(tickets)
         save_admin_cache(tickets)
