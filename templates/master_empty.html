@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="icon" href="/data/vanta.png" type="image/png">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Маршрут: {{ name }}</title>
+    <link rel="manifest" href="/manifest.json">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f4f6f9; padding: 16px; max-width: 600px; margin: 0 auto; color: #1e293b; text-align: center; padding-top: 60px; }
+        h1 { font-size: 28px; margin-bottom: 16px; }
+        .emoji { font-size: 64px; margin-bottom: 20px; }
+        .msg { color: #64748b; font-size: 18px; margin-bottom: 8px; }
+        .sub { color: #94a3b8; font-size: 14px; }
+        .back { display: inline-block; margin-top: 30px; color: #3b82f6; text-decoration: none; font-weight: 600; }
+        .logout-btn { background: transparent; color: #94a3b8; border: none; border-radius: 10px; padding: 4px 10px; font-size: 12px; cursor: pointer; text-decoration: none; position: absolute; top: 12px; right: 12px; }
+        .logout-btn:hover { color: #64748b; }
+        .header { position: relative; padding-right: 80px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <a href="/logout" class="logout-btn" onclick="logout(event)">🚪 Выйти</a>
+    </div>
+    <div class="emoji">🛵</div>
+    <h1>Маршрут: {{ name }}</h1>
+    <div class="msg">📭 Маршрут ещё не отправлен</div>
+    <div class="sub">Ожидайте, когда руководитель назначит и отправит маршрут</div>
+    <a href="#" onclick="history.back()" class="back">← Назад</a>
+
+    <script>
+        function logout(event) {
+            event.preventDefault();
+            localStorage.removeItem('master_login');
+            localStorage.removeItem('master_name');
+            window.location.href = '/logout';
+        }
+    </script>
+</body>
+</html>
