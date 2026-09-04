@@ -106,7 +106,16 @@ def get_admin_cache():
     return read_cache("admin_cache.json")
 
 def save_admin_cache(tickets):
-    directions_data = {}
+    # Всегда показываем все 4 направления + Без направления
+    directions_data = {
+        'Напр 1': {'tickets': [], 'active_count': 0},
+        'Напр 2': {'tickets': [], 'active_count': 0},
+        'Напр 3': {'tickets': [], 'active_count': 0},
+        'Напр 4': {'tickets': [], 'active_count': 0},
+        'Без направления': {'tickets': [], 'active_count': 0}
+    }
+    
+    # Распределяем заявки по направлениям
     for t in tickets:
         if not is_active_status(t.get('status')):
             continue
@@ -116,14 +125,12 @@ def save_admin_cache(tickets):
         directions_data[dir_name]['tickets'].append(t)
         directions_data[dir_name]['active_count'] += 1
     
+    # Сохраняем в порядке: Напр 1, Напр 2, Напр 3, Напр 4, Без направления
     order = ['Напр 1', 'Напр 2', 'Напр 3', 'Напр 4', 'Без направления']
     sorted_directions = {}
     for key in order:
         if key in directions_data:
             sorted_directions[key] = directions_data[key]
-    for key, value in directions_data.items():
-        if key not in sorted_directions:
-            sorted_directions[key] = value
     
     return write_cache("admin_cache.json", {'directions': sorted_directions})
 
@@ -143,6 +150,28 @@ def get_ticket_row_by_uid(uid):
     if uid in uid_index:
         return uid_index[uid]['row_index']
     return None
+
+def find_uid_in_sheets(uid):
+    """Ищет UID в Google Sheets и возвращает строку"""
+    try:
+        sheet_client = get_sheet_client()
+        
+        # Ищем в листе "Заявки"
+        worksheet = sheet_client.worksheet("Заявки")
+        cell = worksheet.find(uid)
+        if cell:
+            return {'source': 'Заявки', 'row_index': cell.row}
+        
+        # Ищем в листе "Импорт М4"
+        worksheet = sheet_client.worksheet("Импорт М4")
+        cell = worksheet.find(uid)
+        if cell:
+            return {'source': 'Импорт М4', 'row_index': cell.row}
+        
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка поиска UID {uid} в Google Sheets: {e}")
+        return None
 
 def update_ticket_in_admin_cache(uid, new_status, note='', display_desc=''):
     try:
@@ -516,49 +545,131 @@ def clear_queue():
     write_queue({'tasks': [], 'last_sync': get_msk_now().strftime('%Y-%m-%d %H:%M:%S')})
 
 def send_tasks_to_google_sheets(tasks):
+    """Отправляет задачи в Google Sheets"""
     try:
         sheet_client = get_sheet_client()
         now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
         updates_status = []
         updates_note = []
+        updates_import = []
+        report_updates = []
         
-        for task in tasks:
+        # Получаем лист "Отчет мастера"
+        try:
+            report_sheet = sheet_client.worksheet("Отчет мастера")
+        except:
+            report_sheet = sheet_client.add_worksheet("Отчет мастера", 100, 20)
+            headers = ['Дата выполнения', 'Мастер', 'ID заявки', 'Госномер', 'Описание', 'Тип техники', 'Количество', 'Статус', 'Запчасти', 'Комментарий', 'Даркстор', 'Время создания']
+            for i, h in enumerate(headers, start=1):
+                report_sheet.update_cell(1, i, h)
+        
+        # Получаем текущие строки для отчета
+        current_rows = report_sheet.get_all_values()
+        start_row = len(current_rows) + 1
+        
+        for idx, task in enumerate(tasks):
             uid = task.get('uid')
             source = task.get('source')
             task_type = task.get('type')
             data = task.get('data', {})
+            master = data.get('master', '')
+            darks_number = data.get('darks_number', '')
+            parts = data.get('parts', '')
+            reason = data.get('reason', '')
+            extra = data.get('extra', '')
             
-            row_idx = get_ticket_row_by_uid(uid)
-            if not row_idx:
+            # Ищем заявку в Google Sheets по UID
+            found = find_uid_in_sheets(uid)
+            if not found:
+                logger.warning(f"UID {uid} не найден в Google Sheets")
                 continue
             
+            row_idx = found['row_index']
+            source = found['source']
+            
+            # Обновляем в зависимости от источника
             if source == 'Заявки':
                 if task_type == 'done':
                     updates_status.append({'range': f'H{row_idx}', 'values': [['✅ Выполнено']]})
-                    updates_note.append({'range': f'K{row_idx}', 'values': [[data.get('parts', '')]]})
+                    if parts:
+                        updates_note.append({'range': f'K{row_idx}', 'values': [[parts]]})
                 elif task_type == 'fail':
                     updates_status.append({'range': f'H{row_idx}', 'values': [['⏹️ Обработано']]})
                     updates_note.append({'range': f'K{row_idx}', 'values': [[f'Вело отсутствует {now}']]})
                 elif task_type == 'evacuation':
                     updates_status.append({'range': f'H{row_idx}', 'values': [['🔵 Доделать']]})
-                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'ЭВАКУАЦИЯ: {data.get("reason", "")}']]})
+                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'ЭВАКУАЦИЯ: {reason}']]})
                 elif task_type == 'replace_yes':
                     updates_status.append({'range': f'H{row_idx}', 'values': [['✅ Выполнено']]})
-                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'Заменено {data.get("parts", "")} шт.']]})
+                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'Заменено {parts} шт.']]})
                 elif task_type == 'taken_no_replace':
                     updates_status.append({'range': f'H{row_idx}', 'values': [['🔵 Доделать']]})
-                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'ЗАБРАЛИ: {data.get("parts", "")} АКБ']]})
+                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'ЗАБРАЛИ: {parts} АКБ']]})
                 elif task_type == 'replace_no':
                     updates_status.append({'range': f'H{row_idx}', 'values': [['🔵 Доделать']]})
-                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'Куратор не предоставил']]})
+                    updates_note.append({'range': f'K{row_idx}', 'values': [['Куратор не предоставил']]})
+                elif task_type == 'transit_replace':
+                    updates_status.append({'range': f'H{row_idx}', 'values': [['✅ Выполнено']]})
+                    updates_note.append({'range': f'K{row_idx}', 'values': [['Заменен Транзитом']]})
+                
+                # Добавляем запись в отчет
+                ticket = None
+                if uid in uid_index:
+                    ticket = uid_index[uid]['ticket']
+                if not ticket:
+                    # Пытаемся получить данные из Google Sheets
+                    worksheet = sheet_client.worksheet("Заявки")
+                    row_data = worksheet.row_values(row_idx)
+                    if len(row_data) >= 15:
+                        ticket = {
+                            'gos': row_data[3].strip() if len(row_data) > 3 else '',
+                            'desc': row_data[2].strip() if len(row_data) > 2 else '',
+                            'type': row_data[1].strip() if len(row_data) > 1 else '',
+                            'created': row_data[5].strip() if len(row_data) > 5 else ''
+                        }
+                
+                if ticket:
+                    report_row = start_row + len(report_updates) // 12
+                    report_updates.append({'range': f'A{report_row}', 'values': [[now]]})
+                    report_updates.append({'range': f'B{report_row}', 'values': [[master]]})
+                    report_updates.append({'range': f'C{report_row}', 'values': [[uid]]})
+                    report_updates.append({'range': f'D{report_row}', 'values': [[ticket.get('gos', '')]]})
+                    report_updates.append({'range': f'E{report_row}', 'values': [[ticket.get('desc', '')]]})
+                    report_updates.append({'range': f'F{report_row}', 'values': [[ticket.get('type', '')]]})
+                    report_updates.append({'range': f'G{report_row}', 'values': [[parts or extra]]})
+                    report_updates.append({'range': f'H{report_row}', 'values': [[task_type]]})
+                    report_updates.append({'range': f'I{report_row}', 'values': [[parts or extra]]})
+                    report_updates.append({'range': f'J{report_row}', 'values': [[reason]]})
+                    report_updates.append({'range': f'K{report_row}', 'values': [[darks_number]]})
+                    report_updates.append({'range': f'L{report_row}', 'values': [[ticket.get('created', '')]]})
+            
+            elif source == 'Импорт М4':
+                if task_type == 'done':
+                    updates_import.append({'range': f'L{row_idx}', 'values': [['Выполнено']]})
+                elif task_type == 'fail':
+                    updates_import.append({'range': f'L{row_idx}', 'values': [['Вело отсутствует']]})
+                    updates_import.append({'range': f'M{row_idx}', 'values': [[f'Вело отсутствует на дарксторе {now}']]})
+                elif task_type == 'evacuation':
+                    updates_import.append({'range': f'L{row_idx}', 'values': [['Эвакуация']]})
+                    updates_import.append({'range': f'M{row_idx}', 'values': [['Запланирована эвакуация велосипеда']]})
         
+        # Применяем обновления
         if updates_status or updates_note:
             worksheet = sheet_client.worksheet("Заявки")
             if updates_status:
                 worksheet.batch_update(updates_status)
             if updates_note:
                 worksheet.batch_update(updates_note)
-            logger.info(f"✅ Отправлено {len(tasks)} задач в Google Sheets")
+        
+        if updates_import:
+            worksheet_import = sheet_client.worksheet("Импорт М4")
+            worksheet_import.batch_update(updates_import)
+        
+        if report_updates:
+            report_sheet.batch_update(report_updates)
+            logger.info(f"✅ Записано {len(report_updates)//12} записей в Отчет мастера")
+        
+        logger.info(f"✅ Отправлено {len(tasks)} задач в Google Sheets")
         
     except Exception as e:
         logger.error(f"Ошибка отправки в Google Sheets: {e}")
@@ -619,6 +730,41 @@ def notify_curators(message):
         return response.status_code == 200
     except:
         return False
+
+def generate_curator_message(tickets_data):
+    """Генерирует красивое сообщение для кураторов"""
+    now = get_msk_now().strftime('%d.%m.%Y %H:%M')
+    
+    message = f"📢 Привет, на связи Vanta Bikes! ({now})\n\n"
+    
+    # Группируем по дарксторам
+    groups = {}
+    for t in tickets_data:
+        darks = t.get('darks', 'без номера')
+        if darks not in groups:
+            groups[darks] = {
+                'address': t.get('address', 'Адрес не указан'),
+                'tickets': []
+            }
+        groups[darks]['tickets'].append(t)
+    
+    for darks, group in groups.items():
+        message += f"📍 {group['address']} (даркстор {darks})\n"
+        message += f"📋 Заявки ({len(group['tickets'])}):\n"
+        for t in group['tickets']:
+            # Для АКБ и зарядок показываем тип вместо госномера
+            if t.get('type') in ['Аккумуляторная батарея', 'Зарядное устройство']:
+                identifier = t.get('type', 'Без номера')
+            else:
+                identifier = t.get('gos', 'Без номера')
+            
+            message += f"   {identifier} | {t.get('desc', '-')}\n"
+        message += "\n"
+    
+    message += "Подготовьте, пожалуйста, технику к ремонту\n"
+    message += "Хорошего дня! 🙌"
+    
+    return message
 
 # ============================================================
 # АВТОРИЗАЦИЯ
@@ -778,6 +924,38 @@ def api_notify_curators():
         return jsonify({'success': False, 'error': 'Нет сообщения'})
     success = notify_curators(message)
     return jsonify({'success': success})
+
+@app.route('/api/admin_action', methods=['POST'])
+@login_required
+def api_admin_action():
+    data = request.json
+    uid = data.get('uid')
+    action = data.get('action')
+    extra = data.get('extra', '')
+    if not uid or not action:
+        return jsonify({'success': False, 'error': 'Недостаточно данных'})
+    try:
+        if action == 'done':
+            update_ticket_in_admin_cache(uid, 'done', extra or 'Выполнено админом')
+        elif action == 'evacuation':
+            update_ticket_in_admin_cache(uid, 'todo', f'ЭВАКУАЦИЯ: {extra}')
+        elif action == 'fail':
+            update_ticket_in_admin_cache(uid, 'fail', 'Вело отсутствует')
+        elif action == 'todo':
+            update_ticket_in_admin_cache(uid, 'todo', 'Доделать')
+        elif action == 'taken':
+            update_ticket_in_admin_cache(uid, 'todo', f'ЗАБРАЛИ: {extra} АКБ')
+        else:
+            return jsonify({'success': False, 'error': 'Неизвестное действие'})
+        add_to_queue({
+            'uid': uid,
+            'source': 'Заявки',
+            'type': action,
+            'data': {'extra': extra}
+        })
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/build_route_for_master')
 @login_required
