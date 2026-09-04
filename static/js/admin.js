@@ -9,6 +9,9 @@ var selectedMaster = '';
 var clearMasterTarget = null;
 var actionTarget = { uid: null, source: null, action: null };
 
+// Маппинг вкладок
+var TAB_NAMES = ['Напр 1', 'Напр 2', 'Напр 3', 'Напр 4', 'Без направления'];
+
 // ============================================================
 // ВЫХОД
 // ============================================================
@@ -67,17 +70,23 @@ function generateNotifyPreview() {
         }
         groups[key].tickets.push(t);
     }
-    var preview = '📢 Будет отправлено кураторам:\n\n';
+    var preview = '📢 Привет, на связи Vanta Bikes!\n\n';
     for (var key in groups) {
         var group = groups[key];
         preview += '📍 ' + group.address + ' (даркстор ' + key + ')\n';
         preview += '📋 Заявки (' + group.tickets.length + '):\n';
         for (var j = 0; j < group.tickets.length; j++) {
             var t = group.tickets[j];
-            preview += '   ' + (t.gos || 'Без номера') + ' | ' + (t.desc || '-') + '\n';
+            // Для АКБ и зарядок показываем тип вместо госномера
+            var identifier = (t.type && (t.type === 'Аккумуляторная батарея' || t.type === 'Зарядное устройство')) 
+                ? t.type 
+                : (t.gos || 'Без номера');
+            preview += '   ' + identifier + ' | ' + (t.desc || '-') + '\n';
         }
         preview += '\n';
     }
+    preview += 'Подготовьте, пожалуйста, технику к ремонту\n';
+    preview += 'Хорошего дня! 🙌';
     document.getElementById('notifyPreview').textContent = preview;
 }
 
@@ -528,17 +537,12 @@ function renderCurrentTab() {
     var tabId = getActiveTabId();
     if (!tabId) return;
     var tabIndex = parseInt(tabId.split('-')[1]);
-    var tickets = [];
-    var containerId = '';
-    var dirIndex = 0;
-    for (var dirName in directionsData) {
-        dirIndex++;
-        if (dirIndex === tabIndex) {
-            tickets = directionsData[dirName].tickets || [];
-            containerId = 'renderDir' + tabIndex;
-            break;
-        }
-    }
+    var dirName = TAB_NAMES[tabIndex - 1];
+    if (!dirName) return;
+    
+    var tickets = (directionsData[dirName] && directionsData[dirName].tickets) ? directionsData[dirName].tickets : [];
+    var containerId = 'renderDir' + tabIndex;
+    
     var filtered = getFilteredTickets(tickets);
     renderTicketsGrouped(filtered, containerId);
 }
