@@ -18,8 +18,134 @@ function logout(event) {
 }
 
 // ============================================================
-// ФУНКЦИИ ДЛЯ MASTER_DARKS
+// КОНТАКТЫ (ТЕЛЕФОН ИЛИ ТЕЛЕГРАМ)
 // ============================================================
+function openContact(contact) {
+    if (!contact) return;
+    var trimmed = contact.trim();
+    
+    if (trimmed.startsWith('@')) {
+        var username = trimmed.slice(1);
+        window.open('https://t.me/' + username, '_blank');
+        return;
+    }
+    
+    if (trimmed.match(/[\d\(\)\-\+]/)) {
+        var phone = trimmed.replace(/[^0-9+]/g, '');
+        if (phone) {
+            window.location.href = 'tel:' + phone;
+        }
+        return;
+    }
+    
+    alert('Контакт: ' + contact);
+}
+
+// ============================================================
+// ЗАКРЫТИЕ МОДАЛОК
+// ============================================================
+function closeModal(modalId) {
+    var modal = document.getElementById(modalId);
+    if (modal) modal.classList.remove('active');
+}
+
+// Закрытие модалок по клику вне
+document.addEventListener('DOMContentLoaded', function() {
+    var modals = document.querySelectorAll('.modal');
+    for (var i = 0; i < modals.length; i++) {
+        (function(modal) {
+            modal.addEventListener('click', function(e) {
+                if (e.target === this) {
+                    this.classList.remove('active');
+                }
+            });
+        })(modals[i]);
+    }
+});
+
+// ============================================================
+// АКБ И ЗАРЯДКИ
+// ============================================================
+
+// Функция для кнопки "Забираю без замены"
+function openTakenModal(name, darks, uid) {
+    var modal = document.getElementById('takenModal');
+    if (!modal) return;
+    
+    var form = document.getElementById('takenForm');
+    var input = document.getElementById('takenInput');
+    input.value = '';
+    
+    form.onsubmit = function(e) {
+        e.preventDefault();
+        var count = parseInt(input.value);
+        if (!count || count <= 0) {
+            alert('Укажите количество больше 0!');
+            return false;
+        }
+        
+        var card = document.getElementById('ticket-' + uid);
+        if (card) {
+            card.style.transition = 'opacity 0.3s';
+            card.style.opacity = '0';
+            setTimeout(function() { card.remove(); }, 300);
+        }
+        
+        var formData = new FormData();
+        formData.append('parts', count);
+        
+        fetch('/master/' + name + '/darks/' + darks + '/taken_no_replace/' + uid, {
+            method: 'POST',
+            body: formData
+        });
+        
+        showToast('📦 Забрано ' + count + ' шт. без замены');
+        closeModal('takenModal');
+        return false;
+    };
+    
+    modal.classList.add('active');
+}
+
+// Функция для кнопки "Куратор не смог предоставить"
+function openReplaceNoModal(name, darks, uid) {
+    var modal = document.getElementById('replaceNoModal');
+    if (!modal) return;
+    
+    var form = document.getElementById('replaceNoForm');
+    var textarea = document.getElementById('replaceNoInput');
+    textarea.value = '';
+    
+    form.onsubmit = function(e) {
+        e.preventDefault();
+        
+        var card = document.getElementById('ticket-' + uid);
+        if (card) {
+            card.style.transition = 'opacity 0.3s';
+            card.style.opacity = '0';
+            setTimeout(function() { card.remove(); }, 300);
+        }
+        
+        var formData = new FormData();
+        formData.append('reason', textarea.value || 'Куратор не предоставил');
+        
+        fetch('/master/' + name + '/darks/' + darks + '/replace_no/' + uid, {
+            method: 'POST',
+            body: formData
+        });
+        
+        showToast('❌ Отмечено как "Куратор не предоставил"');
+        closeModal('replaceNoModal');
+        return false;
+    };
+    
+    modal.classList.add('active');
+}
+
+// ============================================================
+// СТАНДАРТНЫЕ ФУНКЦИИ (велосипеды)
+// ============================================================
+
 function validateQuantity(form) {
     var input = form.querySelector('input[name="parts"]');
     if (parseInt(input.value) <= 0) {
@@ -70,6 +196,7 @@ function openModal(name, darks, uid, type, title) {
     textarea.value = '';
     
     if (type === 'evacuation') {
+        textarea.placeholder = 'Укажите причину эвакуации...';
         form.onsubmit = function(e) {
             e.preventDefault();
             var reason = textarea.value;
@@ -83,31 +210,26 @@ function openModal(name, darks, uid, type, title) {
                 card.style.opacity = '0';
                 setTimeout(function() { card.remove(); }, 300);
             }
+            var formData = new FormData();
+            formData.append('reason', reason);
             fetch('/master/' + name + '/darks/' + darks + '/evacuation/' + uid, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'reason=' + encodeURIComponent(reason)
+                body: formData
             });
             showToast('🚚 Заявка отправлена на эвакуацию');
-            closeModal();
+            closeModal('reasonModal');
             return false;
         };
-    } else {
-        form.onsubmit = null;
     }
     
     form.action = '/master/' + name + '/darks/' + darks + '/' + type + '/' + uid;
     modal.classList.add('active');
 }
 
-function closeModal() {
-    var modal = document.getElementById('reasonModal');
-    if (modal) modal.classList.remove('active');
-}
-
 // ============================================================
 // ФУНКЦИИ ДЛЯ ТРАНЗИТА
 // ============================================================
+
 function editField(btn, className) {
     var input = btn.closest('.field-group').querySelector('.' + className);
     input.readOnly = false;
@@ -174,15 +296,3 @@ function submitTransitReplace(btn) {
     });
     showToast('🚲 Замена велосипеда отправлена');
 }
-
-// ============================================================
-// ЗАКРЫТИЕ МОДАЛКИ ПО КЛИКУ ВНЕ
-// ============================================================
-document.addEventListener('DOMContentLoaded', function() {
-    var modal = document.getElementById('reasonModal');
-    if (modal) {
-        modal.addEventListener('click', function(e) {
-            if (e.target === this) closeModal();
-        });
-    }
-});

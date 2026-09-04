@@ -49,6 +49,7 @@ MASTER_CREDENTIALS = {
 # ============================================================
 uid_index = {}
 darks_ref = {}
+queue_lock = threading.Lock()
 
 # ============================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -168,7 +169,8 @@ def update_ticket_in_admin_cache(uid, new_status, note='', display_desc=''):
             save_admin_cache(all_tickets)
             return True
         return False
-    except:
+    except Exception as e:
+        logger.error(f"Ошибка обновления admin_cache для {uid}: {e}")
         return False
 
 # ============================================================
@@ -195,8 +197,8 @@ def load_darks_reference():
                     direction = row[2].strip() if len(row) > 2 else ''
                     coords = row[3].strip() if len(row) > 3 else ''
                     darks_ref[darks_num] = {'address': address, 'direction': direction, 'coords': coords}
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"Ошибка загрузки Дарксторов: {e}")
     return darks_ref
 
 def parse_created_date(date_str):
@@ -317,7 +319,7 @@ def get_tickets_from_sheets():
                     'display_desc': display_desc
                 })
     except Exception as e:
-        print(f"Ошибка чтения 'Заявки': {e}")
+        logger.error(f"Ошибка чтения 'Заявки': {e}")
     try:
         worksheet = sheet_client.worksheet("Импорт М4")
         rows = worksheet.get_all_values()
@@ -377,23 +379,25 @@ def get_tickets_from_sheets():
                     'parts': row[12].strip() if len(row) > 12 else ''
                 })
     except Exception as e:
-        print(f"Ошибка чтения 'Импорт М4': {e}")
+        logger.error(f"Ошибка чтения 'Импорт М4': {e}")
     return tickets
 
 def refresh_admin_cache():
     try:
         tickets = get_tickets_from_sheets()
         save_admin_cache(tickets)
-    except:
-        pass
+        logger.info(f"✅ Админ кэш обновлен: {len(tickets)} заявок")
+    except Exception as e:
+        logger.error(f"Ошибка обновления админ кэша: {e}")
 
 def refresh_master_cache(master_name):
     try:
         tickets = get_tickets_from_sheets()
         master_tickets = [t for t in tickets if t.get('master') == master_name and is_active_status(t.get('status'))]
         save_master_cache(master_name, master_tickets, '')
-    except:
-        pass
+        logger.info(f"✅ Кэш для {master_name} обновлен: {len(master_tickets)} заявок")
+    except Exception as e:
+        logger.error(f"Ошибка обновления кэша {master_name}: {e}")
 
 def refresh_all_master_caches():
     try:
@@ -401,8 +405,9 @@ def refresh_all_master_caches():
         for master in MASTERS:
             master_tickets = [t for t in tickets if t.get('master') == master and is_active_status(t.get('status'))]
             save_master_cache(master, master_tickets, '')
-    except:
-        pass
+        logger.info("✅ Кэши всех мастеров обновлены")
+    except Exception as e:
+        logger.error(f"Ошибка обновления кэшей мастеров: {e}")
 
 def batch_update_masters(changes):
     global uid_index
@@ -439,7 +444,8 @@ def batch_update_masters(changes):
         uid_index = build_uid_index(tickets)
         save_admin_cache(tickets)
         return updated_count
-    except:
+    except Exception as e:
+        logger.error(f"Ошибка batch_update_masters: {e}")
         return 0
 
 def clear_master_assignments(master_name=None):
@@ -466,24 +472,139 @@ def clear_master_assignments(master_name=None):
         save_admin_cache(tickets)
         refresh_all_master_caches()
         return cleared
-    except:
+    except Exception as e:
+        logger.error(f"Ошибка снятия заявок: {e}")
         return 0
 
-def write_to_master_history(master_name, action_data):
-    """Записывает действие мастера в историю"""
+# ============================================================
+# ОЧЕРЕДЬ ЗАДАЧ
+# ============================================================
+def get_queue_path():
+    return os.path.join(CACHE_DIR, "queue.json")
+
+def read_queue():
+    with queue_lock:
+        try:
+            path = get_queue_path()
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except:
+            pass
+        return {'tasks': [], 'last_sync': None}
+
+def write_queue(queue_data):
+    with queue_lock:
+        try:
+            path = get_queue_path()
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(queue_data, f, ensure_ascii=False, indent=2)
+            return True
+        except:
+            return False
+
+def add_to_queue(task):
+    queue_data = read_queue()
+    for existing in queue_data['tasks']:
+        if existing.get('uid') == task.get('uid'):
+            return
+    queue_data['tasks'].append(task)
+    write_queue(queue_data)
+    logger.info(f"✅ Задача добавлена в очередь: {task.get('uid')}")
+
+def clear_queue():
+    write_queue({'tasks': [], 'last_sync': get_msk_now().strftime('%Y-%m-%d %H:%M:%S')})
+
+def send_tasks_to_google_sheets(tasks):
     try:
-        history_file = os.path.join(CACHE_DIR, f"history_{master_name}.json")
-        history = read_cache(f"history_{master_name}.json") or []
-        history.append({
-            'timestamp': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
-            'action': action_data
-        })
-        # Храним только последние 100 записей
-        if len(history) > 100:
-            history = history[-100:]
-        write_cache(f"history_{master_name}.json", history)
-    except:
-        pass
+        sheet_client = get_sheet_client()
+        now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
+        updates_status = []
+        updates_note = []
+        
+        for task in tasks:
+            uid = task.get('uid')
+            source = task.get('source')
+            task_type = task.get('type')
+            data = task.get('data', {})
+            
+            row_idx = get_ticket_row_by_uid(uid)
+            if not row_idx:
+                continue
+            
+            if source == 'Заявки':
+                if task_type == 'done':
+                    updates_status.append({'range': f'H{row_idx}', 'values': [['✅ Выполнено']]})
+                    updates_note.append({'range': f'K{row_idx}', 'values': [[data.get('parts', '')]]})
+                elif task_type == 'fail':
+                    updates_status.append({'range': f'H{row_idx}', 'values': [['⏹️ Обработано']]})
+                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'Вело отсутствует {now}']]})
+                elif task_type == 'evacuation':
+                    updates_status.append({'range': f'H{row_idx}', 'values': [['🔵 Доделать']]})
+                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'ЭВАКУАЦИЯ: {data.get("reason", "")}']]})
+                elif task_type == 'replace_yes':
+                    updates_status.append({'range': f'H{row_idx}', 'values': [['✅ Выполнено']]})
+                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'Заменено {data.get("parts", "")} шт.']]})
+                elif task_type == 'taken_no_replace':
+                    updates_status.append({'range': f'H{row_idx}', 'values': [['🔵 Доделать']]})
+                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'ЗАБРАЛИ: {data.get("parts", "")} АКБ']]})
+                elif task_type == 'replace_no':
+                    updates_status.append({'range': f'H{row_idx}', 'values': [['🔵 Доделать']]})
+                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'Куратор не предоставил']]})
+        
+        if updates_status or updates_note:
+            worksheet = sheet_client.worksheet("Заявки")
+            if updates_status:
+                worksheet.batch_update(updates_status)
+            if updates_note:
+                worksheet.batch_update(updates_note)
+            logger.info(f"✅ Отправлено {len(tasks)} задач в Google Sheets")
+        
+    except Exception as e:
+        logger.error(f"Ошибка отправки в Google Sheets: {e}")
+        raise
+
+def process_queue_background():
+    last_gs_sync = time.time()
+    while True:
+        try:
+            time.sleep(10)
+            queue_data = read_queue()
+            if not queue_data['tasks']:
+                continue
+            
+            tasks = queue_data['tasks']
+            logger.info(f"📋 Обработка {len(tasks)} задач из очереди")
+            
+            for task in tasks:
+                uid = task.get('uid')
+                task_type = task.get('type')
+                data = task.get('data', {})
+                
+                if task_type == 'done':
+                    update_ticket_in_admin_cache(uid, 'done', data.get('parts', ''))
+                elif task_type == 'fail':
+                    update_ticket_in_admin_cache(uid, 'fail', 'Вело отсутствует')
+                elif task_type == 'evacuation':
+                    update_ticket_in_admin_cache(uid, 'todo', f'ЭВАКУАЦИЯ: {data.get("reason", "")}')
+                elif task_type == 'replace_yes':
+                    update_ticket_in_admin_cache(uid, 'done', f'Заменено {data.get("parts", "")} шт.')
+                elif task_type == 'taken_no_replace':
+                    update_ticket_in_admin_cache(uid, 'todo', f'ЗАБРАЛИ: {data.get("parts", "")} АКБ')
+                elif task_type == 'replace_no':
+                    update_ticket_in_admin_cache(uid, 'todo', f'Куратор не предоставил')
+                elif task_type == 'transit_replace':
+                    update_ticket_in_admin_cache(uid, 'done', 'Заменен Транзитом')
+            
+            current_time = time.time()
+            if current_time - last_gs_sync >= 30:
+                send_tasks_to_google_sheets(tasks)
+                clear_queue()
+                last_gs_sync = current_time
+                logger.info("✅ Очередь очищена")
+            
+        except Exception as e:
+            logger.error(f"Ошибка в фоновом процессе: {e}")
 
 # ============================================================
 # ОТПРАВКА УВЕДОМЛЕНИЙ
@@ -604,6 +725,7 @@ def api_sync():
         refresh_all_master_caches()
         return jsonify({'success': True, 'tickets': tickets})
     except Exception as e:
+        logger.error(f"Ошибка синхронизации: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/batch_update', methods=['POST'])
@@ -657,102 +779,6 @@ def api_notify_curators():
     success = notify_curators(message)
     return jsonify({'success': success})
 
-@app.route('/api/admin_action', methods=['POST'])
-@login_required
-def api_admin_action():
-    """API для действий админа над заявками (как у мастеров)"""
-    data = request.json
-    uid = data.get('uid')
-    action = data.get('action')
-    extra = data.get('extra', '')
-    master_name = session.get('master_name', 'Админ')
-    
-    if not uid or not action:
-        return jsonify({'success': False, 'error': 'Недостаточно данных'})
-    
-    try:
-        # Получаем информацию о заявке, чтобы определить тип техники
-        admin_cache = get_admin_cache()
-        ticket_info = None
-        for dir_name, dir_data in admin_cache.get('directions', {}).items():
-            for t in dir_data.get('tickets', []):
-                if t.get('uid') == uid:
-                    ticket_info = t
-                    break
-            if ticket_info:
-                break
-        
-        if not ticket_info:
-            return jsonify({'success': False, 'error': 'Заявка не найдена'})
-        
-        ticket_type = ticket_info.get('type', '')
-        is_battery = ticket_type in ['Аккумуляторная батарея', 'Зарядное устройство']
-        
-        # Обработка действий в зависимости от типа
-        if is_battery:
-            if action == 'replace_yes':
-                if not extra or int(extra) <= 0:
-                    return jsonify({'success': False, 'error': 'Укажите количество'})
-                update_ticket_in_admin_cache(uid, 'done', f'Заменено {extra} шт.')
-                note = f'Заменено {extra} шт.'
-            elif action == 'taken_no_replace':
-                if not extra or int(extra) <= 0:
-                    return jsonify({'success': False, 'error': 'Укажите количество'})
-                update_ticket_in_admin_cache(
-                    uid, 'todo', 
-                    f'ЗАБРАЛИ: {extra} АКБ',
-                    f'Вернуть {extra} АКБ (забирали на ремонт)'
-                )
-                note = f'ЗАБРАЛИ: {extra} АКБ'
-            elif action == 'replace_no':
-                update_ticket_in_admin_cache(uid, 'todo', 'Куратор не предоставил')
-                note = 'Куратор не предоставил'
-            else:
-                return jsonify({'success': False, 'error': 'Неизвестное действие для АКБ'})
-        else:
-            # Для велосипедов
-            if action == 'done':
-                if not extra:
-                    return jsonify({'success': False, 'error': 'Укажите запчасти'})
-                update_ticket_in_admin_cache(uid, 'done', extra)
-                note = extra
-            elif action == 'evacuation':
-                if not extra:
-                    return jsonify({'success': False, 'error': 'Укажите причину эвакуации'})
-                update_ticket_in_admin_cache(uid, 'todo', f'ЭВАКУАЦИЯ: {extra}')
-                note = f'ЭВАКУАЦИЯ: {extra}'
-            elif action == 'fail':
-                update_ticket_in_admin_cache(uid, 'fail', 'Вело отсутствует')
-                note = 'Вело отсутствует'
-            else:
-                return jsonify({'success': False, 'error': 'Неизвестное действие'})
-        
-        # Записываем в историю
-        write_to_master_history('admin', {
-            'uid': uid,
-            'action': action,
-            'note': note,
-            'type': ticket_type
-        })
-        
-        # Добавляем в очередь для синхронизации
-        add_to_queue({
-            'uid': uid,
-            'source': 'Заявки',
-            'type': action,
-            'data': {
-                'extra': extra,
-                'note': note,
-                'admin_action': True
-            }
-        })
-        
-        threading.Thread(target=refresh_admin_cache).start()
-        threading.Thread(target=refresh_all_master_caches).start()
-        return jsonify({'success': True})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
 @app.route('/api/build_route_for_master')
 @login_required
 def api_build_route_for_master():
@@ -760,7 +786,6 @@ def api_build_route_for_master():
     if not master:
         return 'Нет мастера', 400
     
-    # Загружаем координаты дарксторов
     darks_ref = load_darks_reference()
     
     cache_data = get_master_cache(master)
@@ -770,7 +795,6 @@ def api_build_route_for_master():
         tickets = get_tickets_from_sheets()
         master_tickets = [t for t in tickets if t.get('master') == master and is_active_status(t.get('status'))]
     
-    # Собираем координаты дарксторов
     coords_set = set()
     for t in master_tickets:
         darks_num = t.get('darks')
@@ -783,7 +807,6 @@ def api_build_route_for_master():
     if not coords_list:
         return 'Нет координат', 400
     
-    # Формируем маршрут с координатами
     user_agent = request.headers.get('User-Agent', '').lower()
     is_mobile = any(x in user_agent for x in ['android', 'iphone', 'ipad', 'mobile'])
     
@@ -794,52 +817,6 @@ def api_build_route_for_master():
         points = [START_COORDS] + coords_list
         url = 'https://yandex.ru/maps/?rtext=' + '~'.join(points)
     return redirect(url)
-
-@app.route('/api/master_history/<name>')
-@login_required
-def api_master_history(name):
-    """Возвращает историю действий мастера"""
-    if session.get('master_name') != name and session.get('role') != 'admin':
-        return jsonify({'success': False, 'error': 'Доступ запрещён'})
-    
-    history = read_cache(f"history_{name}.json") or []
-    return jsonify({'success': True, 'history': history})
-
-# ============================================================
-# ОЧЕРЕДЬ ЗАДАЧ
-# ============================================================
-def get_queue_path():
-    return os.path.join(CACHE_DIR, "queue.json")
-
-def read_queue():
-    try:
-        path = get_queue_path()
-        if os.path.exists(path):
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-    except:
-        pass
-    return {'tasks': [], 'last_sync': None}
-
-def write_queue(queue_data):
-    try:
-        path = get_queue_path()
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(queue_data, f, ensure_ascii=False, indent=2)
-        return True
-    except:
-        return False
-
-def add_to_queue(task):
-    queue_data = read_queue()
-    for existing in queue_data['tasks']:
-        if existing.get('uid') == task.get('uid'):
-            return
-    queue_data['tasks'].append(task)
-    write_queue(queue_data)
-
-def clear_queue():
-    write_queue({'tasks': [], 'last_sync': get_msk_now().strftime('%Y-%m-%d %H:%M:%S')})
 
 # ============================================================
 # МАРШРУТЫ МАСТЕРОВ
@@ -881,11 +858,14 @@ def master_overview(name):
     groups = []
     for darks_num in sorted(groups_dict.keys(), key=lambda x: int(x) if x.isdigit() else 999999):
         groups.append(groups_dict[darks_num])
+    
+    route_url = f'/api/build_route_for_master?master={name}'
+    
     return render_template('master_main.html',
                           name=name,
                           groups=groups,
                           total_tickets=len(master_tickets),
-                          route_url=f'/api/build_route_for_master?master={name}',
+                          route_url=route_url,
                           now=get_msk_now().strftime('%H:%M:%S'))
 
 @app.route('/master/<name>/darks/<darks_number>')
@@ -942,6 +922,14 @@ def master_history(name):
         return redirect(url_for('login_page'))
     return render_template('master_history.html', name=name, now=get_msk_now().strftime('%H:%M:%S'))
 
+@app.route('/api/master_history/<name>')
+@login_required
+def api_master_history(name):
+    if session.get('master_name') != name and session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Доступ запрещён'})
+    history = read_cache(f"history_{name}.json") or []
+    return jsonify({'success': True, 'history': history})
+
 # ============================================================
 # API ДЛЯ МАСТЕРОВ
 # ============================================================
@@ -953,19 +941,12 @@ def master_done(name, darks_number, uid):
     parts = request.form.get('parts', '')
     if not parts.strip():
         return jsonify({'success': False, 'error': 'Укажите запчасти'})
+    
     cache_data = get_master_cache(name)
     if cache_data:
         tickets = cache_data.get('tickets', [])
         tickets = [t for t in tickets if t.get('uid') != uid]
         save_master_cache(name, tickets, '')
-    
-    # Записываем в историю
-    write_to_master_history(name, {
-        'uid': uid,
-        'action': 'done',
-        'parts': parts,
-        'darks': darks_number
-    })
     
     add_to_queue({
         'uid': uid,
@@ -985,13 +966,6 @@ def master_fail(name, darks_number, uid):
         tickets = cache_data.get('tickets', [])
         tickets = [t for t in tickets if t.get('uid') != uid]
         save_master_cache(name, tickets, '')
-    
-    write_to_master_history(name, {
-        'uid': uid,
-        'action': 'fail',
-        'darks': darks_number
-    })
-    
     add_to_queue({
         'uid': uid,
         'source': 'Заявки',
@@ -1013,14 +987,6 @@ def master_evacuation(name, darks_number, uid):
         tickets = cache_data.get('tickets', [])
         tickets = [t for t in tickets if t.get('uid') != uid]
         save_master_cache(name, tickets, '')
-    
-    write_to_master_history(name, {
-        'uid': uid,
-        'action': 'evacuation',
-        'reason': reason,
-        'darks': darks_number
-    })
-    
     add_to_queue({
         'uid': uid,
         'source': 'Заявки',
@@ -1042,14 +1008,6 @@ def master_taken_no_replace(name, darks_number, uid):
         tickets = cache_data.get('tickets', [])
         tickets = [t for t in tickets if t.get('uid') != uid]
         save_master_cache(name, tickets, '')
-    
-    write_to_master_history(name, {
-        'uid': uid,
-        'action': 'taken_no_replace',
-        'parts': parts,
-        'darks': darks_number
-    })
-    
     add_to_queue({
         'uid': uid,
         'source': 'Заявки',
@@ -1078,14 +1036,6 @@ def master_replace_yes(name, darks_number, uid):
         tickets = cache_data.get('tickets', [])
         tickets = [t for t in tickets if t.get('uid') != uid]
         save_master_cache(name, tickets, '')
-    
-    write_to_master_history(name, {
-        'uid': uid,
-        'action': 'replace_yes',
-        'parts': parts,
-        'darks': darks_number
-    })
-    
     add_to_queue({
         'uid': uid,
         'source': 'Заявки',
@@ -1104,13 +1054,6 @@ def master_replace_no(name, darks_number, uid):
         tickets = cache_data.get('tickets', [])
         tickets = [t for t in tickets if t.get('uid') != uid]
         save_master_cache(name, tickets, '')
-    
-    write_to_master_history(name, {
-        'uid': uid,
-        'action': 'replace_no',
-        'darks': darks_number
-    })
-    
     add_to_queue({
         'uid': uid,
         'source': 'Заявки',
@@ -1120,17 +1063,82 @@ def master_replace_no(name, darks_number, uid):
     return jsonify({'success': True})
 
 # ============================================================
+# ТРАНЗИТ - ЗАМЕНА ВЕЛОСИПЕДА
+# ============================================================
+def write_transit_replacement(uid, master_name, darks_number, address, old_data, new_data):
+    try:
+        sheet_client = get_sheet_client()
+        now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            report_sheet = sheet_client.worksheet("Эвакуация Транзит")
+        except:
+            report_sheet = sheet_client.add_worksheet("Эвакуация Транзит", 100, 20)
+            headers = ['Отметка времени', 'Адрес даркстора', 'Номер даркстора',
+                      'ЗАБРАЛ - Серийный номер', 'ЗАБРАЛ - Гос номер', 'ЗАБРАЛ - Номер айот',
+                      'ОТДАЛ - Серийный номер', 'ОТДАЛ - Гос номер', 'ОТДАЛ - Номер айот']
+            for i, h in enumerate(headers, start=1):
+                report_sheet.update_cell(1, i, h)
+        current_rows = report_sheet.get_all_values()
+        new_row_idx = len(current_rows) + 1
+        updates = [
+            {'range': f'A{new_row_idx}', 'values': [[now]]},
+            {'range': f'B{new_row_idx}', 'values': [[address]]},
+            {'range': f'C{new_row_idx}', 'values': [[darks_number]]},
+            {'range': f'D{new_row_idx}', 'values': [[old_data.get('serial', '')]]},
+            {'range': f'E{new_row_idx}', 'values': [[old_data.get('gos', '')]]},
+            {'range': f'F{new_row_idx}', 'values': [[old_data.get('iot', '')]]},
+            {'range': f'G{new_row_idx}', 'values': [[new_data.get('serial', '')]]},
+            {'range': f'H{new_row_idx}', 'values': [[new_data.get('gos', '')]]},
+            {'range': f'I{new_row_idx}', 'values': [[new_data.get('iot', '')]]}
+        ]
+        report_sheet.batch_update(updates)
+        logger.info(f"✅ Записана замена велосипеда для заявки {uid}")
+    except Exception as e:
+        logger.error(f"Ошибка записи замены велосипеда: {e}")
+        raise
+
+@app.route('/master/transit/replace', methods=['POST'])
+@login_required
+def transit_replace():
+    data = request.json
+    uid = data.get('uid')
+    master_name = data.get('master')
+    darks_number = data.get('darks_number')
+    address = data.get('address', '')
+    old_data = data.get('old_data', {})
+    new_data = data.get('new_data', {})
+    try:
+        write_transit_replacement(uid, master_name, darks_number, address, old_data, new_data)
+        add_to_queue({
+            'uid': uid,
+            'source': 'Заявки',
+            'type': 'transit_replace',
+            'data': {'master': master_name, 'darks_number': darks_number}
+        })
+        return jsonify({'success': True, 'message': 'Замена выполнена'})
+    except Exception as e:
+        logger.error(f"Ошибка замены велосипеда: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+# ============================================================
 # ЗАПУСК
 # ============================================================
 if __name__ == "__main__":
     logger.info("🚀 Запуск приложения...")
+    
+    # Запускаем фоновый процесс
+    background_thread = threading.Thread(target=process_queue_background, daemon=True)
+    background_thread.start()
+    logger.info("🚀 Фоновый процесс обработки очереди запущен")
+    
     try:
         load_darks_reference()
         tickets = get_tickets_from_sheets()
         uid_index = build_uid_index(tickets)
         save_admin_cache(tickets)
-        logger.info("✅ Кеш загружен")
+        logger.info(f"✅ Кеш загружен: {len(tickets)} заявок")
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки кеша: {e}")
+    
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
