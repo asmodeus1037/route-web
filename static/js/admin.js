@@ -182,8 +182,17 @@ function updateStatus(select) {
     
     var note = '';
     if (status === '🔧 Эвакуация') {
-        note = ticketDesc;
-        if (!confirm('Отправить заявку "' + uid + '" на эвакуацию?\nОписание: ' + note)) {
+        note = prompt('Введите причину эвакуации:');
+        if (note === null) {
+            select.value = oldStatus;
+            return;
+        }
+        if (!note.trim()) {
+            showToastModern('❌ Укажите причину эвакуации!', 'error');
+            select.value = oldStatus;
+            return;
+        }
+        if (!confirm('Отправить заявку "' + uid + '" на эвакуацию?\nПричина: ' + note)) {
             select.value = oldStatus;
             return;
         }
@@ -231,40 +240,18 @@ function updateStatus(select) {
         if (data.success) {
             select.dataset.oldStatus = status;
             showToastModern('✅ Статус обновлён на ' + status, 'success');
-            renderCurrentTab();
+            // Перезагружаем данные
+            location.reload();
         } else {
             showToastModern('❌ Ошибка: ' + data.error, 'error');
             select.value = oldStatus;
-            // Откатываем локальные данные
-            for (var dirName in directionsData) {
-                var dir = directionsData[dirName];
-                if (dir && dir.tickets) {
-                    for (var i = 0; i < dir.tickets.length; i++) {
-                        if (dir.tickets[i].uid === uid) {
-                            dir.tickets[i].status = oldStatus;
-                            break;
-                        }
-                    }
-                }
-            }
-            renderCurrentTab();
+            location.reload();
         }
     })
     .catch(function() {
         showToastModern('❌ Ошибка сети', 'error');
         select.value = oldStatus;
-        for (var dirName in directionsData) {
-            var dir = directionsData[dirName];
-            if (dir && dir.tickets) {
-                for (var i = 0; i < dir.tickets.length; i++) {
-                    if (dir.tickets[i].uid === uid) {
-                        dir.tickets[i].status = oldStatus;
-                        break;
-                    }
-                }
-            }
-        }
-        renderCurrentTab();
+        location.reload();
     });
 }
 
@@ -462,6 +449,17 @@ async function applyBulkStatus() {
         return;
     }
     
+    // Запрашиваем комментарий для эвакуации
+    var comment = '';
+    if (status === '🔧 Эвакуация') {
+        comment = prompt('Введите причину эвакуации (будет записана в комментарий):');
+        if (comment === null) return;
+        if (!comment.trim()) {
+            showToastModern('❌ Укажите причину эвакуации!', 'error');
+            return;
+        }
+    }
+    
     if (!confirm('Изменить статус на "' + status + '" для ' + selectedRequests.size + ' заявок?')) {
         return;
     }
@@ -473,12 +471,15 @@ async function applyBulkStatus() {
     }
     
     try {
+        var uids = Array.from(selectedRequests);
+        
         var response = await fetch('/api/bulk_update_status', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
-                uids: Array.from(selectedRequests), 
+                uids: uids, 
                 status: status,
+                comment: comment,
                 skip_report: true
             })
         });
@@ -486,43 +487,19 @@ async function applyBulkStatus() {
         var data = await response.json();
         
         if (data.success) {
-            // Обновляем локальные данные для каждого uid
-            var statusMap = {
-                '🟡 В работе': 'pending',
-                '✅ Выполнено': 'done',
-                '🔵 Доделать': 'todo',
-                '🔧 Эвакуация': 'evacuation'
-            };
-            var newStatus = statusMap[status] || 'pending';
-            
-            // Обновляем directionsData
-            for (var dirName in directionsData) {
-                var dir = directionsData[dirName];
-                if (dir && dir.tickets) {
-                    for (var i = 0; i < dir.tickets.length; i++) {
-                        var t = dir.tickets[i];
-                        if (selectedRequests.has(t.uid)) {
-                            t.status = newStatus;
-                            if (status === '🔧 Эвакуация') {
-                                t.note = 'ЭВАКУАЦИЯ: ' + (t.desc || '');
-                                t.display_desc = t.desc || '';
-                            }
-                        }
-                    }
-                }
-            }
-            
             showToastModern('✅ Статус изменен для ' + selectedRequests.size + ' заявок', 'success');
             selectedRequests.clear();
             updateBulkUI();
-            
-            // Перерисовываем таблицу
-            renderCurrentTab();
             
             // Выходим из режима массового выделения
             if (bulkModeActive) {
                 toggleBulkMode();
             }
+            
+            // Перезагружаем страницу
+            setTimeout(function() {
+                location.reload();
+            }, 1000);
             
         } else {
             showToastModern('❌ Ошибка: ' + (data.error || 'Неизвестная ошибка'), 'error');
@@ -888,7 +865,7 @@ function renderTicketsGrouped(tickets, containerId) {
         if (!allTickets[i].is_done) active.push(allTickets[i]);
     }
     
-    // Считаем статусы
+    // Считаем статусы КОРРЕКТНО
     var pending = 0;
     var evacuation = 0;
     var todo = 0;
@@ -896,8 +873,9 @@ function renderTicketsGrouped(tickets, containerId) {
     
     for (var i = 0; i < active.length; i++) {
         var t = active[i];
-        // Проверяем на эвакуацию
-        if (t.status === 'todo' && t.note && t.note.indexOf('ЭВАКУАЦИЯ:') !== -1) {
+        // Проверяем на эвакуацию (проверяем статус И наличие note с ЭВАКУАЦИЯ)
+        if (t.status === 'evacuation' || 
+            (t.status === 'todo' && t.note && t.note.indexOf('ЭВАКУАЦИЯ:') !== -1)) {
             evacuation++;
         } else if (t.status === 'pending') {
             pending++;

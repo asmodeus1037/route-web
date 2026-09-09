@@ -699,7 +699,6 @@ def process_queue_background():
             tasks = queue_data['tasks']
             logger.info(f"📋 Обработка {len(tasks)} задач из очереди")
             
-            # Отделяем задачи, которые НЕ нужно писать в отчет
             tasks_for_report = []
             tasks_skip_report = []
             
@@ -712,7 +711,6 @@ def process_queue_background():
                 else:
                     tasks_for_report.append(task)
             
-            # Обрабатываем задачи без отчета (только обновление статусов)
             for task in tasks_skip_report:
                 uid = task.get('uid')
                 task_type = task.get('type')
@@ -724,11 +722,9 @@ def process_queue_background():
                     note = data.get('note', '')
                     update_ticket_in_admin_cache(uid, new_status, note, status_display)
             
-            # Обрабатываем задачи с отчетом (мастерские действия)
             if tasks_for_report:
                 write_to_report(tasks_for_report)
             
-            # Если есть задачи - очищаем очередь
             if tasks:
                 clear_queue()
                 last_gs_sync = time.time()
@@ -877,13 +873,16 @@ def admin_panel():
 @app.route('/api/sync')
 @login_required
 def api_sync():
-    global uid_index
+    """Полная синхронизация с Google Sheets"""
+    global uid_index, darks_ref
     try:
-        tickets = get_tickets_from_sheets()
         darks_ref = load_darks_reference()
+        tickets = get_tickets_from_sheets()
         uid_index = build_uid_index(tickets)
         save_admin_cache(tickets)
         refresh_all_master_caches()
+        
+        logger.info(f"✅ Синхронизация завершена: {len(tickets)} заявок")
         return jsonify({'success': True, 'tickets': tickets})
     except Exception as e:
         logger.error(f"Ошибка синхронизации: {e}")
@@ -933,7 +932,7 @@ def api_notify_curators():
     return jsonify({'success': success})
 
 # ============================================================
-# ОБНОВЛЕНИЕ СТАТУСА (ОДНА ЗАЯВКА) - ИСПРАВЛЕННОЕ
+# ОБНОВЛЕНИЕ СТАТУСА (ОДНА ЗАЯВКА)
 # ============================================================
 @app.route('/api/update_status', methods=['POST'])
 @login_required
@@ -979,53 +978,79 @@ def api_update_status():
         return jsonify({'success': False, 'error': str(e)})
 
 # ============================================================
-# МАССОВОЕ ОБНОВЛЕНИЕ СТАТУСОВ
+# МАССОВОЕ ОБНОВЛЕНИЕ СТАТУСОВ (BATCH + КОММЕНТАРИЙ)
 # ============================================================
 @app.route('/api/bulk_update_status', methods=['POST'])
 @login_required
 def api_bulk_update_status():
-    """Массовое обновление статусов заявок (БЕЗ записи в отчет)"""
+    """Массовое обновление статусов заявок (ОДНИМ BATCH-запросом)"""
     try:
         data = request.json
         uids = data.get('uids', [])
         status_display = data.get('status', '')
+        comment = data.get('comment', '')
         skip_report = data.get('skip_report', True)
         
         if not uids or not status_display:
             return jsonify({'success': False, 'error': 'Не указаны UID или статус'}), 400
         
-        status_map = {
-            '🟡 В работе': 'pending',
-            '✅ Выполнено': 'done',
-            '🔵 Доделать': 'todo',
-            '🔧 Эвакуация': 'evacuation'
-        }
-        new_status = status_map.get(status_display, 'pending')
-        
+        updates_zayavki = []
+        updates_import = []
         updated_count = 0
         
         for uid in uids:
-            try:
-                update_ticket_in_admin_cache(uid, new_status, '', status_display)
-                update_status_in_google_sheets(uid, status_display, '')
-                
-                add_to_queue({
-                    'uid': uid,
-                    'source': 'Заявки',
-                    'type': 'status_update',
-                    'data': {
-                        'status': status_display,
-                        'new_status': new_status,
-                        'note': '',
-                        'skip_report': skip_report
-                    }
-                })
+            found = find_uid_in_sheets(uid)
+            if not found:
+                continue
+            
+            row_idx = found['row_index']
+            source = found['source']
+            
+            final_comment = comment
+            if status_display == '🔧 Эвакуация' and not final_comment:
+                tickets = get_tickets_from_sheets()
+                for t in tickets:
+                    if t.get('uid') == uid:
+                        final_comment = t.get('desc', 'Эвакуация')
+                        break
+            
+            if source == 'Заявки':
+                updates_zayavki.append({'range': f'H{row_idx}', 'values': [[status_display]]})
+                if final_comment:
+                    updates_zayavki.append({'range': f'J{row_idx}', 'values': [[final_comment]]})
                 updated_count += 1
-            except Exception as e:
-                logger.error(f"Ошибка обновления статуса для {uid}: {e}")
+            elif source == 'Импорт М4':
+                status_map_import = {
+                    '🟡 В работе': 'В работе',
+                    '✅ Выполнено': 'Выполнено',
+                    '🔵 Доделать': 'Доделать',
+                    '🔧 Эвакуация': 'Эвакуация'
+                }
+                new_status_import = status_map_import.get(status_display, 'В работе')
+                updates_import.append({'range': f'L{row_idx}', 'values': [[new_status_import]]})
+                if final_comment:
+                    updates_import.append({'range': f'M{row_idx}', 'values': [[final_comment]]})
+                updated_count += 1
+        
+        sheet_client = get_sheet_client()
+        
+        if updates_zayavki:
+            worksheet = sheet_client.worksheet("Заявки")
+            worksheet.batch_update(updates_zayavki)
+            logger.info(f"✅ Обновлено {len(updates_zayavki)} ячеек в 'Заявки'")
+        
+        if updates_import:
+            worksheet = sheet_client.worksheet("Импорт М4")
+            worksheet.batch_update(updates_import)
+            logger.info(f"✅ Обновлено {len(updates_import)} ячеек в 'Импорт М4'")
         
         tickets = get_tickets_from_sheets()
         save_admin_cache(tickets)
+        
+        global uid_index
+        uid_index = build_uid_index(tickets)
+        
+        refresh_all_master_caches()
         
         return jsonify({
             'success': True,
@@ -1181,7 +1206,6 @@ def master_darks(name, darks_number):
     for t in filtered:
         t['hours_since'] = get_hours_since(t.get('created', ''))
     
-    # Для Транзита - считаем дубликаты по госномеру
     if name == 'Сергей Транзит':
         gos_counts = {}
         for t in filtered:
