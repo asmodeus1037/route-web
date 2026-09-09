@@ -22,7 +22,7 @@ app.secret_key = secrets.token_hex(16)
 # НАСТРОЙКА
 # ============================================================
 CREDENTIALS_FILE = "/data/credentials.json"
-SHEET_NAME = "Система ремонта ВВ"  # НОВАЯ ТАБЛИЦА
+SHEET_NAME = "Система ремонта ВВ"
 START_COORDS = "55.775267, 37.745690"
 MASTERS = ['Антон', 'Сергей', 'Руслан', 'Транзит', 'Алексей']
 CACHE_TTL = 300
@@ -238,7 +238,7 @@ def generate_ticket_id(date_str):
         return None
 
 # ============================================================
-# ЧТЕНИЕ ЗАЯВОК ИЗ ТАБЛИЦЫ (С НОВЫМИ СТОЛБЦАМИ)
+# ЧТЕНИЕ ЗАЯВОК ИЗ ТАБЛИЦЫ
 # ============================================================
 def get_tickets_from_sheets():
     global darks_ref
@@ -246,7 +246,6 @@ def get_tickets_from_sheets():
     tickets = []
     darks_ref = load_darks_reference()
     
-    # Читаем лист "Заявки" (НОВАЯ СТРУКТУРА)
     try:
         worksheet = sheet_client.worksheet("Заявки")
         rows = worksheet.get_all_values()
@@ -254,8 +253,8 @@ def get_tickets_from_sheets():
             for idx, row in enumerate(rows[1:], start=2):
                 if len(row) < 14:
                     continue
-                darks_num = row[0].strip()  # A
-                status = row[7].strip() if len(row) > 7 else ''  # H
+                darks_num = row[0].strip()
+                status = row[7].strip() if len(row) > 7 else ''
                 if status in ['Выполнено', '✅ Выполнено', 'done']:
                     status = 'done'
                 elif status in ['🔵 Доделать', 'Доделать']:
@@ -265,16 +264,16 @@ def get_tickets_from_sheets():
                 else:
                     status = 'pending'
                 is_done = status in ['done', 'fail']
-                created_str = row[5].strip() if len(row) > 5 else ''  # F
+                created_str = row[5].strip() if len(row) > 5 else ''
                 hours_since = get_hours_since(created_str)
-                sent_date = row[13].strip() if len(row) > 13 else ''  # N
-                bike_type = row[1].strip() if len(row) > 1 else ''  # B
-                bike_subtype = row[8].strip() if len(row) > 8 else ''  # I
+                sent_date = row[13].strip() if len(row) > 13 else ''
+                bike_type = row[1].strip() if len(row) > 1 else ''
+                bike_subtype = row[8].strip() if len(row) > 8 else ''
                 if bike_type == 'Электровелосипед' and bike_subtype:
                     display_type = bike_subtype
                 else:
                     display_type = bike_type
-                uid = row[10].strip() if len(row) > 10 else ''  # K
+                uid = row[10].strip() if len(row) > 10 else ''
                 if not uid and created_str:
                     uid = generate_ticket_id(created_str)
                     if uid:
@@ -288,11 +287,11 @@ def get_tickets_from_sheets():
                         status = 'pending'
                     except:
                         pass
-                direction = row[11].strip() if len(row) > 11 else ''  # L
+                direction = row[11].strip() if len(row) > 11 else ''
                 if not direction and darks_num in darks_ref:
                     direction = darks_ref[darks_num].get('direction', '')
-                note = row[9].strip() if len(row) > 9 else ''  # J
-                display_desc = row[2].strip() if len(row) > 2 else ''  # C
+                note = row[9].strip() if len(row) > 9 else ''
+                display_desc = row[2].strip() if len(row) > 2 else ''
                 if status == 'todo' and note and 'ЗАБРАЛИ:' in note:
                     match = re.search(r'ЗАБРАЛИ:\s*(\d+)', note)
                     if match:
@@ -305,11 +304,11 @@ def get_tickets_from_sheets():
                     'bike_type': display_type,
                     'bike_subtype': bike_subtype,
                     'desc': display_desc,
-                    'gos': row[3].strip() if len(row) > 3 else '',  # D
-                    'contact': row[4].strip() if len(row) > 4 else '',  # E
+                    'gos': row[3].strip() if len(row) > 3 else '',
+                    'contact': row[4].strip() if len(row) > 4 else '',
                     'created': created_str,
                     'hours_since': hours_since,
-                    'master': row[6].strip() if len(row) > 6 else '',  # G
+                    'master': row[6].strip() if len(row) > 6 else '',
                     'status': status,
                     'note': note,
                     'uid': uid,
@@ -320,13 +319,12 @@ def get_tickets_from_sheets():
                     'sent_date': sent_date,
                     'is_done': is_done,
                     'is_active': not is_done,
-                    'parts': row[9].strip() if len(row) > 9 else '',  # J
+                    'parts': row[9].strip() if len(row) > 9 else '',
                     'display_desc': display_desc
                 })
     except Exception as e:
         logger.error(f"Ошибка чтения 'Заявки': {e}")
     
-    # Читаем лист "Импорт М4"
     try:
         worksheet = sheet_client.worksheet("Импорт М4")
         rows = worksheet.get_all_values()
@@ -334,10 +332,10 @@ def get_tickets_from_sheets():
             for idx, row in enumerate(rows[1:], start=2):
                 if len(row) < 15:
                     continue
-                obj = row[4].strip() if len(row) > 4 else ''  # E
+                obj = row[4].strip() if len(row) > 4 else ''
                 darks_match = re.search(r'^(\d{4})', obj)
                 darks_num = darks_match.group(1) if darks_match else ''
-                model = row[8].strip() if len(row) > 8 else ''  # I
+                model = row[8].strip() if len(row) > 8 else ''
                 bike_type = 'Не указан'
                 if 'Электровелосипед' in model or 'электро' in model:
                     bike_type = 'Электровелосипед'
@@ -351,29 +349,29 @@ def get_tickets_from_sheets():
                     bike_type = 'Номерной знак'
                 elif 'IoT' in model:
                     bike_type = 'IoT'
-                gos = row[9].strip() if len(row) > 9 else ''  # J
-                uid = row[1].strip() if len(row) > 1 else ''  # B
-                status_raw = row[3].strip() if len(row) > 3 else ''  # D
-                status_l = row[11].strip() if len(row) > 11 else ''  # L
+                gos = row[9].strip() if len(row) > 9 else ''
+                uid = row[1].strip() if len(row) > 1 else ''
+                status_raw = row[3].strip() if len(row) > 3 else ''
+                status_l = row[11].strip() if len(row) > 11 else ''
                 if status_raw == 'Решено' or status_l == 'Выполнено':
                     status = 'done'
                     is_done = True
                 else:
                     status = 'pending'
                     is_done = False
-                created_str = row[6].strip() if len(row) > 6 else ''  # G
+                created_str = row[6].strip() if len(row) > 6 else ''
                 hours_since = get_hours_since(created_str)
-                sent_date = row[13].strip() if len(row) > 13 else ''  # N
+                sent_date = row[13].strip() if len(row) > 13 else ''
                 tickets.append({
                     'source': 'Импорт М4',
                     'darks': darks_num,
                     'type': bike_type,
                     'bike_type': bike_type,
-                    'desc': row[7].strip() if len(row) > 7 else '',  # H
+                    'desc': row[7].strip() if len(row) > 7 else '',
                     'gos': gos,
                     'created': created_str,
                     'hours_since': hours_since,
-                    'master': row[13].strip() if len(row) > 13 else '',  # N
+                    'master': row[13].strip() if len(row) > 13 else '',
                     'status': status,
                     'uid': uid,
                     'row_index': idx,
@@ -383,7 +381,7 @@ def get_tickets_from_sheets():
                     'sent_date': sent_date,
                     'is_done': is_done,
                     'is_active': not is_done,
-                    'parts': row[12].strip() if len(row) > 12 else ''  # M
+                    'parts': row[12].strip() if len(row) > 12 else ''
                 })
     except Exception as e:
         logger.error(f"Ошибка чтения 'Импорт М4': {e}")
@@ -524,15 +522,13 @@ def clear_queue():
     write_queue({'tasks': [], 'last_sync': get_msk_now().strftime('%Y-%m-%d %H:%M:%S')})
 
 # ============================================================
-# ЗАПИСЬ В "ОТЧЕТ МАСТЕРА" — ТОЛЬКО СЮДА!
+# ЗАПИСЬ В "ОТЧЕТ МАСТЕРА"
 # ============================================================
 def write_to_report(tasks):
-    """Записывает задачи ТОЛЬКО в лист 'Отчет мастера'"""
     try:
         sheet_client = get_sheet_client()
         now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
         
-        # Получаем лист "Отчет мастера"
         try:
             report_sheet = sheet_client.worksheet("Отчет мастера")
         except:
@@ -558,7 +554,6 @@ def write_to_report(tasks):
             reason = data.get('reason', '')
             extra = data.get('extra', '')
             
-            # Получаем информацию о заявке из кэша
             ticket = None
             if uid in uid_index:
                 ticket = uid_index[uid]['ticket']
@@ -567,7 +562,6 @@ def write_to_report(tasks):
                 logger.warning(f"❌ Заявка {uid} не найдена в кэше, пропускаем")
                 continue
             
-            # Статус для отчета
             status_map = {
                 'done': '✅ Выполнено',
                 'fail': '🔵 Доделать',
@@ -579,7 +573,6 @@ def write_to_report(tasks):
             }
             status = status_map.get(task_type, '✅ Выполнено')
             
-            # Количество
             if ticket.get('type') in ['Аккумуляторная батарея', 'Зарядное устройство']:
                 quantity = parts or extra or '1'
             else:
@@ -624,7 +617,6 @@ def process_queue_background():
             tasks = queue_data['tasks']
             logger.info(f"📋 Обработка {len(tasks)} задач из очереди")
             
-            # Обновляем админ-кэш
             for task in tasks:
                 uid = task.get('uid')
                 task_type = task.get('type')
@@ -1242,14 +1234,54 @@ if __name__ == "__main__":
     background_thread.start()
     logger.info("🚀 Фоновый процесс обработки очереди запущен")
     
+    # ============================================================
+    # АВТОМАТИЧЕСКОЕ СОЗДАНИЕ ВСЕХ КЭШЕЙ ПРИ ЗАПУСКЕ
+    # ============================================================
     try:
+        logger.info("📂 Загрузка данных из Google Sheets...")
         load_darks_reference()
         tickets = get_tickets_from_sheets()
         uid_index = build_uid_index(tickets)
+        
+        # Создаём админ-кэш
         save_admin_cache(tickets)
-        logger.info(f"✅ Кеш загружен: {len(tickets)} заявок")
+        logger.info(f"✅ Админ кэш создан: {len(tickets)} заявок")
+        
+        # Создаём кэши для ВСЕХ мастеров
+        logger.info("📂 Создание кэшей для мастеров...")
+        for master in MASTERS:
+            master_tickets = [t for t in tickets if t.get('master') == master and is_active_status(t.get('status'))]
+            save_master_cache(master, master_tickets, '')
+            logger.info(f"   ✅ Кэш для {master}: {len(master_tickets)} заявок")
+        
+        # Создаём пустую очередь, если её нет
+        queue_path = get_queue_path()
+        if not os.path.exists(queue_path):
+            write_queue({'tasks': [], 'last_sync': get_msk_now().strftime('%Y-%m-%d %H:%M:%S')})
+            logger.info("✅ Создана пустая очередь")
+        
+        logger.info("✅ ВСЕ КЭШИ УСПЕШНО СОЗДАНЫ!")
+        
     except Exception as e:
-        logger.error(f"❌ Ошибка загрузки кеша: {e}")
+        logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА ПРИ СОЗДАНИИ КЭШЕЙ: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # ============================================================
     
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    
+    # Проверяем наличие SSL-сертификатов
+    ssl_context = None
+    try:
+        if os.path.exists('/etc/ssl/certs/amvera.crt') and os.path.exists('/etc/ssl/private/amvera.key'):
+            ssl_context = ('/etc/ssl/certs/amvera.crt', '/etc/ssl/private/amvera.key')
+            logger.info("✅ SSL сертификаты найдены, запуск с HTTPS")
+    except:
+        pass
+    
+    # Запускаем приложение
+    if ssl_context:
+        app.run(host="0.0.0.0", port=port, ssl_context=ssl_context)
+    else:
+        app.run(host="0.0.0.0", port=port)
