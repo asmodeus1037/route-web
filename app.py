@@ -1,3 +1,30 @@
+print("🔴 ДИАГНОСТИКА ЗАПУЩЕНА")
+print("🔍 Версия Python:", __import__('sys').version)
+print("📂 Текущая папка:", __import__('os').getcwd())
+print("📂 Файлы в папке:", __import__('os').listdir('.'))
+
+# Попробуем импортировать gspread
+try:
+    import gspread
+    print("✅ gspread импортирован")
+except Exception as e:
+    print(f"❌ Ошибка импорта gspread: {e}")
+
+# Попробуем открыть credentials.json
+try:
+    import json
+    with open("/data/credentials.json", "r") as f:
+        creds = json.load(f)
+        print("✅ credentials.json загружен")
+        print(f"   client_email: {creds.get('client_email', 'НЕТ')}")
+except Exception as e:
+    print(f"❌ Ошибка загрузки credentials.json: {e}")
+    print("📂 Файлы в /data:", __import__('os').listdir('/data') if __import__('os').path.exists('/data') else "НЕТ ПАПКИ /data")
+
+print("🔴 ДИАГНОСТИКА ЗАВЕРШЕНА")
+
+# ОСТАЛЬНОЙ КОД app.py (всё что было)
+
 import os
 import re
 import json
@@ -1283,34 +1310,6 @@ def transit_replace():
 # ============================================================
 # ЗАПУСК
 # ============================================================
-
-# ============================================================
-# ВРЕМЕННАЯ ДИАГНОСТИКА
-# ============================================================
-print("🔍 НАЧАЛО ДИАГНОСТИКИ")
-try:
-    print("📂 Загружаем дарксторы...")
-    load_darks_reference()
-    print("✅ Дарксторы загружены")
-    
-    print("📂 Загружаем заявки...")
-    tickets = get_tickets_from_sheets()
-    print(f"✅ Загружено {len(tickets)} заявок")
-    
-    print("📂 Строим индекс...")
-    uid_index = build_uid_index(tickets)
-    print(f"✅ Индекс построен: {len(uid_index)} записей")
-    
-    print("📂 Сохраняем кэш...")
-    save_admin_cache(tickets)
-    print("✅ Кэш сохранён")
-    
-except Exception as e:
-    print(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
-    import traceback
-    traceback.print_exc()
-
-print("🔍 ДИАГНОСТИКА ЗАВЕРШЕНА")
 
 if __name__ == "__main__":
     logger.info("🚀 Запуск приложения...")
