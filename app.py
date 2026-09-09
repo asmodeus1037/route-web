@@ -1,3 +1,6 @@
+# ============================================================
+# ДИАГНОСТИКА (САМАЯ ПЕРВАЯ СТРОКА!)
+# ============================================================
 print("🔴 ДИАГНОСТИКА ЗАПУЩЕНА")
 print("🔍 Версия Python:", __import__('sys').version)
 print("📂 Текущая папка:", __import__('os').getcwd())
@@ -22,9 +25,11 @@ except Exception as e:
     print("📂 Файлы в /data:", __import__('os').listdir('/data') if __import__('os').path.exists('/data') else "НЕТ ПАПКИ /data")
 
 print("🔴 ДИАГНОСТИКА ЗАВЕРШЕНА")
+print("=" * 50)
 
-# ОСТАЛЬНОЙ КОД app.py (всё что было)
-
+# ============================================================
+# ИМПОРТЫ (ТЕПЕРЬ ПОСЛЕ ДИАГНОСТИКИ)
+# ============================================================
 import os
 import re
 import json
@@ -41,6 +46,8 @@ import pytz
 import logging
 import secrets
 from functools import wraps
+
+# ОСТАЛЬНОЙ КОД...
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
