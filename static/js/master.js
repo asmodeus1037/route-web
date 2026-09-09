@@ -49,7 +49,6 @@ function closeModal(modalId) {
     if (modal) modal.classList.remove('active');
 }
 
-// Закрытие модалок по клику вне
 document.addEventListener('DOMContentLoaded', function() {
     var modals = document.querySelectorAll('.modal');
     for (var i = 0; i < modals.length; i++) {
@@ -64,10 +63,128 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // ============================================================
+// ЭВАКУАЦИЯ ВЕЛОСИПЕДА
+// ============================================================
+
+// Редактирование поля
+function editField(uid, className) {
+    var input = document.querySelector('#' + className + '_' + uid);
+    if (input) {
+        input.readOnly = false;
+        input.focus();
+        input.classList.remove('readonly');
+    }
+}
+
+// Проверка поля
+function checkField(uid, className) {
+    var input = document.querySelector('#' + className + '_' + uid);
+    var statusIcon = document.querySelector('#' + className + 'Status_' + uid);
+    
+    if (!input) return;
+    
+    if (input.value.trim()) {
+        input.classList.add('valid');
+        if (statusIcon) {
+            statusIcon.textContent = '✅';
+            statusIcon.style.color = '#22c55e';
+        }
+        showToast('✅ Поле заполнено', false);
+    } else {
+        if (statusIcon) {
+            statusIcon.textContent = '❌';
+            statusIcon.style.color = '#ef4444';
+        }
+        showToast('❌ Поле пустое!', true);
+    }
+}
+
+// Отправка эвакуации
+function submitEvacuation(name, darksNumber, uid, gos) {
+    // Проверяем поля старого велосипеда
+    var oldSerial = document.getElementById('oldSerial_' + uid);
+    var oldGos = document.getElementById('oldGos_' + uid);
+    var oldIot = document.getElementById('oldIot_' + uid);
+    
+    // Проверяем поля нового велосипеда
+    var newSerial = document.getElementById('newSerial_' + uid);
+    var newGos = document.getElementById('newGos_' + uid);
+    var newIot = document.getElementById('newIot_' + uid);
+    
+    // Проверка заполнения
+    if (!oldSerial.value.trim() || !oldGos.value.trim() || !oldIot.value.trim()) {
+        showToast('❌ Заполните все поля СТАРОГО велосипеда!', true);
+        return false;
+    }
+    
+    if (!newSerial.value.trim() || !newGos.value.trim() || !newIot.value.trim()) {
+        showToast('❌ Заполните все поля НОВОГО велосипеда!', true);
+        return false;
+    }
+    
+    // Подтверждение
+    var message = 'Отправить данные по замене велосипеда?\n\n';
+    message += '📌 ЗАБРАТЬ:\n';
+    message += '  Серийный: ' + oldSerial.value + '\n';
+    message += '  Гос: ' + oldGos.value + '\n';
+    message += '  Айот: ' + oldIot.value + '\n\n';
+    message += '📌 ОТДАТЬ:\n';
+    message += '  Серийный: ' + newSerial.value + '\n';
+    message += '  Гос: ' + newGos.value + '\n';
+    message += '  Айот: ' + newIot.value;
+    
+    if (!confirm(message)) return false;
+    
+    // Собираем данные
+    var data = {
+        uid: uid,
+        master: name,
+        darks_number: darksNumber,
+        address: document.querySelector('input[name="address"]').value || '',
+        old_data: {
+            serial: oldSerial.value.trim(),
+            gos: oldGos.value.trim(),
+            iot: oldIot.value.trim()
+        },
+        new_data: {
+            serial: newSerial.value.trim(),
+            gos: newGos.value.trim(),
+            iot: newIot.value.trim()
+        }
+    };
+    
+    // Отправка
+    fetch('/master/evacuation/replace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    })
+    .then(function(response) { return response.json(); })
+    .then(function(result) {
+        if (result.success) {
+            showToast('✅ Замена отправлена!', false);
+            // Удаляем карточку
+            var card = document.getElementById('ticket-' + uid);
+            if (card) {
+                card.style.transition = 'opacity 0.3s';
+                card.style.opacity = '0';
+                setTimeout(function() { card.remove(); }, 300);
+            }
+        } else {
+            showToast('❌ Ошибка: ' + result.error, true);
+        }
+    })
+    .catch(function() {
+        showToast('❌ Ошибка соединения', true);
+    });
+    
+    return false;
+}
+
+// ============================================================
 // АКБ И ЗАРЯДКИ
 // ============================================================
 
-// Функция для кнопки "Забираю без замены"
 function openTakenModal(name, darks, uid) {
     var modal = document.getElementById('takenModal');
     if (!modal) return;
@@ -107,7 +224,6 @@ function openTakenModal(name, darks, uid) {
     modal.classList.add('active');
 }
 
-// Функция для кнопки "Куратор не смог предоставить"
 function openReplaceNoModal(name, darks, uid) {
     var modal = document.getElementById('replaceNoModal');
     if (!modal) return;
@@ -230,7 +346,7 @@ function openModal(name, darks, uid, type, title) {
 // ФУНКЦИИ ДЛЯ ТРАНЗИТА
 // ============================================================
 
-function editField(btn, className) {
+function editFieldOld(btn, className) {
     var input = btn.closest('.field-group').querySelector('.' + className);
     input.readOnly = false;
     input.focus();
@@ -238,16 +354,17 @@ function editField(btn, className) {
     btn.onclick = function() {
         input.readOnly = true;
         this.textContent = '✏️';
-        this.onclick = function() { editField(this, className); };
+        this.onclick = function() { editFieldOld(this, className); };
     };
 }
 
-function checkField(btn, className) {
+function checkFieldOld(btn, className) {
     var input = btn.closest('.field-group').querySelector('.' + className);
     var statusIcon = btn.closest('.field-group').querySelector('.status-icon');
     if (input.value.trim()) {
         statusIcon.textContent = '✅';
         statusIcon.style.color = '#22c55e';
+        showToast('✅ Поле заполнено', false);
     } else {
         alert('Поле пустое! Сначала заполните данные.');
     }

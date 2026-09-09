@@ -1385,7 +1385,6 @@ def api_bulk_update_status():
         if not uids or not status_display:
             return jsonify({'success': False, 'error': 'Не указаны UID или статус'}), 400
         
-        # Маппинг статусов
         status_map = {
             '🟡 В работе': 'pending',
             '✅ Выполнено': 'done',
@@ -1396,16 +1395,10 @@ def api_bulk_update_status():
         
         updated_count = 0
         
-        # Обновляем каждую заявку
         for uid in uids:
             try:
-                # Обновляем в админ-кэше
                 update_ticket_in_admin_cache(uid, new_status, '', status_display)
-                
-                # Обновляем в Google Sheets
                 update_status_in_google_sheets(uid, status_display, '')
-                
-                # Добавляем в очередь
                 add_to_queue({
                     'uid': uid,
                     'source': 'Заявки',
@@ -1428,6 +1421,157 @@ def api_bulk_update_status():
         
     except Exception as e:
         logger.error(f'Ошибка при массовом обновлении статусов: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================
+# ЭВАКУАЦИЯ ВЕЛОСИПЕДА
+# ============================================================
+
+def find_bike_in_database(gos_number):
+    """Поиск велосипеда в листе 'База данных вело' по госномеру"""
+    try:
+        sheet_client = get_sheet_client()
+        worksheet = sheet_client.worksheet("База данных вело")
+        rows = worksheet.get_all_values()
+        
+        if len(rows) <= 1:
+            return None
+        
+        # Ищем по полному госномеру или по цифрам
+        gos_clean = re.sub(r'[^0-9]', '', gos_number) if gos_number else ''
+        
+        for row in rows[1:]:
+            if len(row) >= 7:
+                gos = row[1].strip() if len(row) > 1 else ''
+                gos_digits = re.sub(r'[^0-9]', '', gos)
+                
+                # Сравниваем
+                if gos == gos_number or (gos_clean and gos_digits == gos_clean):
+                    return {
+                        'serial': row[0].strip() if len(row) > 0 else '',
+                        'gos': gos,
+                        'iot': row[2].strip() if len(row) > 2 else '',
+                        'address': row[3].strip() if len(row) > 3 else '',
+                        'darks': row[4].strip() if len(row) > 4 else '',
+                        'bike_type': row[5].strip() if len(row) > 5 else '',
+                        'direction': row[6].strip() if len(row) > 6 else ''
+                    }
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка поиска велосипеда в БД: {e}")
+        return None
+
+
+def write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data):
+    """Запись эвакуации в Google Sheets"""
+    try:
+        sheet_client = get_sheet_client()
+        now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Создаем или получаем лист "Эвакуация Транзит"
+        try:
+            report_sheet = sheet_client.worksheet("Эвакуация Транзит")
+        except:
+            report_sheet = sheet_client.add_worksheet("Эвакуация Транзит", 100, 20)
+            headers = ['Отметка времени', 'Мастер', 'ID заявки', 'Адрес даркстора', 'Номер даркстора',
+                      'ЗАБРАЛ - Серийный номер', 'ЗАБРАЛ - Гос номер', 'ЗАБРАЛ - Номер айот',
+                      'ОТДАЛ - Серийный номер', 'ОТДАЛ - Гос номер', 'ОТДАЛ - Номер айот', 'Тип']
+            for i, h in enumerate(headers, start=1):
+                report_sheet.update_cell(1, i, h)
+        
+        current_rows = report_sheet.get_all_values()
+        new_row_idx = len(current_rows) + 1
+        
+        updates = [
+            {'range': f'A{new_row_idx}', 'values': [[now]]},
+            {'range': f'B{new_row_idx}', 'values': [[master_name]]},
+            {'range': f'C{new_row_idx}', 'values': [[uid]]},
+            {'range': f'D{new_row_idx}', 'values': [[address]]},
+            {'range': f'E{new_row_idx}', 'values': [[darks_number]]},
+            {'range': f'F{new_row_idx}', 'values': [[old_data.get('serial', '')]]},
+            {'range': f'G{new_row_idx}', 'values': [[old_data.get('gos', '')]]},
+            {'range': f'H{new_row_idx}', 'values': [[old_data.get('iot', '')]]},
+            {'range': f'I{new_row_idx}', 'values': [[new_data.get('serial', '')]]},
+            {'range': f'J{new_row_idx}', 'values': [[new_data.get('gos', '')]]},
+            {'range': f'K{new_row_idx}', 'values': [[new_data.get('iot', '')]]},
+            {'range': f'L{new_row_idx}', 'values': [['Эвакуация']]}
+        ]
+        report_sheet.batch_update(updates)
+        logger.info(f"✅ Записана эвакуация для заявки {uid}")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка записи эвакуации: {e}")
+        return False
+
+
+@app.route('/master/evacuation/replace', methods=['POST'])
+@login_required
+def master_evacuation_replace():
+    """Эвакуация велосипеда (для всех мастеров)"""
+    try:
+        data = request.json
+        uid = data.get('uid')
+        master_name = data.get('master')
+        darks_number = data.get('darks_number')
+        address = data.get('address', '')
+        old_data = data.get('old_data', {})
+        new_data = data.get('new_data', {})
+        
+        # Проверка данных
+        if not uid or not master_name or not darks_number:
+            return jsonify({'success': False, 'error': 'Недостаточно данных'}), 400
+        
+        if not old_data.get('serial') or not old_data.get('gos') or not old_data.get('iot'):
+            return jsonify({'success': False, 'error': 'Заполните все поля СТАРОГО велосипеда'}), 400
+        
+        if not new_data.get('serial') or not new_data.get('gos') or not new_data.get('iot'):
+            return jsonify({'success': False, 'error': 'Заполните все поля НОВОГО велосипеда'}), 400
+        
+        # Записываем в "Эвакуация Транзит"
+        write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data)
+        
+        # Обновляем статус в админ-кэше и Google Sheets
+        update_ticket_in_admin_cache(uid, 'done', 'Заменен при эвакуации', '✅ Выполнено')
+        update_status_in_google_sheets(uid, '✅ Выполнено', 'Заменен при эвакуации')
+        
+        # Добавляем в очередь
+        add_to_queue({
+            'uid': uid,
+            'source': 'Заявки',
+            'type': 'evacuation_and_replace',
+            'data': {
+                'master': master_name,
+                'darks_number': darks_number,
+                'old_data': old_data,
+                'new_data': new_data
+            }
+        })
+        
+        # Удаляем из кэша мастера
+        cache_data = get_master_cache(master_name)
+        if cache_data:
+            tickets = cache_data.get('tickets', [])
+            tickets = [t for t in tickets if t.get('uid') != uid]
+            save_master_cache(master_name, tickets, '')
+        
+        return jsonify({'success': True, 'message': 'Эвакуация выполнена'})
+        
+    except Exception as e:
+        logger.error(f"Ошибка эвакуации: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/get_bike_data/<gos>')
+@login_required
+def api_get_bike_data(gos):
+    """Получение данных велосипеда из БД по госномеру"""
+    try:
+        bike_data = find_bike_in_database(gos)
+        if bike_data:
+            return jsonify({'success': True, 'data': bike_data})
+        return jsonify({'success': False, 'error': 'Велосипед не найден'})
+    except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 # ============================================================
 # ЗАПУСК

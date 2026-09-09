@@ -7,6 +7,140 @@
     <title>Даркстор #{{ darks_number }}</title>
     <link rel="manifest" href="/manifest.json">
     <link rel="stylesheet" href="/static/css/master.css">
+    <style>
+        /* Стили для формы эвакуации */
+        .evacuation-form {
+            background: #fff3e0;
+            border-radius: 16px;
+            padding: 20px;
+            margin: 16px 0;
+            border: 2px solid #f59e0b;
+        }
+        .evacuation-form .warning {
+            background: #fef3c7;
+            padding: 12px 16px;
+            border-radius: 8px;
+            color: #92400e;
+            font-weight: 600;
+            margin-bottom: 16px;
+            border-left: 4px solid #f59e0b;
+        }
+        .evacuation-form .field-group {
+            background: white;
+            border-radius: 10px;
+            padding: 12px 16px;
+            margin-bottom: 12px;
+        }
+        .evacuation-form .field-group .label {
+            font-weight: 600;
+            font-size: 13px;
+            color: #1e293b;
+            margin-bottom: 8px;
+        }
+        .evacuation-form .field-group .row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .evacuation-form .field-group .row label {
+            font-size: 12px;
+            color: #64748b;
+            min-width: 120px;
+        }
+        .evacuation-form .field-group .row input {
+            flex: 1;
+            padding: 6px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 13px;
+            background: #f8fafc;
+            min-width: 120px;
+            transition: 0.2s;
+        }
+        .evacuation-form .field-group .row input:focus {
+            border-color: #f59e0b;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1);
+        }
+        .evacuation-form .field-group .row input.readonly {
+            background: #f1f5f9;
+            color: #1e293b;
+        }
+        .evacuation-form .field-group .row input.valid {
+            border-color: #22c55e;
+            background: #f0fdf4;
+        }
+        .evacuation-form .field-group .btn-icon {
+            background: none;
+            border: none;
+            font-size: 18px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: 0.2s;
+        }
+        .evacuation-form .field-group .btn-icon:hover {
+            background: #f1f5f9;
+        }
+        .evacuation-form .field-group .btn-icon.check-valid {
+            color: #22c55e;
+        }
+        .evacuation-form .field-group .status-icon {
+            font-size: 18px;
+            min-width: 24px;
+        }
+        .evacuation-form .submit-btn {
+            background: #ea580c;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            width: 100%;
+            transition: 0.2s;
+        }
+        .evacuation-form .submit-btn:hover {
+            background: #c2410c;
+            transform: scale(0.98);
+        }
+        .evacuation-form .submit-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .evacuation-form .subtitle-form {
+            font-size: 14px;
+            font-weight: 700;
+            color: #78350f;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .evacuation-form .subtitle-form .badge {
+            background: #f59e0b;
+            color: white;
+            font-size: 10px;
+            padding: 2px 10px;
+            border-radius: 30px;
+        }
+        .evacuation-form .section-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: #1e293b;
+            margin: 12px 0 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .evacuation-form .section-title .line {
+            flex: 1;
+            height: 1px;
+            background: #e2e8f0;
+        }
+    </style>
 </head>
 <body>
     <div id="toast" class="toast">✅ Заявка закрыта</div>
@@ -30,6 +164,110 @@
     <div id="tickets-container">
         {% for t in tickets %}
         {% set is_battery = t.type in ['Аккумуляторная батарея', 'Зарядное устройство'] %}
+        {% set is_evacuation = t.status == 'todo' and t.note and 'ЭВАКУАЦИЯ:' in t.note %}
+        {% set is_transit = name == 'Сергей Транзит' %}
+        
+        <!-- Если заявка на эвакуацию ИЛИ мастер Сергей Транзит - показываем форму замены -->
+        {% if is_evacuation or is_transit %}
+        <div class="ticket evacuation-form" id="ticket-{{ t.uid }}">
+            <div class="ticket-header">
+                <span class="ticket-id">
+                    {% if is_transit %}
+                        🔄 ЗАМЕНА ВЕЛОСИПЕДА
+                    {% else %}
+                        🚚 ЭВАКУАЦИЯ ВЕЛОСИПЕДА
+                    {% endif %}
+                </span>
+                <span class="status-badge status-pending">
+                    {% if is_transit %}
+                        🔄 Замена
+                    {% else %}
+                        🔧 Эвакуация
+                    {% endif %}
+                </span>
+            </div>
+            
+            <div class="ticket-desc">{{ t.desc }}</div>
+            
+            {% if is_evacuation %}
+            <div class="warning">
+                ⚠️ Этот велосипед нужно эвакуировать и заменить!
+            </div>
+            {% endif %}
+            
+            <form id="evacuationForm_{{ t.uid }}" onsubmit="return submitEvacuation('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', '{{ t.gos }}')">
+                <input type="hidden" name="uid" value="{{ t.uid }}">
+                <input type="hidden" name="master" value="{{ name }}">
+                <input type="hidden" name="darks_number" value="{{ darks_number }}">
+                <input type="hidden" name="address" value="{{ address }}">
+                
+                <!-- СТАРЫЙ ВЕЛОСИПЕД (ЗАБРАТЬ) -->
+                <div class="section-title">
+                    📌 ЗАБРАТЬ (старый велосипед)
+                    <span class="line"></span>
+                </div>
+                
+                <div class="field-group" id="oldGroup_{{ t.uid }}">
+                    <div class="row">
+                        <label>Серийный номер:</label>
+                        <input type="text" class="old-serial" id="oldSerial_{{ t.uid }}" 
+                               value="{{ t.old_serial or '' }}" readonly>
+                        <button type="button" class="btn-icon" onclick="checkField('{{ t.uid }}', 'old-serial')" title="Проверить">✅</button>
+                        <button type="button" class="btn-icon" onclick="editField('{{ t.uid }}', 'old-serial')" title="Редактировать">✏️</button>
+                        <span class="status-icon" id="oldSerialStatus_{{ t.uid }}"></span>
+                    </div>
+                    <div class="row">
+                        <label>Гос номер:</label>
+                        <input type="text" class="old-gos" id="oldGos_{{ t.uid }}" 
+                               value="{{ t.old_gos or '' }}" readonly>
+                        <button type="button" class="btn-icon" onclick="checkField('{{ t.uid }}', 'old-gos')" title="Проверить">✅</button>
+                        <button type="button" class="btn-icon" onclick="editField('{{ t.uid }}', 'old-gos')" title="Редактировать">✏️</button>
+                        <span class="status-icon" id="oldGosStatus_{{ t.uid }}"></span>
+                    </div>
+                    <div class="row">
+                        <label>Номер айот:</label>
+                        <input type="text" class="old-iot" id="oldIot_{{ t.uid }}" 
+                               value="{{ t.old_iot or '' }}" readonly>
+                        <button type="button" class="btn-icon" onclick="checkField('{{ t.uid }}', 'old-iot')" title="Проверить">✅</button>
+                        <button type="button" class="btn-icon" onclick="editField('{{ t.uid }}', 'old-iot')" title="Редактировать">✏️</button>
+                        <span class="status-icon" id="oldIotStatus_{{ t.uid }}"></span>
+                    </div>
+                </div>
+                
+                <!-- НОВЫЙ ВЕЛОСИПЕД (ОТДАТЬ) -->
+                <div class="section-title">
+                    📌 ОТДАТЬ (новый велосипед)
+                    <span class="line"></span>
+                </div>
+                
+                <div class="field-group">
+                    <div class="row">
+                        <label>Серийный номер:</label>
+                        <input type="text" class="new-serial" id="newSerial_{{ t.uid }}" 
+                               placeholder="Введите серийный номер" required>
+                    </div>
+                    <div class="row">
+                        <label>Гос номер:</label>
+                        <input type="text" class="new-gos" id="newGos_{{ t.uid }}" 
+                               placeholder="Введите гос номер" required>
+                    </div>
+                    <div class="row">
+                        <label>Номер айот:</label>
+                        <input type="text" class="new-iot" id="newIot_{{ t.uid }}" 
+                               placeholder="Введите номер айот" required>
+                    </div>
+                </div>
+                
+                {% if is_transit %}
+                <button type="submit" class="submit-btn">📤 Отправить замену</button>
+                {% else %}
+                <button type="submit" class="submit-btn">🚚 Отправить эвакуацию</button>
+                {% endif %}
+            </form>
+        </div>
+        
+        <!-- Иначе показываем обычные кнопки мастера -->
+        {% else %}
         <div class="ticket {{ t.status }} {% if is_battery %}battery-ticket{% endif %}" id="ticket-{{ t.uid }}">
             <div class="ticket-header">
                 <span class="ticket-id">
@@ -88,11 +326,13 @@
                 {% endif %}
             </div>
         </div>
+        {% endif %}
         {% else %}
         <div class="no-tickets">Нет заявок</div>
         {% endfor %}
     </div>
 
+    <!-- Модалки -->
     <div class="modal" id="reasonModal">
         <div class="modal-content">
             <h3 id="modalTitle">❌ Укажите причину</h3>
