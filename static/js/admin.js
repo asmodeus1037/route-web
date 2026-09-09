@@ -194,6 +194,33 @@ function updateStatus(select) {
         }
     }
     
+    // Сначала обновляем в админ-кэше
+    var statusMap = {
+        '🟡 В работе': 'pending',
+        '✅ Выполнено': 'done',
+        '🔵 Доделать': 'todo',
+        '🔧 Эвакуация': 'evacuation'
+    };
+    var newStatus = statusMap[status] || 'pending';
+    
+    // Обновляем локальные данные
+    for (var dirName in directionsData) {
+        var dir = directionsData[dirName];
+        if (dir && dir.tickets) {
+            for (var i = 0; i < dir.tickets.length; i++) {
+                if (dir.tickets[i].uid === uid) {
+                    dir.tickets[i].status = newStatus;
+                    if (status === '🔧 Эвакуация' && note) {
+                        dir.tickets[i].note = 'ЭВАКУАЦИЯ: ' + note;
+                        dir.tickets[i].display_desc = note;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Отправляем на сервер
     fetch('/api/update_status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -204,30 +231,41 @@ function updateStatus(select) {
         if (data.success) {
             select.dataset.oldStatus = status;
             showToastModern('✅ Статус обновлён на ' + status, 'success');
+            renderCurrentTab();
+        } else {
+            showToastModern('❌ Ошибка: ' + data.error, 'error');
+            select.value = oldStatus;
+            // Откатываем локальные данные
             for (var dirName in directionsData) {
                 var dir = directionsData[dirName];
                 if (dir && dir.tickets) {
                     for (var i = 0; i < dir.tickets.length; i++) {
                         if (dir.tickets[i].uid === uid) {
-                            dir.tickets[i].status = status;
-                            if (status === '🔧 Эвакуация' && note) {
-                                dir.tickets[i].note = 'ЭВАКУАЦИЯ: ' + note;
-                                dir.tickets[i].display_desc = note;
-                            }
+                            dir.tickets[i].status = oldStatus;
                             break;
                         }
                     }
                 }
             }
             renderCurrentTab();
-        } else {
-            showToastModern('❌ Ошибка: ' + data.error, 'error');
-            select.value = oldStatus;
         }
     })
     .catch(function() {
         showToastModern('❌ Ошибка сети', 'error');
         select.value = oldStatus;
+        // Откатываем локальные данные
+        for (var dirName in directionsData) {
+            var dir = directionsData[dirName];
+            if (dir && dir.tickets) {
+                for (var i = 0; i < dir.tickets.length; i++) {
+                    if (dir.tickets[i].uid === uid) {
+                        dir.tickets[i].status = oldStatus;
+                        break;
+                    }
+                }
+            }
+        }
+        renderCurrentTab();
     });
 }
 
@@ -317,7 +355,6 @@ function submitAction() {
 // МАССОВОЕ ИЗМЕНЕНИЕ СТАТУСОВ
 // ============================================================
 
-// Включение/выключение режима массового выделения
 function toggleBulkMode() {
     bulkModeActive = !bulkModeActive;
     var btn = document.getElementById('bulkModeBtn');
@@ -339,12 +376,10 @@ function toggleBulkMode() {
     }
 }
 
-// Включение режима массового выделения
 function enableBulkMode() {
     var rows = document.querySelectorAll('.ticket-row');
     rows.forEach(function(row) {
         row.classList.add('bulk-mode');
-        // Добавляем чекбокс, если его нет
         if (!row.querySelector('.select-checkbox')) {
             var checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
@@ -363,7 +398,6 @@ function enableBulkMode() {
                 handleTicketSelect(this, uid, row);
             });
         }
-        // Добавляем обработчик клика по строке
         row.addEventListener('click', function(e) {
             if (e.target.closest('button') || e.target.closest('select') || 
                 e.target.closest('a') || e.target.closest('.status-select') ||
@@ -381,14 +415,12 @@ function enableBulkMode() {
     updateBulkUI();
 }
 
-// Выключение режима массового выделения
 function disableBulkMode() {
     var rows = document.querySelectorAll('.ticket-row');
     rows.forEach(function(row) {
         row.classList.remove('bulk-mode');
         var checkbox = row.querySelector('.select-checkbox');
         if (checkbox) checkbox.remove();
-        // Убираем обработчики (клонируем для удаления)
         var newRow = row.cloneNode(true);
         row.parentNode.replaceChild(newRow, row);
     });
@@ -396,7 +428,6 @@ function disableBulkMode() {
     updateBulkUI();
 }
 
-// Обработка выбора заявки
 function handleTicketSelect(checkbox, uid, row) {
     if (checkbox.checked) {
         selectedRequests.add(uid);
@@ -408,7 +439,6 @@ function handleTicketSelect(checkbox, uid, row) {
     updateBulkUI();
 }
 
-// Обновление UI массового выделения
 function updateBulkUI() {
     var count = selectedRequests.size;
     var countEl = document.getElementById('selectedCount');
@@ -418,7 +448,6 @@ function updateBulkUI() {
     if (applyBtn) applyBtn.disabled = count === 0;
 }
 
-// Применение массового статуса
 async function applyBulkStatus() {
     var statusSelect = document.getElementById('bulkStatusSelect');
     var status = statusSelect.value;
@@ -476,7 +505,6 @@ async function applyBulkStatus() {
     }
 }
 
-// Очистка выделения
 function clearBulkSelection() {
     document.querySelectorAll('.select-checkbox:checked').forEach(function(cb) {
         cb.checked = false;
@@ -826,19 +854,34 @@ function renderTicketsGrouped(tickets, containerId) {
     for (var i = 0; i < allTickets.length; i++) {
         if (!allTickets[i].is_done) active.push(allTickets[i]);
     }
-    var pending = [];
-    var todo = [];
-    var unassigned = [];
+    
+    // Считаем статусы
+    var pending = 0;
+    var evacuation = 0;
+    var todo = 0;
+    var unassigned = 0;
+    
     for (var i = 0; i < active.length; i++) {
         var t = active[i];
-        if (t.status !== 'todo') pending.push(t);
-        else todo.push(t);
-        if (!t.master) unassigned.push(t);
+        // Проверяем на эвакуацию
+        if (t.status === 'todo' && t.note && t.note.indexOf('ЭВАКУАЦИЯ:') !== -1) {
+            evacuation++;
+        } else if (t.status === 'pending') {
+            pending++;
+        } else if (t.status === 'todo') {
+            todo++;
+        } else if (t.status === 'fail') {
+            todo++;
+        }
+        if (!t.master) unassigned++;
     }
+    
+    // Обновляем статистику
     document.getElementById('totalCount').textContent = active.length;
-    document.getElementById('pendingCount').textContent = pending.length;
-    document.getElementById('todoCount').textContent = todo.length;
-    document.getElementById('unassignedCount').textContent = unassigned.length;
+    document.getElementById('pendingCount').textContent = pending;
+    document.getElementById('evacuationCount').textContent = evacuation;
+    document.getElementById('todoCount').textContent = todo;
+    document.getElementById('unassignedCount').textContent = unassigned;
     
     if (tickets.length === 0) { 
         container.innerHTML = '<div class="empty-state">📭 Нет активных заявок</div>'; 
@@ -874,21 +917,30 @@ function renderTicketsGrouped(tickets, containerId) {
         for (var j = 0; j < group.tickets.length; j++) {
             var t = group.tickets[j];
             
+            // Определяем статус для отображения
             var statusDisplay = t.status;
-            if (statusDisplay === 'pending') statusDisplay = '🟡 В работе';
-            else if (statusDisplay === 'done') statusDisplay = '✅ Выполнено';
-            else if (statusDisplay === 'todo') statusDisplay = '🔵 Доделать';
-            else if (statusDisplay === 'fail') statusDisplay = '🔵 Доделать';
-            else if (statusDisplay === 'evacuation') statusDisplay = '🔧 Эвакуация';
+            var isEvacuation = false;
+            
+            if (t.status === 'todo' && t.note && t.note.indexOf('ЭВАКУАЦИЯ:') !== -1) {
+                isEvacuation = true;
+                statusDisplay = '🔧 Эвакуация';
+            } else if (t.status === 'pending') {
+                statusDisplay = '🟡 В работе';
+            } else if (t.status === 'done') {
+                statusDisplay = '✅ Выполнено';
+            } else if (t.status === 'todo') {
+                statusDisplay = '🔵 Доделать';
+            } else if (t.status === 'fail') {
+                statusDisplay = '🔵 Доделать';
+            } else if (t.status === 'evacuation') {
+                statusDisplay = '🔧 Эвакуация';
+            }
             
             var hoursDisplay = t.hours_since !== undefined ? t.hours_since.toFixed(1) : '0';
             var uidKey = t.uid + '|' + t.source;
             var currentMaster = pendingChanges[uidKey] !== undefined ? pendingChanges[uidKey] : (t.master || '');
             var typeDisplay = t.bike_type || t.type || 'Не указан';
-            var isEvacuation = false;
-            if (t.status === 'todo' && t.note && t.note.indexOf('ЭВАКУАЦИЯ:') !== -1) {
-                isEvacuation = true;
-            }
+            
             var hoursClass = '';
             if (t.hours_since > 48) hoursClass = 'overdue';
             else if (t.hours_since >= 32) hoursClass = 'warning';
@@ -927,7 +979,6 @@ function renderTicketsGrouped(tickets, containerId) {
     container.innerHTML = html;
     updateChangesInfo();
     
-    // Если режим массового выделения активен - включаем его снова
     if (bulkModeActive) {
         enableBulkMode();
     }

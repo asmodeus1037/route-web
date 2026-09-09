@@ -19,7 +19,6 @@
         <button class="btn btn-view" onclick="showRoutes()">🗺️ Просмотр маршрутов</button>
         <button class="btn btn-send" onclick="openSendModal()">📤 Обновить кэш мастера</button>
         <button class="btn btn-clear-master" onclick="openClearMasterModal()">🧹 Снять заявки</button>
-        <button class="btn btn-danger" onclick="clearAllDates()">🗑️ Очистить мастеров</button>
         <button class="btn btn-notify" onclick="openNotifyModal()">📢 Уведомить кураторов</button>
         <button class="btn btn-primary" onclick="syncAll()">🔄 Синхронизировать</button>
         <button class="btn btn-bulk" id="bulkModeBtn" onclick="toggleBulkMode()">📋 Массовое изменение статуса</button>
@@ -74,7 +73,8 @@
     <div class="stats">
         <div class="stat-card"><div class="num" id="totalCount">0</div><div class="label">Всего</div></div>
         <div class="stat-card"><div class="num" id="pendingCount">0</div><div class="label">🟡 В работе</div></div>
-        <div class="stat-card"><div class="num" id="todoCount">0</div><div class="label">🔧 Доделать</div></div>
+        <div class="stat-card"><div class="num" id="evacuationCount">0</div><div class="label">🔧 Эвакуация</div></div>
+        <div class="stat-card"><div class="num" id="todoCount">0</div><div class="label">🔵 Доделать</div></div>
         <div class="stat-card"><div class="num" id="unassignedCount">0</div><div class="label">Не назначены</div></div>
     </div>
     

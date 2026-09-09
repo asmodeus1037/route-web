@@ -8,7 +8,6 @@
     <link rel="manifest" href="/manifest.json">
     <link rel="stylesheet" href="/static/css/master.css">
     <style>
-        /* Стили для формы эвакуации */
         .evacuation-form {
             background: #fff3e0;
             border-radius: 16px;
@@ -25,17 +24,20 @@
             margin-bottom: 16px;
             border-left: 4px solid #f59e0b;
         }
+        .evacuation-form .warning-transit {
+            background: #dbeafe;
+            padding: 12px 16px;
+            border-radius: 8px;
+            color: #1e40af;
+            font-weight: 600;
+            margin-bottom: 16px;
+            border-left: 4px solid #3b82f6;
+        }
         .evacuation-form .field-group {
             background: white;
             border-radius: 10px;
             padding: 12px 16px;
             margin-bottom: 12px;
-        }
-        .evacuation-form .field-group .label {
-            font-weight: 600;
-            font-size: 13px;
-            color: #1e293b;
-            margin-bottom: 8px;
         }
         .evacuation-form .field-group .row {
             display: flex;
@@ -87,9 +89,6 @@
         .evacuation-form .field-group .btn-icon:hover {
             background: #f1f5f9;
         }
-        .evacuation-form .field-group .btn-icon.check-valid {
-            color: #22c55e;
-        }
         .evacuation-form .field-group .status-icon {
             font-size: 18px;
             min-width: 24px;
@@ -113,22 +112,6 @@
         .evacuation-form .submit-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
-        }
-        .evacuation-form .subtitle-form {
-            font-size: 14px;
-            font-weight: 700;
-            color: #78350f;
-            margin-bottom: 4px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .evacuation-form .subtitle-form .badge {
-            background: #f59e0b;
-            color: white;
-            font-size: 10px;
-            padding: 2px 10px;
-            border-radius: 30px;
         }
         .evacuation-form .section-title {
             font-size: 14px;
@@ -207,7 +190,6 @@
             
             <div class="ticket-desc">{{ t.desc }}</div>
             
-            <!-- Показываем госномер -->
             <div class="gos-display">
                 <span class="label">🚲 Велосипед:</span> {{ t.gos or 'Гос номер не указан' }}
             </div>
@@ -215,6 +197,13 @@
             {% if is_evacuation %}
             <div class="warning">
                 ⚠️ Этот велосипед нужно эвакуировать и заменить!
+            </div>
+            {% endif %}
+            
+            {% if is_transit and t.duplicate_count and t.duplicate_count > 1 %}
+            <div class="warning-transit">
+                🔄 У этого велосипеда <strong>{{ t.duplicate_count }}</strong> заявок.
+                При закрытии все они будут закрыты одновременно!
             </div>
             {% endif %}
             
@@ -400,24 +389,20 @@
     
     <script src="/static/js/master.js"></script>
     <script>
-        // ============================================================
-        // АВТОМАТИЧЕСКАЯ ЗАГРУЗКА ДАННЫХ ВЕЛОСИПЕДА
-        // ============================================================
+        // Автоматическая загрузка данных велосипеда
         document.addEventListener('DOMContentLoaded', function() {
-            // Находим все формы эвакуации
             var forms = document.querySelectorAll('.evacuation-form');
             forms.forEach(function(form) {
                 var uid = form.dataset.uid;
                 var gos = form.dataset.gos;
+                var darks = '{{ darks_number }}';
                 
                 if (gos && gos.trim()) {
-                    // Загружаем данные велосипеда
-                    fetch('/api/get_bike_data/' + encodeURIComponent(gos))
+                    fetch('/api/get_bike_data?gos=' + encodeURIComponent(gos) + '&darks=' + encodeURIComponent(darks))
                         .then(function(response) { return response.json(); })
                         .then(function(data) {
                             if (data.success && data.data) {
                                 var bike = data.data;
-                                // Заполняем поля
                                 var serialInput = document.getElementById('oldSerial_' + uid);
                                 var gosInput = document.getElementById('oldGos_' + uid);
                                 var iotInput = document.getElementById('oldIot_' + uid);
@@ -426,7 +411,7 @@
                                 if (gosInput) gosInput.value = bike.gos || gos;
                                 if (iotInput) iotInput.value = bike.iot || '';
                                 
-                                // Автоматически проверяем поля
+                                // Автопроверка
                                 if (serialInput && serialInput.value) {
                                     serialInput.classList.add('valid');
                                     var statusIcon = document.getElementById('oldSerialStatus_' + uid);
@@ -451,8 +436,6 @@
                                         statusIcon.style.color = '#22c55e';
                                     }
                                 }
-                            } else {
-                                console.log('Велосипед с госномером ' + gos + ' не найден в БД');
                             }
                         })
                         .catch(function(error) {

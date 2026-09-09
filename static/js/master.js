@@ -63,7 +63,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // ============================================================
-// ЭВАКУАЦИЯ ВЕЛОСИПЕДА
+// ФУНКЦИИ ДЛЯ ЭВАКУАЦИИ (ДЛЯ ВСЕХ МАСТЕРОВ)
 // ============================================================
 
 // Редактирование поля
@@ -99,7 +99,7 @@ function checkField(uid, className) {
     }
 }
 
-// Отправка эвакуации
+// Отправка эвакуации (для всех мастеров)
 function submitEvacuation(name, darksNumber, uid, gos) {
     // Проверяем поля старого велосипеда
     var oldSerial = document.getElementById('oldSerial_' + uid);
@@ -178,6 +178,36 @@ function submitEvacuation(name, darksNumber, uid, gos) {
         showToast('❌ Ошибка соединения', true);
     });
     
+    return false;
+}
+
+// ============================================================
+// ФУНКЦИИ ДЛЯ ТРАНЗИТА (ЗАКРЫВАЕТ ВСЕ ЗАЯВКИ С ОДНИМ ГОСНОМЕРОМ)
+// ============================================================
+
+function transitCloseTicket(form, action) {
+    var parts = form.querySelector('input[name="parts"]');
+    if (!parts.value.trim()) {
+        alert('Укажите запчасти!');
+        return false;
+    }
+    
+    var uid = form.action.split('/').pop();
+    
+    if (!confirm('Закрыть ВСЕ заявки на этот велосипед?')) {
+        return false;
+    }
+    
+    var card = document.getElementById('ticket-' + uid);
+    if (card) {
+        card.style.transition = 'opacity 0.3s';
+        card.style.opacity = '0';
+        setTimeout(function() { card.remove(); }, 300);
+    }
+    
+    showToast('✅ Все заявки на велосипед закрыты');
+    var formData = new FormData(form);
+    fetch(form.action, { method: 'POST', body: formData });
     return false;
 }
 
@@ -340,76 +370,4 @@ function openModal(name, darks, uid, type, title) {
     
     form.action = '/master/' + name + '/darks/' + darks + '/' + type + '/' + uid;
     modal.classList.add('active');
-}
-
-// ============================================================
-// ФУНКЦИИ ДЛЯ ТРАНЗИТА
-// ============================================================
-
-function editFieldOld(btn, className) {
-    var input = btn.closest('.field-group').querySelector('.' + className);
-    input.readOnly = false;
-    input.focus();
-    btn.textContent = '💾';
-    btn.onclick = function() {
-        input.readOnly = true;
-        this.textContent = '✏️';
-        this.onclick = function() { editFieldOld(this, className); };
-    };
-}
-
-function checkFieldOld(btn, className) {
-    var input = btn.closest('.field-group').querySelector('.' + className);
-    var statusIcon = btn.closest('.field-group').querySelector('.status-icon');
-    if (input.value.trim()) {
-        statusIcon.textContent = '✅';
-        statusIcon.style.color = '#22c55e';
-        showToast('✅ Поле заполнено', false);
-    } else {
-        alert('Поле пустое! Сначала заполните данные.');
-    }
-}
-
-function submitTransitReplace(btn) {
-    var form = btn.closest('.transit-form');
-    var uid = form.dataset.uid;
-    var oldSerial = form.querySelector('.old-serial').value;
-    var oldGos = form.querySelector('.old-gos').value;
-    var oldIot = form.querySelector('.old-iot').value;
-    var newSerial = form.querySelector('.new-serial').value;
-    var newGos = form.querySelector('.new-gos').value;
-    var newIot = form.querySelector('.new-iot').value;
-    
-    if (!oldSerial || !oldGos || !oldIot) {
-        alert('Проверьте все поля старого велосипеда!');
-        return;
-    }
-    if (!newSerial || !newGos || !newIot) {
-        alert('Заполните все поля нового велосипеда!');
-        return;
-    }
-    if (!confirm('Отправить замену велосипеда?')) return;
-    
-    var card = document.getElementById('ticket-' + uid);
-    if (card) {
-        card.style.transition = 'opacity 0.3s';
-        card.style.opacity = '0';
-        setTimeout(function() { card.remove(); }, 300);
-    }
-    
-    var data = {
-        uid: uid,
-        master: form.dataset.master || '',
-        darks_number: form.dataset.darks || '',
-        address: form.dataset.address || '',
-        old_data: { serial: oldSerial, gos: oldGos, iot: oldIot },
-        new_data: { serial: newSerial, gos: newGos, iot: newIot }
-    };
-    
-    fetch('/master/transit/replace', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-    });
-    showToast('🚲 Замена велосипеда отправлена');
 }

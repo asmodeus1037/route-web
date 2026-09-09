@@ -1425,11 +1425,10 @@ def api_bulk_update_status():
 
 
 # ============================================================
-# ЭВАКУАЦИЯ ВЕЛОСИПЕДА
+# ПОИСК ВЕЛОСИПЕДА В БАЗЕ ДАННЫХ
 # ============================================================
-
-def find_bike_in_database(gos_number):
-    """Поиск велосипеда в листе 'База данных вело' по госномеру"""
+def find_bike_in_database(gos_number, darks_number):
+    """Поиск велосипеда по госномеру и даркстору"""
     try:
         sheet_client = get_sheet_client()
         worksheet = sheet_client.worksheet("База данных вело")
@@ -1438,38 +1437,61 @@ def find_bike_in_database(gos_number):
         if len(rows) <= 1:
             return None
         
-        # Ищем по полному госномеру или по цифрам
-        gos_clean = re.sub(r'[^0-9]', '', gos_number) if gos_number else ''
+        # Очищаем госномер от лишних символов
+        gos_clean = re.sub(r'[^0-9A-Za-zА-Яа-я]', '', gos_number).upper() if gos_number else ''
         
         for row in rows[1:]:
             if len(row) >= 7:
                 gos = row[1].strip() if len(row) > 1 else ''
-                gos_digits = re.sub(r'[^0-9]', '', gos)
+                darks = row[4].strip() if len(row) > 4 else ''
+                gos_digits = re.sub(r'[^0-9A-Za-zА-Яа-я]', '', gos).upper()
                 
-                # Сравниваем
-                if gos == gos_number or (gos_clean and gos_digits == gos_clean):
-                    return {
-                        'serial': row[0].strip() if len(row) > 0 else '',
-                        'gos': gos,
-                        'iot': row[2].strip() if len(row) > 2 else '',
-                        'address': row[3].strip() if len(row) > 3 else '',
-                        'darks': row[4].strip() if len(row) > 4 else '',
-                        'bike_type': row[5].strip() if len(row) > 5 else '',
-                        'direction': row[6].strip() if len(row) > 6 else ''
-                    }
+                # Сравниваем по госномеру И даркстору
+                if gos and darks:
+                    if (gos == gos_number or (gos_clean and gos_digits == gos_clean)) and darks == darks_number:
+                        return {
+                            'serial': row[0].strip() if len(row) > 0 else '',
+                            'gos': gos,
+                            'iot': row[2].strip() if len(row) > 2 else '',
+                            'address': row[3].strip() if len(row) > 3 else '',
+                            'darks': darks,
+                            'bike_type': row[5].strip() if len(row) > 5 else '',
+                            'direction': row[6].strip() if len(row) > 6 else ''
+                        }
         return None
     except Exception as e:
         logger.error(f"Ошибка поиска велосипеда в БД: {e}")
         return None
 
 
+@app.route('/api/get_bike_data')
+@login_required
+def api_get_bike_data():
+    """Получение данных велосипеда из БД по госномеру и даркстору"""
+    try:
+        gos = request.args.get('gos', '')
+        darks = request.args.get('darks', '')
+        
+        if not gos:
+            return jsonify({'success': False, 'error': 'Не указан госномер'})
+        
+        bike_data = find_bike_in_database(gos, darks)
+        if bike_data:
+            return jsonify({'success': True, 'data': bike_data})
+        return jsonify({'success': False, 'error': 'Велосипед не найден'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================
+# ЗАПИСЬ ЭВАКУАЦИИ
+# ============================================================
 def write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data):
     """Запись эвакуации в Google Sheets"""
     try:
         sheet_client = get_sheet_client()
         now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
         
-        # Создаем или получаем лист "Эвакуация Транзит"
         try:
             report_sheet = sheet_client.worksheet("Эвакуация Транзит")
         except:
@@ -1518,7 +1540,6 @@ def master_evacuation_replace():
         old_data = data.get('old_data', {})
         new_data = data.get('new_data', {})
         
-        # Проверка данных
         if not uid or not master_name or not darks_number:
             return jsonify({'success': False, 'error': 'Недостаточно данных'}), 400
         
@@ -1528,14 +1549,11 @@ def master_evacuation_replace():
         if not new_data.get('serial') or not new_data.get('gos') or not new_data.get('iot'):
             return jsonify({'success': False, 'error': 'Заполните все поля НОВОГО велосипеда'}), 400
         
-        # Записываем в "Эвакуация Транзит"
         write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data)
         
-        # Обновляем статус в админ-кэше и Google Sheets
         update_ticket_in_admin_cache(uid, 'done', 'Заменен при эвакуации', '✅ Выполнено')
         update_status_in_google_sheets(uid, '✅ Выполнено', 'Заменен при эвакуации')
         
-        # Добавляем в очередь
         add_to_queue({
             'uid': uid,
             'source': 'Заявки',
@@ -1548,7 +1566,6 @@ def master_evacuation_replace():
             }
         })
         
-        # Удаляем из кэша мастера
         cache_data = get_master_cache(master_name)
         if cache_data:
             tickets = cache_data.get('tickets', [])
@@ -1562,16 +1579,105 @@ def master_evacuation_replace():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@app.route('/api/get_bike_data/<gos>')
-@login_required
-def api_get_bike_data(gos):
-    """Получение данных велосипеда из БД по госномеру"""
+# ============================================================
+# ФУНКЦИИ ДЛЯ ТРАНЗИТА (ОБЪЕДИНЕНИЕ ЗАЯВОК)
+# ============================================================
+
+def get_transit_tickets_by_gos(master_name, gos_number):
+    """Получает все активные заявки Транзита по госномеру"""
     try:
-        bike_data = find_bike_in_database(gos)
-        if bike_data:
-            return jsonify({'success': True, 'data': bike_data})
-        return jsonify({'success': False, 'error': 'Велосипед не найден'})
+        tickets = get_tickets_from_sheets()
+        result = []
+        for t in tickets:
+            if (t.get('master') == master_name and 
+                t.get('gos') == gos_number and 
+                is_active_status(t.get('status'))):
+                result.append(t)
+        return result
     except Exception as e:
+        logger.error(f"Ошибка получения заявок Транзита: {e}")
+        return []
+
+
+def close_all_transit_tickets(uid, master_name, gos_number, parts=''):
+    """Закрывает ВСЕ заявки Транзита по госномеру"""
+    try:
+        tickets = get_transit_tickets_by_gos(master_name, gos_number)
+        
+        if not tickets:
+            return 0
+        
+        closed_count = 0
+        
+        for t in tickets:
+            ticket_uid = t.get('uid')
+            if not ticket_uid:
+                continue
+            
+            update_ticket_in_admin_cache(ticket_uid, 'done', parts or 'Заменено Транзитом', '✅ Выполнено')
+            update_status_in_google_sheets(ticket_uid, '✅ Выполнено', parts or 'Заменено Транзитом')
+            
+            add_to_queue({
+                'uid': ticket_uid,
+                'source': 'Заявки',
+                'type': 'transit_bulk_close',
+                'data': {
+                    'master': master_name,
+                    'gos': gos_number,
+                    'parts': parts,
+                    'closed_with': uid
+                }
+            })
+            closed_count += 1
+        
+        refresh_master_cache(master_name)
+        return closed_count
+        
+    except Exception as e:
+        logger.error(f"Ошибка закрытия заявок Транзита: {e}")
+        return 0
+
+
+@app.route('/master/transit/done/<uid>', methods=['POST'])
+@login_required
+def transit_done(uid):
+    """Закрытие заявки Транзитом - закрывает ВСЕ заявки с этим госномером"""
+    try:
+        master_name = session.get('master_name')
+        if master_name != 'Сергей Транзит':
+            return jsonify({'success': False, 'error': 'Только для Сергея Транзита'}), 403
+        
+        parts = request.form.get('parts', '')
+        if not parts.strip():
+            return jsonify({'success': False, 'error': 'Укажите запчасти'}), 400
+        
+        tickets = get_tickets_from_sheets()
+        target_ticket = None
+        for t in tickets:
+            if t.get('uid') == uid:
+                target_ticket = t
+                break
+        
+        if not target_ticket:
+            return jsonify({'success': False, 'error': 'Заявка не найдена'}), 404
+        
+        gos_number = target_ticket.get('gos')
+        if not gos_number:
+            return jsonify({'success': False, 'error': 'У заявки нет госномера'}), 400
+        
+        closed_count = close_all_transit_tickets(uid, master_name, gos_number, parts)
+        
+        if closed_count == 0:
+            return jsonify({'success': False, 'error': 'Не найдено заявок для закрытия'}), 404
+        
+        return jsonify({
+            'success': True, 
+            'message': f'Закрыто {closed_count} заявок на велосипед {gos_number}',
+            'closed_count': closed_count
+        })
+        
+    except Exception as e:
+        logger.error(f"Ошибка закрытия заявок Транзита: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 # ============================================================
 # ЗАПУСК
