@@ -42,6 +42,10 @@
             align-items: center;
             gap: 8px;
             flex-wrap: wrap;
+            margin-bottom: 6px;
+        }
+        .evacuation-form .field-group .row:last-child {
+            margin-bottom: 0;
         }
         .evacuation-form .field-group .row label {
             font-size: 12px;
@@ -140,6 +144,20 @@
             height: 1px;
             background: #e2e8f0;
         }
+        .evacuation-form .gos-display {
+            background: #f1f5f9;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 14px;
+            color: #1e293b;
+            margin-bottom: 12px;
+            display: inline-block;
+        }
+        .evacuation-form .gos-display .label {
+            color: #64748b;
+            font-weight: 400;
+        }
     </style>
 </head>
 <body>
@@ -169,7 +187,7 @@
         
         <!-- Если заявка на эвакуацию ИЛИ мастер Сергей Транзит - показываем форму замены -->
         {% if is_evacuation or is_transit %}
-        <div class="ticket evacuation-form" id="ticket-{{ t.uid }}">
+        <div class="ticket evacuation-form" id="ticket-{{ t.uid }}" data-uid="{{ t.uid }}" data-gos="{{ t.gos }}">
             <div class="ticket-header">
                 <span class="ticket-id">
                     {% if is_transit %}
@@ -189,6 +207,11 @@
             
             <div class="ticket-desc">{{ t.desc }}</div>
             
+            <!-- Показываем госномер -->
+            <div class="gos-display">
+                <span class="label">🚲 Велосипед:</span> {{ t.gos or 'Гос номер не указан' }}
+            </div>
+            
             {% if is_evacuation %}
             <div class="warning">
                 ⚠️ Этот велосипед нужно эвакуировать и заменить!
@@ -200,6 +223,7 @@
                 <input type="hidden" name="master" value="{{ name }}">
                 <input type="hidden" name="darks_number" value="{{ darks_number }}">
                 <input type="hidden" name="address" value="{{ address }}">
+                <input type="hidden" name="gos" value="{{ t.gos }}">
                 
                 <!-- СТАРЫЙ ВЕЛОСИПЕД (ЗАБРАТЬ) -->
                 <div class="section-title">
@@ -211,7 +235,7 @@
                     <div class="row">
                         <label>Серийный номер:</label>
                         <input type="text" class="old-serial" id="oldSerial_{{ t.uid }}" 
-                               value="{{ t.old_serial or '' }}" readonly>
+                               value="{{ t.old_serial or '' }}" readonly placeholder="Загружается...">
                         <button type="button" class="btn-icon" onclick="checkField('{{ t.uid }}', 'old-serial')" title="Проверить">✅</button>
                         <button type="button" class="btn-icon" onclick="editField('{{ t.uid }}', 'old-serial')" title="Редактировать">✏️</button>
                         <span class="status-icon" id="oldSerialStatus_{{ t.uid }}"></span>
@@ -219,7 +243,7 @@
                     <div class="row">
                         <label>Гос номер:</label>
                         <input type="text" class="old-gos" id="oldGos_{{ t.uid }}" 
-                               value="{{ t.old_gos or '' }}" readonly>
+                               value="{{ t.old_gos or '' }}" readonly placeholder="Загружается...">
                         <button type="button" class="btn-icon" onclick="checkField('{{ t.uid }}', 'old-gos')" title="Проверить">✅</button>
                         <button type="button" class="btn-icon" onclick="editField('{{ t.uid }}', 'old-gos')" title="Редактировать">✏️</button>
                         <span class="status-icon" id="oldGosStatus_{{ t.uid }}"></span>
@@ -227,7 +251,7 @@
                     <div class="row">
                         <label>Номер айот:</label>
                         <input type="text" class="old-iot" id="oldIot_{{ t.uid }}" 
-                               value="{{ t.old_iot or '' }}" readonly>
+                               value="{{ t.old_iot or '' }}" readonly placeholder="Загружается...">
                         <button type="button" class="btn-icon" onclick="checkField('{{ t.uid }}', 'old-iot')" title="Проверить">✅</button>
                         <button type="button" class="btn-icon" onclick="editField('{{ t.uid }}', 'old-iot')" title="Редактировать">✏️</button>
                         <span class="status-icon" id="oldIotStatus_{{ t.uid }}"></span>
@@ -375,5 +399,68 @@
     <div class="footer">Обновлено: {{ now }}</div>
     
     <script src="/static/js/master.js"></script>
+    <script>
+        // ============================================================
+        // АВТОМАТИЧЕСКАЯ ЗАГРУЗКА ДАННЫХ ВЕЛОСИПЕДА
+        // ============================================================
+        document.addEventListener('DOMContentLoaded', function() {
+            // Находим все формы эвакуации
+            var forms = document.querySelectorAll('.evacuation-form');
+            forms.forEach(function(form) {
+                var uid = form.dataset.uid;
+                var gos = form.dataset.gos;
+                
+                if (gos && gos.trim()) {
+                    // Загружаем данные велосипеда
+                    fetch('/api/get_bike_data/' + encodeURIComponent(gos))
+                        .then(function(response) { return response.json(); })
+                        .then(function(data) {
+                            if (data.success && data.data) {
+                                var bike = data.data;
+                                // Заполняем поля
+                                var serialInput = document.getElementById('oldSerial_' + uid);
+                                var gosInput = document.getElementById('oldGos_' + uid);
+                                var iotInput = document.getElementById('oldIot_' + uid);
+                                
+                                if (serialInput) serialInput.value = bike.serial || '';
+                                if (gosInput) gosInput.value = bike.gos || gos;
+                                if (iotInput) iotInput.value = bike.iot || '';
+                                
+                                // Автоматически проверяем поля
+                                if (serialInput && serialInput.value) {
+                                    serialInput.classList.add('valid');
+                                    var statusIcon = document.getElementById('oldSerialStatus_' + uid);
+                                    if (statusIcon) {
+                                        statusIcon.textContent = '✅';
+                                        statusIcon.style.color = '#22c55e';
+                                    }
+                                }
+                                if (gosInput && gosInput.value) {
+                                    gosInput.classList.add('valid');
+                                    var statusIcon = document.getElementById('oldGosStatus_' + uid);
+                                    if (statusIcon) {
+                                        statusIcon.textContent = '✅';
+                                        statusIcon.style.color = '#22c55e';
+                                    }
+                                }
+                                if (iotInput && iotInput.value) {
+                                    iotInput.classList.add('valid');
+                                    var statusIcon = document.getElementById('oldIotStatus_' + uid);
+                                    if (statusIcon) {
+                                        statusIcon.textContent = '✅';
+                                        statusIcon.style.color = '#22c55e';
+                                    }
+                                }
+                            } else {
+                                console.log('Велосипед с госномером ' + gos + ' не найден в БД');
+                            }
+                        })
+                        .catch(function(error) {
+                            console.error('Ошибка загрузки данных:', error);
+                        });
+                }
+            });
+        });
+    </script>
 </body>
 </html>
