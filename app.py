@@ -24,7 +24,7 @@ app.secret_key = secrets.token_hex(16)
 CREDENTIALS_FILE = "/data/credentials.json"
 SHEET_NAME = "Система ремонта ВВ"
 START_COORDS = "55.775267, 37.745690"
-MASTERS = ['Антон', 'Сергей', 'Руслан', 'Сергей Транзит', 'Алексей']  # Транзит → Сергей Транзит
+MASTERS = ['Антон', 'Сергей', 'Руслан', 'Сергей Транзит', 'Алексей']
 CACHE_TTL = 300
 CACHE_DIR = "/data/cache"
 BOT_API_URL = "https://route-bot-dzufear.waw0.amvera.tech"
@@ -42,7 +42,7 @@ MASTER_CREDENTIALS = {
     'ruslan': {'password': 'ruslan1985', 'name': 'Руслан', 'role': 'master'},
     'transit': {'password': 'transit2024', 'name': 'Сергей Транзит', 'role': 'master'},
     'alexey': {'password': 'alexey0304', 'name': 'Алексей', 'role': 'master'},
-    'iot': {'password': 'iot2026', 'name': 'IOT', 'role': 'iot'}  # Новая учётка IOT
+    'iot': {'password': 'iot2026', 'name': 'IOT', 'role': 'iot'}
 }
 
 # ============================================================
@@ -452,34 +452,30 @@ def batch_update_masters(changes):
         logger.error(f"Ошибка batch_update_masters: {e}")
         return 0
 
-def clear_master_assignments(master_name=None):
-    """
-    Снимает мастеров с заявок.
-    Если master_name=None — снимает ВСЕХ мастеров.
-    Если master_name указан — снимает только этого мастера.
-    """
+def clear_all_masters():
+    """Снимает ВСЕХ мастеров с заявок в Google Sheets"""
     try:
         sheet_client = get_sheet_client()
         cleared = 0
         updates_zayavki = []
         updates_import = []
         
-        # Обрабатываем лист "Заявки"
+        # Лист "Заявки" — столбец G (Мастер)
         worksheet = sheet_client.worksheet("Заявки")
         all_rows = worksheet.get_all_values()
         for idx, row in enumerate(all_rows, start=1):
             if idx == 1:
                 continue
-            if len(row) > 14:
+            if len(row) > 7:
                 status = row[7].strip() if len(row) > 7 else ''
-                # Проверяем активные статусы (не done и не fail)
+                # Проверяем активные статусы
                 if status in ['🟡 В работе', '🔵 Доделать', 'В работе', 'Доделать', 'pending', 'todo']:
                     current_master = row[6].strip() if len(row) > 6 else ''
-                    if master_name is None or current_master == master_name:
+                    if current_master:
                         updates_zayavki.append({'range': f'G{idx}', 'values': [['']]})
                         cleared += 1
         
-        # Обрабатываем лист "Импорт М4"
+        # Лист "Импорт М4" — столбец N (Мастер)
         try:
             worksheet_import = sheet_client.worksheet("Импорт М4")
             import_rows = worksheet_import.get_all_values()
@@ -490,7 +486,7 @@ def clear_master_assignments(master_name=None):
                     status = row[11].strip() if len(row) > 11 else ''  # L — Действие
                     if status in ['В работе', 'Доделать', 'pending', 'todo']:
                         current_master = row[13].strip() if len(row) > 13 else ''  # N — Мастер
-                        if master_name is None or current_master == master_name:
+                        if current_master:
                             updates_import.append({'range': f'N{idx}', 'values': [['']]})
                             cleared += 1
         except:
@@ -513,7 +509,7 @@ def clear_master_assignments(master_name=None):
         
         return cleared
     except Exception as e:
-        logger.error(f"Ошибка снятия заявок: {e}")
+        logger.error(f"Ошибка снятия всех мастеров: {e}")
         return 0
 
 # ============================================================
@@ -773,7 +769,6 @@ def auto_login(login):
         if role == 'admin':
             return redirect(url_for('admin_panel'))
         elif role == 'iot':
-            # Временный редирект для IOT (позже сделаем отдельную страницу)
             return "🚧 IOT модуль в разработке. Скоро появится!"
         else:
             return redirect(url_for('master_overview', name=master_name))
@@ -864,17 +859,8 @@ def api_send_route_all():
 @app.route('/api/clear_dates', methods=['POST'])
 @login_required
 def api_clear_dates():
-    """Очищает ВСЕХ мастеров (очистить мастеров)"""
-    cleared = clear_master_assignments(None)
-    return jsonify({'success': True, 'cleared': cleared})
-
-@app.route('/api/clear_master', methods=['POST'])
-@login_required
-def api_clear_master():
-    """Снимает заявки с выбранного мастера (снять заявки)"""
-    data = request.json
-    master = data.get('master')
-    cleared = clear_master_assignments(master)
+    """Снимает ВСЕХ мастеров с заявок (одна кнопка)"""
+    cleared = clear_all_masters()
     return jsonify({'success': True, 'cleared': cleared})
 
 @app.route('/api/notify_curators', methods=['POST'])
@@ -886,6 +872,43 @@ def api_notify_curators():
         return jsonify({'success': False, 'error': 'Нет сообщения'})
     success = notify_curators(message)
     return jsonify({'success': success})
+
+@app.route('/api/update_status', methods=['POST'])
+@login_required
+def api_update_status():
+    """Обновляет статус заявки в админке"""
+    data = request.json
+    uid = data.get('uid')
+    status = data.get('status')
+    
+    if not uid or not status:
+        return jsonify({'success': False, 'error': 'Недостаточно данных'})
+    
+    try:
+        # Маппинг статусов
+        status_map = {
+            '🟡 В работе': 'pending',
+            '✅ Выполнено': 'done',
+            '🔵 Доделать': 'todo',
+            '🔧 Эвакуация': 'evacuation'
+        }
+        
+        new_status = status_map.get(status, 'pending')
+        
+        # Обновляем в админ-кэше
+        update_ticket_in_admin_cache(uid, new_status, f'Статус изменён на {status}')
+        
+        # Добавляем в очередь для синхронизации с Google Sheets
+        add_to_queue({
+            'uid': uid,
+            'source': 'Заявки',
+            'type': 'status_update',
+            'data': {'status': status, 'new_status': new_status}
+        })
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/admin_action', methods=['POST'])
 @login_required
@@ -1282,18 +1305,15 @@ if __name__ == "__main__":
         tickets = get_tickets_from_sheets()
         uid_index = build_uid_index(tickets)
         
-        # Создаём админ-кэш
         save_admin_cache(tickets)
         logger.info(f"✅ Админ кэш создан: {len(tickets)} заявок")
         
-        # Создаём кэши для ВСЕХ мастеров
         logger.info("📂 Создание кэшей для мастеров...")
         for master in MASTERS:
             master_tickets = [t for t in tickets if t.get('master') == master and is_active_status(t.get('status'))]
             save_master_cache(master, master_tickets, '')
             logger.info(f"   ✅ Кэш для {master}: {len(master_tickets)} заявок")
         
-        # Создаём пустую очередь, если её нет
         queue_path = get_queue_path()
         if not os.path.exists(queue_path):
             write_queue({'tasks': [], 'last_sync': get_msk_now().strftime('%Y-%m-%d %H:%M:%S')})
@@ -1310,7 +1330,6 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 5000))
     
-    # Проверяем наличие SSL-сертификатов
     ssl_context = None
     try:
         if os.path.exists('/etc/ssl/certs/amvera.crt') and os.path.exists('/etc/ssl/private/amvera.key'):
@@ -1319,7 +1338,6 @@ if __name__ == "__main__":
     except:
         pass
     
-    # Запускаем приложение
     if ssl_context:
         app.run(host="0.0.0.0", port=port, ssl_context=ssl_context)
     else:
