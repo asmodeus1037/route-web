@@ -18,7 +18,6 @@ var TAB_NAMES = ['Напр 1', 'Напр 2', 'Напр 3', 'Напр 4', 'Без
 function showToast(message, isError) {
     var toast = document.getElementById('toast');
     if (!toast) {
-        // Если нет тоста — создаём временный
         toast = document.createElement('div');
         toast.id = 'toast';
         toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#22c55e;color:white;padding:12px 24px;border-radius:10px;font-weight:600;z-index:1000;display:none;';
@@ -128,34 +127,41 @@ function sendNotification() {
 }
 
 // ============================================================
-// ОБНОВЛЕНИЕ СТАТУСА В АДМИНКЕ (НОВАЯ ФУНКЦИЯ)
+// ОБНОВЛЕНИЕ СТАТУСА В АДМИНКЕ
 // ============================================================
 function updateStatus(select) {
     var uid = select.dataset.uid;
     var status = select.value;
-    var note = '';
-    
-    // Сохраняем старый статус для отмены
     var oldStatus = select.dataset.oldStatus || '🟡 В работе';
     
-    // Для эвакуации запрашиваем описание
-    if (status === '🔧 Эвакуация') {
-        note = prompt('Введите описание для эвакуации (будет добавлено в комментарий):');
-        if (note === null) {
-            // Отмена — возвращаем старый статус
-            select.value = oldStatus;
-            return;
+    // Находим заявку, чтобы взять описание
+    var ticketDesc = '';
+    for (var dirName in directionsData) {
+        var dir = directionsData[dirName];
+        if (dir && dir.tickets) {
+            for (var i = 0; i < dir.tickets.length; i++) {
+                if (dir.tickets[i].uid === uid) {
+                    ticketDesc = dir.tickets[i].desc || 'Описание отсутствует';
+                    break;
+                }
+            }
         }
-        if (note.trim() === '') {
-            alert('Укажите причину эвакуации!');
-            select.value = oldStatus;
-            return;
-        }
+        if (ticketDesc) break;
     }
     
-    if (!confirm('Изменить статус заявки ' + uid + ' на ' + status + '?')) {
-        select.value = oldStatus;
-        return;
+    // Для эвакуации — берём описание заявки как комментарий
+    var note = '';
+    if (status === '🔧 Эвакуация') {
+        note = ticketDesc;
+        if (!confirm('Отправить заявку "' + uid + '" на эвакуацию?\nОписание: ' + note)) {
+            select.value = oldStatus;
+            return;
+        }
+    } else {
+        if (!confirm('Изменить статус заявки ' + uid + ' на ' + status + '?')) {
+            select.value = oldStatus;
+            return;
+        }
     }
     
     fetch('/api/update_status', {
@@ -168,23 +174,22 @@ function updateStatus(select) {
         if (data.success) {
             select.dataset.oldStatus = status;
             showToast('✅ Статус обновлён на ' + status);
-            // Обновляем данные в directionsData
+            // Обновляем данные
             for (var dirName in directionsData) {
                 var dir = directionsData[dirName];
                 if (dir && dir.tickets) {
                     for (var i = 0; i < dir.tickets.length; i++) {
                         if (dir.tickets[i].uid === uid) {
                             dir.tickets[i].status = status;
-                            // Если эвакуация — обновляем описание
                             if (status === '🔧 Эвакуация' && note) {
                                 dir.tickets[i].note = 'ЭВАКУАЦИЯ: ' + note;
+                                dir.tickets[i].display_desc = note;
                             }
                             break;
                         }
                     }
                 }
             }
-            // Перерисовываем
             renderCurrentTab();
         } else {
             alert('❌ Ошибка: ' + data.error);
@@ -697,13 +702,15 @@ function renderTicketsGrouped(tickets, containerId) {
             }
             html += '</select></span>';
             
-            // КЛИКАБЕЛЬНЫЙ СТАТУС С ВЫБОРОМ
-            html += '<span><select class="status-select" data-uid="' + t.uid + '" data-old-status="' + statusDisplay + '" onchange="updateStatus(this)">';
+            // СТАТУС (КОМПАКТНЫЙ, НЕ НАЛЕЗАЕТ)
+            html += '<span style="min-width:100px;display:inline-block;">';
+            html += '<select class="status-select" data-uid="' + t.uid + '" data-old-status="' + statusDisplay + '" onchange="updateStatus(this)" style="padding:2px 6px;border-radius:4px;border:1px solid #d1d5db;font-size:11px;background:white;max-width:110px;">';
             html += '<option value="🟡 В работе"' + (statusDisplay === '🟡 В работе' ? ' selected' : '') + '>🟡 В работе</option>';
             html += '<option value="✅ Выполнено"' + (statusDisplay === '✅ Выполнено' ? ' selected' : '') + '>✅ Выполнено</option>';
             html += '<option value="🔵 Доделать"' + (statusDisplay === '🔵 Доделать' ? ' selected' : '') + '>🔵 Доделать</option>';
             html += '<option value="🔧 Эвакуация"' + (statusDisplay === '🔧 Эвакуация' ? ' selected' : '') + '>🔧 Эвакуация</option>';
-            html += '</select></span>';
+            html += '</select>';
+            html += '</span>';
             
             html += '<span class="hours ' + hoursClass + '">⏱️ ' + hoursDisplay + ' ч</span>';
             html += '<button class="action-btn" onclick="openActionModal(\'' + t.uid + '\', \'' + t.source + '\')" title="Действия">⚙️</button>';

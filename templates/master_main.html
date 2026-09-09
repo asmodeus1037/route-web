@@ -30,7 +30,6 @@
             <div class="address">{{ group.address }}</div>
             <div class="number">#{{ group.darks_number }}</div>
             
-            <!-- КОНТАКТ: телефон или телеграм -->
             {% if group.contact %}
             <div class="contact">
                 <a href="#" onclick="event.stopPropagation(); openContact('{{ group.contact }}'); return false;">
@@ -47,7 +46,13 @@
                 {% for t in group.tickets[:2] %}
                 <div class="ticket-preview">
                     <span>{{ t.gos or 'Без номера' }}</span>
-                    <span>{{ t.desc[:30] }}{% if t.desc|length > 30 %}...{% endif %}</span>
+                    <span>
+                        {% if t.status == 'todo' and t.note and 'ЭВАКУАЦИЯ:' in t.note %}
+                            🔧 {{ t.desc[:25] }}{% if t.desc|length > 25 %}...{% endif %}
+                        {% else %}
+                            {{ t.desc[:30] }}{% if t.desc|length > 30 %}...{% endif %}
+                        {% endif %}
+                    </span>
                 </div>
                 {% endfor %}
                 {% if group.tickets|length > 2 %}
