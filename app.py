@@ -512,6 +512,71 @@ def clear_all_masters():
         logger.error(f"Ошибка снятия всех мастеров: {e}")
         return 0
 
+def update_status_in_google_sheets(uid, status, note=''):
+    """Обновляет статус заявки в Google Sheets"""
+    try:
+        sheet_client = get_sheet_client()
+        
+        # Находим заявку по UID
+        found = find_uid_in_sheets(uid)
+        if not found:
+            logger.error(f"UID {uid} не найден в Google Sheets")
+            return False
+        
+        row_idx = found['row_index']
+        source = found['source']
+        
+        if source == 'Заявки':
+            worksheet = sheet_client.worksheet("Заявки")
+            # Обновляем статус (столбец H)
+            worksheet.update_cell(row_idx, 8, status)
+            # Если есть заметка — обновляем (столбец J)
+            if note:
+                worksheet.update_cell(row_idx, 10, note)
+            logger.info(f"✅ Обновлён статус заявки {uid} в 'Заявки': {status}")
+            
+        elif source == 'Импорт М4':
+            worksheet = sheet_client.worksheet("Импорт М4")
+            # Обновляем статус (столбец L)
+            status_map = {
+                '🟡 В работе': 'В работе',
+                '✅ Выполнено': 'Выполнено',
+                '🔵 Доделать': 'Доделать',
+                '🔧 Эвакуация': 'Эвакуация'
+            }
+            new_status = status_map.get(status, 'В работе')
+            worksheet.update_cell(row_idx, 12, new_status)
+            if note:
+                worksheet.update_cell(row_idx, 13, note)
+            logger.info(f"✅ Обновлён статус заявки {uid} в 'Импорт М4': {new_status}")
+        
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка обновления статуса в Google Sheets: {e}")
+        return False
+
+def find_uid_in_sheets(uid):
+    """Ищет UID в Google Sheets и возвращает информацию"""
+    try:
+        sheet_client = get_sheet_client()
+        
+        # Ищем в листе "Заявки" (столбец K — ID заявки)
+        worksheet = sheet_client.worksheet("Заявки")
+        cell = worksheet.find(uid)
+        if cell:
+            return {'source': 'Заявки', 'row_index': cell.row}
+        
+        # Ищем в листе "Импорт М4" (столбец B — Номер REQ)
+        worksheet = sheet_client.worksheet("Импорт М4")
+        cell = worksheet.find(uid)
+        if cell:
+            return {'source': 'Импорт М4', 'row_index': cell.row}
+        
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка поиска UID {uid}: {e}")
+        return None
+
 # ============================================================
 # ОЧЕРЕДЬ ЗАДАЧ
 # ============================================================
@@ -666,6 +731,12 @@ def process_queue_background():
                     update_ticket_in_admin_cache(uid, 'todo', f'Куратор не предоставил')
                 elif task_type == 'transit_replace':
                     update_ticket_in_admin_cache(uid, 'done', 'Заменен Транзитом')
+                elif task_type == 'status_update':
+                    # Обновление статуса из админки
+                    new_status = data.get('new_status', 'pending')
+                    status_display = data.get('status', '🟡 В работе')
+                    note = data.get('note', '')
+                    update_ticket_in_admin_cache(uid, new_status, note, status_display)
             
             current_time = time.time()
             if current_time - last_gs_sync >= 30:
@@ -859,7 +930,7 @@ def api_send_route_all():
 @app.route('/api/clear_dates', methods=['POST'])
 @login_required
 def api_clear_dates():
-    """Снимает ВСЕХ мастеров с заявок (одна кнопка)"""
+    """Снимает ВСЕХ мастеров с заявок"""
     cleared = clear_all_masters()
     return jsonify({'success': True, 'cleared': cleared})
 
@@ -876,16 +947,17 @@ def api_notify_curators():
 @app.route('/api/update_status', methods=['POST'])
 @login_required
 def api_update_status():
-    """Обновляет статус заявки в админке"""
+    """Обновляет статус заявки в админке и Google Sheets"""
     data = request.json
     uid = data.get('uid')
-    status = data.get('status')
+    status_display = data.get('status')
+    note = data.get('note', '')
     
-    if not uid or not status:
+    if not uid or not status_display:
         return jsonify({'success': False, 'error': 'Недостаточно данных'})
     
     try:
-        # Маппинг статусов
+        # Маппинг статусов для внутреннего использования
         status_map = {
             '🟡 В работе': 'pending',
             '✅ Выполнено': 'done',
@@ -893,21 +965,29 @@ def api_update_status():
             '🔧 Эвакуация': 'evacuation'
         }
         
-        new_status = status_map.get(status, 'pending')
+        new_status = status_map.get(status_display, 'pending')
         
         # Обновляем в админ-кэше
-        update_ticket_in_admin_cache(uid, new_status, f'Статус изменён на {status}')
+        update_ticket_in_admin_cache(uid, new_status, note, status_display)
         
-        # Добавляем в очередь для синхронизации с Google Sheets
+        # ОТПРАВЛЯЕМ СРАЗУ В GOOGLE SHEETS
+        update_status_in_google_sheets(uid, status_display, note)
+        
+        # Добавляем в очередь для синхронизации
         add_to_queue({
             'uid': uid,
             'source': 'Заявки',
             'type': 'status_update',
-            'data': {'status': status, 'new_status': new_status}
+            'data': {
+                'status': status_display,
+                'new_status': new_status,
+                'note': note
+            }
         })
         
         return jsonify({'success': True})
     except Exception as e:
+        logger.error(f"Ошибка обновления статуса: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/admin_action', methods=['POST'])
@@ -921,23 +1001,28 @@ def api_admin_action():
         return jsonify({'success': False, 'error': 'Недостаточно данных'})
     try:
         if action == 'done':
-            update_ticket_in_admin_cache(uid, 'done', extra or 'Выполнено админом')
+            status_display = '✅ Выполнено'
+            update_ticket_in_admin_cache(uid, 'done', extra or 'Выполнено админом', status_display)
+            update_status_in_google_sheets(uid, status_display, extra)
         elif action == 'evacuation':
-            update_ticket_in_admin_cache(uid, 'todo', f'ЭВАКУАЦИЯ: {extra}')
+            status_display = '🔧 Эвакуация'
+            update_ticket_in_admin_cache(uid, 'todo', f'ЭВАКУАЦИЯ: {extra}', status_display)
+            update_status_in_google_sheets(uid, status_display, f'ЭВАКУАЦИЯ: {extra}')
         elif action == 'fail':
-            update_ticket_in_admin_cache(uid, 'fail', 'Вело отсутствует')
+            status_display = '🔵 Доделать'
+            update_ticket_in_admin_cache(uid, 'fail', 'Вело отсутствует', status_display)
+            update_status_in_google_sheets(uid, status_display, 'Вело отсутствует')
         elif action == 'todo':
-            update_ticket_in_admin_cache(uid, 'todo', 'Доделать')
+            status_display = '🔵 Доделать'
+            update_ticket_in_admin_cache(uid, 'todo', 'Доделать', status_display)
+            update_status_in_google_sheets(uid, status_display, 'Доделать')
         elif action == 'taken':
-            update_ticket_in_admin_cache(uid, 'todo', f'ЗАБРАЛИ: {extra} АКБ')
+            status_display = '🔵 Доделать'
+            note = f'ЗАБРАЛИ: {extra} АКБ'
+            update_ticket_in_admin_cache(uid, 'todo', note, status_display)
+            update_status_in_google_sheets(uid, status_display, note)
         else:
             return jsonify({'success': False, 'error': 'Неизвестное действие'})
-        add_to_queue({
-            'uid': uid,
-            'source': 'Заявки',
-            'type': action,
-            'data': {'extra': extra}
-        })
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})

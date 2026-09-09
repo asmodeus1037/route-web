@@ -13,8 +13,23 @@ var actionTarget = { uid: null, source: null, action: null };
 var TAB_NAMES = ['Напр 1', 'Напр 2', 'Напр 3', 'Напр 4', 'Без направления'];
 
 // ============================================================
-// ВЫХОД
+// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ============================================================
+function showToast(message, isError) {
+    var toast = document.getElementById('toast');
+    if (!toast) {
+        // Если нет тоста — создаём временный
+        toast = document.createElement('div');
+        toast.id = 'toast';
+        toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#22c55e;color:white;padding:12px 24px;border-radius:10px;font-weight:600;z-index:1000;display:none;';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.className = 'toast' + (isError ? ' error' : '');
+    toast.style.display = 'block';
+    setTimeout(function() { toast.style.display = 'none'; }, 3000);
+}
+
 function adminLogout(event) {
     if (event) event.preventDefault();
     localStorage.removeItem('master_login');
@@ -22,9 +37,6 @@ function adminLogout(event) {
     window.location.href = '/logout';
 }
 
-// ============================================================
-// ВСПОМОГАТЕЛЬНЫЕ
-// ============================================================
 function getAllTickets() {
     var all = [];
     for (var dirName in directionsData) {
@@ -39,7 +51,7 @@ function getAllTickets() {
 }
 
 // ============================================================
-// УВЕДОМЛЕНИЯ
+// УВЕДОМЛЕНИЯ КУРАТОРАМ
 // ============================================================
 function openNotifyModal() {
     document.getElementById('notifyModal').classList.add('active');
@@ -77,7 +89,6 @@ function generateNotifyPreview() {
         preview += '📋 Заявки (' + group.tickets.length + '):\n';
         for (var j = 0; j < group.tickets.length; j++) {
             var t = group.tickets[j];
-            // Для АКБ и зарядок показываем тип вместо госномера
             var identifier = (t.type && (t.type === 'Аккумуляторная батарея' || t.type === 'Зарядное устройство')) 
                 ? t.type 
                 : (t.gos || 'Без номера');
@@ -113,6 +124,76 @@ function sendNotification() {
     })
     .catch(function() {
         alert('❌ Ошибка отправки');
+    });
+}
+
+// ============================================================
+// ОБНОВЛЕНИЕ СТАТУСА В АДМИНКЕ (НОВАЯ ФУНКЦИЯ)
+// ============================================================
+function updateStatus(select) {
+    var uid = select.dataset.uid;
+    var status = select.value;
+    var note = '';
+    
+    // Сохраняем старый статус для отмены
+    var oldStatus = select.dataset.oldStatus || '🟡 В работе';
+    
+    // Для эвакуации запрашиваем описание
+    if (status === '🔧 Эвакуация') {
+        note = prompt('Введите описание для эвакуации (будет добавлено в комментарий):');
+        if (note === null) {
+            // Отмена — возвращаем старый статус
+            select.value = oldStatus;
+            return;
+        }
+        if (note.trim() === '') {
+            alert('Укажите причину эвакуации!');
+            select.value = oldStatus;
+            return;
+        }
+    }
+    
+    if (!confirm('Изменить статус заявки ' + uid + ' на ' + status + '?')) {
+        select.value = oldStatus;
+        return;
+    }
+    
+    fetch('/api/update_status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: uid, status: status, note: note })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.success) {
+            select.dataset.oldStatus = status;
+            showToast('✅ Статус обновлён на ' + status);
+            // Обновляем данные в directionsData
+            for (var dirName in directionsData) {
+                var dir = directionsData[dirName];
+                if (dir && dir.tickets) {
+                    for (var i = 0; i < dir.tickets.length; i++) {
+                        if (dir.tickets[i].uid === uid) {
+                            dir.tickets[i].status = status;
+                            // Если эвакуация — обновляем описание
+                            if (status === '🔧 Эвакуация' && note) {
+                                dir.tickets[i].note = 'ЭВАКУАЦИЯ: ' + note;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            // Перерисовываем
+            renderCurrentTab();
+        } else {
+            alert('❌ Ошибка: ' + data.error);
+            select.value = oldStatus;
+        }
+    })
+    .catch(function() {
+        alert('❌ Ошибка сети');
+        select.value = oldStatus;
     });
 }
 
@@ -343,7 +424,7 @@ function openClearMasterModal() {
     var html = '<div style="padding:8px 12px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;background:#f0fdf4;">';
     html += '<span><strong>👤 Все мастера</strong></span>';
     html += '<span class="count">' + total + ' заявок</span>';
-    html += '<button class="btn btn-sm btn-danger" onclick="selectClearMaster(\'all\')">Выбрать</button>';
+    html += '<button class="btn btn-sm btn-danger" onclick="clearAllMasters()">🧹 Снять ВСЕХ</button>';
     html += '</div>';
     for (var j = 0; j < masters.length; j++) {
         var master = masters[j];
@@ -351,7 +432,7 @@ function openClearMasterModal() {
         html += '<div style="padding:8px 12px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;">';
         html += '<span><strong>👤 ' + master + '</strong></span>';
         html += '<span class="count">' + (count > 0 ? count + ' заявок' : 'нет заявок') + '</span>';
-        html += '<button class="btn btn-sm btn-clear-master" onclick="selectClearMaster(\'' + master + '\')"' + (count === 0 ? ' disabled style="opacity:0.5;"' : '') + '>Выбрать</button>';
+        html += '<button class="btn btn-sm btn-clear-master" onclick="clearMaster(\'' + master + '\')"' + (count === 0 ? ' disabled style="opacity:0.5;"' : '') + '>Снять</button>';
         html += '</div>';
     }
     list.innerHTML = html;
@@ -362,38 +443,19 @@ function closeClearMasterModal() {
     document.getElementById('clearMasterModal').classList.remove('active');
 }
 
-function selectClearMaster(master) {
-    clearMasterTarget = master;
-    var btns = document.querySelectorAll('#clearMasterList .btn-clear-master, #clearMasterList .btn-danger');
-    for (var i = 0; i < btns.length; i++) {
-        btns[i].style.background = '#e2e8f0';
-    }
-    var allBtns = document.querySelectorAll('#clearMasterList .btn-clear-master, #clearMasterList .btn-danger');
-    for (var i = 0; i < allBtns.length; i++) {
-        var btn = allBtns[i];
-        if (btn.textContent.indexOf('Выбрать') !== -1 && btn.parentElement.textContent.indexOf(master === 'all' ? 'Все мастера' : master) !== -1) {
-            btn.style.background = '#ef4444';
-            btn.style.color = 'white';
-        }
-    }
-    document.getElementById('syncStatus').textContent = '📝 Выбран: ' + (master === 'all' ? 'Все мастера' : master);
-    document.getElementById('syncStatus').style.color = '#f59e0b';
-}
-
-function clearMaster() {
-    if (!clearMasterTarget) {
+function clearMaster(master) {
+    if (!master) {
         alert('Выберите мастера!');
         return;
     }
-    var name = clearMasterTarget === 'all' ? 'ВСЕХ мастеров' : clearMasterTarget;
-    if (!confirm('Снять заявки с ' + name + '?')) return;
+    if (!confirm('Снять все заявки с мастера ' + master + '?')) return;
     document.getElementById('syncSpinner').style.display = 'block';
     document.getElementById('syncStatus').textContent = '⏳ Снятие...';
     document.getElementById('syncStatus').style.color = '#f59e0b';
     fetch('/api/clear_master', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ master: clearMasterTarget === 'all' ? null : clearMasterTarget })
+        body: JSON.stringify({ master: master })
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
@@ -415,17 +477,18 @@ function clearMaster() {
     });
 }
 
-function clearAllDates() {
-    if (!confirm('Очистить всех мастеров у заявок в работе/доделать/обработано?')) return;
+function clearAllMasters() {
+    if (!confirm('Снять ВСЕХ мастеров со всех заявок?')) return;
     document.getElementById('syncSpinner').style.display = 'block';
-    document.getElementById('syncStatus').textContent = '⏳ Очистка...';
+    document.getElementById('syncStatus').textContent = '⏳ Снятие...';
     document.getElementById('syncStatus').style.color = '#f59e0b';
     fetch('/api/clear_dates', { method: 'POST' })
     .then(function(r) { return r.json(); })
     .then(function(data) {
         if (data.success) {
-            document.getElementById('syncStatus').textContent = '✅ Мастера очищены';
+            document.getElementById('syncStatus').textContent = '✅ Снято ' + data.cleared + ' заявок';
             document.getElementById('syncStatus').style.color = '#22c55e';
+            closeClearMasterModal();
             location.reload();
         } else {
             document.getElementById('syncStatus').textContent = '❌ Ошибка: ' + data.error;
@@ -602,7 +665,15 @@ function renderTicketsGrouped(tickets, containerId) {
         if (group.contact) { html += '<div class="darks-contact">📞 ' + group.contact + '</div>'; }
         for (var j = 0; j < group.tickets.length; j++) {
             var t = group.tickets[j];
-            var statusLabel = t.status === 'todo' ? '🔧 Доделать' : '🟡 В работе';
+            
+            // Определяем статус для отображения
+            var statusDisplay = t.status;
+            if (statusDisplay === 'pending') statusDisplay = '🟡 В работе';
+            else if (statusDisplay === 'done') statusDisplay = '✅ Выполнено';
+            else if (statusDisplay === 'todo') statusDisplay = '🔵 Доделать';
+            else if (statusDisplay === 'fail') statusDisplay = '🔵 Доделать';
+            else if (statusDisplay === 'evacuation') statusDisplay = '🔧 Эвакуация';
+            
             var hoursDisplay = t.hours_since !== undefined ? t.hours_since.toFixed(1) : '0';
             var uidKey = t.uid + '|' + t.source;
             var currentMaster = pendingChanges[uidKey] !== undefined ? pendingChanges[uidKey] : (t.master || '');
@@ -625,7 +696,15 @@ function renderTicketsGrouped(tickets, containerId) {
                 html += '<option value="' + m + '"' + (currentMaster === m ? ' selected' : '') + '>' + m + '</option>';
             }
             html += '</select></span>';
-            html += '<span class="status-badge status-pending">' + statusLabel + '</span>';
+            
+            // КЛИКАБЕЛЬНЫЙ СТАТУС С ВЫБОРОМ
+            html += '<span><select class="status-select" data-uid="' + t.uid + '" data-old-status="' + statusDisplay + '" onchange="updateStatus(this)">';
+            html += '<option value="🟡 В работе"' + (statusDisplay === '🟡 В работе' ? ' selected' : '') + '>🟡 В работе</option>';
+            html += '<option value="✅ Выполнено"' + (statusDisplay === '✅ Выполнено' ? ' selected' : '') + '>✅ Выполнено</option>';
+            html += '<option value="🔵 Доделать"' + (statusDisplay === '🔵 Доделать' ? ' selected' : '') + '>🔵 Доделать</option>';
+            html += '<option value="🔧 Эвакуация"' + (statusDisplay === '🔧 Эвакуация' ? ' selected' : '') + '>🔧 Эвакуация</option>';
+            html += '</select></span>';
+            
             html += '<span class="hours ' + hoursClass + '">⏱️ ' + hoursDisplay + ' ч</span>';
             html += '<button class="action-btn" onclick="openActionModal(\'' + t.uid + '\', \'' + t.source + '\')" title="Действия">⚙️</button>';
             html += '</div>';
