@@ -24,7 +24,7 @@ app.secret_key = secrets.token_hex(16)
 CREDENTIALS_FILE = "/data/credentials.json"
 SHEET_NAME = "Система ремонта ВВ"
 START_COORDS = "55.775267, 37.745690"
-MASTERS = ['Антон', 'Сергей', 'Руслан', 'Транзит', 'Алексей']
+MASTERS = ['Антон', 'Сергей', 'Руслан', 'Сергей Транзит', 'Алексей']  # Транзит → Сергей Транзит
 CACHE_TTL = 300
 CACHE_DIR = "/data/cache"
 BOT_API_URL = "https://route-bot-dzufear.waw0.amvera.tech"
@@ -40,8 +40,9 @@ MASTER_CREDENTIALS = {
     'anton': {'password': 'anton1987', 'name': 'Антон', 'role': 'master'},
     'sergey': {'password': 'sergey1992', 'name': 'Сергей', 'role': 'master'},
     'ruslan': {'password': 'ruslan1985', 'name': 'Руслан', 'role': 'master'},
-    'transit': {'password': 'transit2024', 'name': 'Транзит', 'role': 'master'},
-    'alexey': {'password': 'alexey0304', 'name': 'Алексей', 'role': 'master'}
+    'transit': {'password': 'transit2024', 'name': 'Сергей Транзит', 'role': 'master'},
+    'alexey': {'password': 'alexey0304', 'name': 'Алексей', 'role': 'master'},
+    'iot': {'password': 'iot2026', 'name': 'IOT', 'role': 'iot'}  # Новая учётка IOT
 }
 
 # ============================================================
@@ -237,9 +238,6 @@ def generate_ticket_id(date_str):
     except:
         return None
 
-# ============================================================
-# ЧТЕНИЕ ЗАЯВОК ИЗ ТАБЛИЦЫ
-# ============================================================
 def get_tickets_from_sheets():
     global darks_ref
     sheet_client = get_sheet_client()
@@ -455,10 +453,18 @@ def batch_update_masters(changes):
         return 0
 
 def clear_master_assignments(master_name=None):
+    """
+    Снимает мастеров с заявок.
+    Если master_name=None — снимает ВСЕХ мастеров.
+    Если master_name указан — снимает только этого мастера.
+    """
     try:
         sheet_client = get_sheet_client()
         cleared = 0
-        updates = []
+        updates_zayavki = []
+        updates_import = []
+        
+        # Обрабатываем лист "Заявки"
         worksheet = sheet_client.worksheet("Заявки")
         all_rows = worksheet.get_all_values()
         for idx, row in enumerate(all_rows, start=1):
@@ -466,17 +472,45 @@ def clear_master_assignments(master_name=None):
                 continue
             if len(row) > 14:
                 status = row[7].strip() if len(row) > 7 else ''
-                if status in ['🟡 В работе', '🔵 Доделать', '⏹️ Обработано', 'В работе', 'Доделать', 'Обработано', 'pending', 'todo', 'fail']:
+                # Проверяем активные статусы (не done и не fail)
+                if status in ['🟡 В работе', '🔵 Доделать', 'В работе', 'Доделать', 'pending', 'todo']:
                     current_master = row[6].strip() if len(row) > 6 else ''
                     if master_name is None or current_master == master_name:
-                        updates.append({'range': f'G{idx}', 'values': [['']]})
+                        updates_zayavki.append({'range': f'G{idx}', 'values': [['']]})
                         cleared += 1
-        if updates:
-            worksheet.batch_update(updates)
+        
+        # Обрабатываем лист "Импорт М4"
+        try:
+            worksheet_import = sheet_client.worksheet("Импорт М4")
+            import_rows = worksheet_import.get_all_values()
+            for idx, row in enumerate(import_rows, start=1):
+                if idx == 1:
+                    continue
+                if len(row) > 14:
+                    status = row[11].strip() if len(row) > 11 else ''  # L — Действие
+                    if status in ['В работе', 'Доделать', 'pending', 'todo']:
+                        current_master = row[13].strip() if len(row) > 13 else ''  # N — Мастер
+                        if master_name is None or current_master == master_name:
+                            updates_import.append({'range': f'N{idx}', 'values': [['']]})
+                            cleared += 1
+        except:
+            pass
+        
+        # Применяем обновления
+        if updates_zayavki:
+            worksheet.batch_update(updates_zayavki)
+            logger.info(f"✅ Снято {len(updates_zayavki)} мастеров в 'Заявки'")
+        
+        if updates_import:
+            worksheet_import.batch_update(updates_import)
+            logger.info(f"✅ Снято {len(updates_import)} мастеров в 'Импорт М4'")
+        
+        # Обновляем кэши
         tickets = get_tickets_from_sheets()
         uid_index = build_uid_index(tickets)
         save_admin_cache(tickets)
         refresh_all_master_caches()
+        
         return cleared
     except Exception as e:
         logger.error(f"Ошибка снятия заявок: {e}")
@@ -738,6 +772,9 @@ def auto_login(login):
 
         if role == 'admin':
             return redirect(url_for('admin_panel'))
+        elif role == 'iot':
+            # Временный редирект для IOT (позже сделаем отдельную страницу)
+            return "🚧 IOT модуль в разработке. Скоро появится!"
         else:
             return redirect(url_for('master_overview', name=master_name))
     return redirect(url_for('login_page'))
@@ -827,12 +864,14 @@ def api_send_route_all():
 @app.route('/api/clear_dates', methods=['POST'])
 @login_required
 def api_clear_dates():
+    """Очищает ВСЕХ мастеров (очистить мастеров)"""
     cleared = clear_master_assignments(None)
     return jsonify({'success': True, 'cleared': cleared})
 
 @app.route('/api/clear_master', methods=['POST'])
 @login_required
 def api_clear_master():
+    """Снимает заявки с выбранного мастера (снять заявки)"""
     data = request.json
     master = data.get('master')
     cleared = clear_master_assignments(master)
