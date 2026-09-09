@@ -159,7 +159,7 @@ function sendNotification() {
 }
 
 // ============================================================
-// ОБНОВЛЕНИЕ СТАТУСА В АДМИНКЕ
+// ОБНОВЛЕНИЕ СТАТУСА В АДМИНКЕ (ОДНА ЗАЯВКА)
 // ============================================================
 function updateStatus(select) {
     var uid = select.dataset.uid;
@@ -194,7 +194,7 @@ function updateStatus(select) {
         }
     }
     
-    // Сначала обновляем в админ-кэше
+    // Маппинг статусов
     var statusMap = {
         '🟡 В работе': 'pending',
         '✅ Выполнено': 'done',
@@ -203,7 +203,7 @@ function updateStatus(select) {
     };
     var newStatus = statusMap[status] || 'pending';
     
-    // Обновляем локальные данные
+    // Сначала обновляем локальные данные
     for (var dirName in directionsData) {
         var dir = directionsData[dirName];
         if (dir && dir.tickets) {
@@ -220,11 +220,11 @@ function updateStatus(select) {
         }
     }
     
-    // Отправляем на сервер
+    // Отправляем на сервер (без записи в отчет)
     fetch('/api/update_status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uid: uid, status: status, note: note })
+        body: JSON.stringify({ uid: uid, status: status, note: note, skip_report: true })
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
@@ -253,7 +253,6 @@ function updateStatus(select) {
     .catch(function() {
         showToastModern('❌ Ошибка сети', 'error');
         select.value = oldStatus;
-        // Откатываем локальные данные
         for (var dirName in directionsData) {
             var dir = directionsData[dirName];
             if (dir && dir.tickets) {
@@ -333,7 +332,8 @@ function submitAction() {
             uid: actionTarget.uid,
             source: actionTarget.source,
             action: actionTarget.action,
-            extra: extra
+            extra: extra,
+            skip_report: true
         })
     })
     .then(function(r) { return r.json(); })
@@ -478,19 +478,52 @@ async function applyBulkStatus() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
                 uids: Array.from(selectedRequests), 
-                status: status 
+                status: status,
+                skip_report: true
             })
         });
         
         var data = await response.json();
         
         if (data.success) {
+            // Обновляем локальные данные для каждого uid
+            var statusMap = {
+                '🟡 В работе': 'pending',
+                '✅ Выполнено': 'done',
+                '🔵 Доделать': 'todo',
+                '🔧 Эвакуация': 'evacuation'
+            };
+            var newStatus = statusMap[status] || 'pending';
+            
+            // Обновляем directionsData
+            for (var dirName in directionsData) {
+                var dir = directionsData[dirName];
+                if (dir && dir.tickets) {
+                    for (var i = 0; i < dir.tickets.length; i++) {
+                        var t = dir.tickets[i];
+                        if (selectedRequests.has(t.uid)) {
+                            t.status = newStatus;
+                            if (status === '🔧 Эвакуация') {
+                                t.note = 'ЭВАКУАЦИЯ: ' + (t.desc || '');
+                                t.display_desc = t.desc || '';
+                            }
+                        }
+                    }
+                }
+            }
+            
             showToastModern('✅ Статус изменен для ' + selectedRequests.size + ' заявок', 'success');
             selectedRequests.clear();
             updateBulkUI();
-            setTimeout(function() {
-                location.reload();
-            }, 1500);
+            
+            // Перерисовываем таблицу
+            renderCurrentTab();
+            
+            // Выходим из режима массового выделения
+            if (bulkModeActive) {
+                toggleBulkMode();
+            }
+            
         } else {
             showToastModern('❌ Ошибка: ' + (data.error || 'Неизвестная ошибка'), 'error');
         }

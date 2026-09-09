@@ -1371,20 +1371,22 @@ def transit_replace():
         return jsonify({'success': False, 'error': str(e)})
 
 # ============================================================
-# МАССОВОЕ ОБНОВЛЕНИЕ СТАТУСОВ
+# МАССОВОЕ ОБНОВЛЕНИЕ СТАТУСОВ (ИСПРАВЛЕННОЕ)
 # ============================================================
 @app.route('/api/bulk_update_status', methods=['POST'])
 @login_required
 def api_bulk_update_status():
-    """Массовое обновление статусов заявок"""
+    """Массовое обновление статусов заявок (БЕЗ записи в отчет)"""
     try:
         data = request.json
         uids = data.get('uids', [])
         status_display = data.get('status', '')
+        skip_report = data.get('skip_report', True)  # По умолчанию True - не пишем в отчет
         
         if not uids or not status_display:
             return jsonify({'success': False, 'error': 'Не указаны UID или статус'}), 400
         
+        # Маппинг статусов
         status_map = {
             '🟡 В работе': 'pending',
             '✅ Выполнено': 'done',
@@ -1397,8 +1399,13 @@ def api_bulk_update_status():
         
         for uid in uids:
             try:
+                # Обновляем в админ-кэше
                 update_ticket_in_admin_cache(uid, new_status, '', status_display)
+                
+                # Обновляем в Google Sheets (только статус, без отчета)
                 update_status_in_google_sheets(uid, status_display, '')
+                
+                # Добавляем в очередь (но без записи в отчет)
                 add_to_queue({
                     'uid': uid,
                     'source': 'Заявки',
@@ -1406,12 +1413,17 @@ def api_bulk_update_status():
                     'data': {
                         'status': status_display,
                         'new_status': new_status,
-                        'note': ''
+                        'note': '',
+                        'skip_report': skip_report
                     }
                 })
                 updated_count += 1
             except Exception as e:
                 logger.error(f"Ошибка обновления статуса для {uid}: {e}")
+        
+        # Обновляем админ-кэш полностью
+        tickets = get_tickets_from_sheets()
+        save_admin_cache(tickets)
         
         return jsonify({
             'success': True,
@@ -1424,6 +1436,166 @@ def api_bulk_update_status():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ============================================================
+# ОБНОВЛЕНИЕ СТАТУСА (ОДНА ЗАЯВКА) - ИСПРАВЛЕННОЕ
+# ============================================================
+@app.route('/api/update_status', methods=['POST'])
+@login_required
+def api_update_status():
+    """Обновляет статус заявки в админке и Google Sheets (БЕЗ записи в отчет)"""
+    data = request.json
+    uid = data.get('uid')
+    status_display = data.get('status')
+    note = data.get('note', '')
+    skip_report = data.get('skip_report', True)
+    
+    if not uid or not status_display:
+        return jsonify({'success': False, 'error': 'Недостаточно данных'})
+    
+    try:
+        # Маппинг статусов для внутреннего использования
+        status_map = {
+            '🟡 В работе': 'pending',
+            '✅ Выполнено': 'done',
+            '🔵 Доделать': 'todo',
+            '🔧 Эвакуация': 'evacuation'
+        }
+        
+        new_status = status_map.get(status_display, 'pending')
+        
+        # Обновляем в админ-кэше
+        update_ticket_in_admin_cache(uid, new_status, note, status_display)
+        
+        # Обновляем в Google Sheets
+        update_status_in_google_sheets(uid, status_display, note)
+        
+        # Добавляем в очередь (с флагом skip_report)
+        add_to_queue({
+            'uid': uid,
+            'source': 'Заявки',
+            'type': 'status_update',
+            'data': {
+                'status': status_display,
+                'new_status': new_status,
+                'note': note,
+                'skip_report': skip_report
+            }
+        })
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Ошибка обновления статуса: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+# ============================================================
+# ОБНОВЛЕНИЕ СТАТУСА В GOOGLE SHEETS (БЕЗ ОТЧЕТА)
+# ============================================================
+def update_status_in_google_sheets(uid, status, note=''):
+    """Обновляет статус заявки в Google Sheets (БЕЗ записи в отчет)"""
+    try:
+        sheet_client = get_sheet_client()
+        
+        # Находим заявку по UID
+        found = find_uid_in_sheets(uid)
+        if not found:
+            logger.error(f"UID {uid} не найден в Google Sheets")
+            return False
+        
+        row_idx = found['row_index']
+        source = found['source']
+        
+        # Маппинг статусов для отображения
+        status_display_map = {
+            '🟡 В работе': '🟡 В работе',
+            '✅ Выполнено': '✅ Выполнено',
+            '🔵 Доделать': '🔵 Доделать',
+            '🔧 Эвакуация': '🔧 Эвакуация'
+        }
+        display_status = status_display_map.get(status, status)
+        
+        if source == 'Заявки':
+            worksheet = sheet_client.worksheet("Заявки")
+            # Обновляем статус (столбец H)
+            worksheet.update_cell(row_idx, 8, display_status)
+            # Если есть заметка — обновляем (столбец J)
+            if note:
+                worksheet.update_cell(row_idx, 10, note)
+            logger.info(f"✅ Обновлён статус заявки {uid} в 'Заявки': {display_status}")
+            
+        elif source == 'Импорт М4':
+            worksheet = sheet_client.worksheet("Импорт М4")
+            # Обновляем статус (столбец L)
+            status_map = {
+                '🟡 В работе': 'В работе',
+                '✅ Выполнено': 'Выполнено',
+                '🔵 Доделать': 'Доделать',
+                '🔧 Эвакуация': 'Эвакуация'
+            }
+            new_status = status_map.get(status, 'В работе')
+            worksheet.update_cell(row_idx, 12, new_status)
+            if note:
+                worksheet.update_cell(row_idx, 13, note)
+            logger.info(f"✅ Обновлён статус заявки {uid} в 'Импорт М4': {new_status}")
+        
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка обновления статуса в Google Sheets: {e}")
+        return False
+
+
+# ============================================================
+# ФОНОВЫЙ ПРОЦЕСС - ИСПРАВЛЕННЫЙ (ПРОВЕРЯЕТ skip_report)
+# ============================================================
+def process_queue_background():
+    last_gs_sync = time.time()
+    while True:
+        try:
+            time.sleep(10)
+            queue_data = read_queue()
+            if not queue_data['tasks']:
+                continue
+            
+            tasks = queue_data['tasks']
+            logger.info(f"📋 Обработка {len(tasks)} задач из очереди")
+            
+            # Отделяем задачи, которые НЕ нужно писать в отчет
+            tasks_for_report = []
+            tasks_skip_report = []
+            
+            for task in tasks:
+                data = task.get('data', {})
+                skip_report = data.get('skip_report', False)
+                
+                if skip_report:
+                    tasks_skip_report.append(task)
+                else:
+                    tasks_for_report.append(task)
+            
+            # Обрабатываем задачи без отчета (только обновление статусов)
+            for task in tasks_skip_report:
+                uid = task.get('uid')
+                task_type = task.get('type')
+                data = task.get('data', {})
+                
+                if task_type == 'status_update':
+                    new_status = data.get('new_status', 'pending')
+                    status_display = data.get('status', '🟡 В работе')
+                    note = data.get('note', '')
+                    update_ticket_in_admin_cache(uid, new_status, note, status_display)
+            
+            # Обрабатываем задачи с отчетом (мастерские действия)
+            if tasks_for_report:
+                write_to_report(tasks_for_report)
+            
+            # Если есть задачи - очищаем очередь
+            if tasks:
+                clear_queue()
+                last_gs_sync = time.time()
+                logger.info("✅ Очередь очищена")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка в фоновом процессе: {e}")
 # ============================================================
 # ПОИСК ВЕЛОСИПЕДА В БАЗЕ ДАННЫХ
 # ============================================================
