@@ -22,6 +22,26 @@
         <button class="btn btn-danger" onclick="clearAllDates()">🗑️ Очистить мастеров</button>
         <button class="btn btn-notify" onclick="openNotifyModal()">📢 Уведомить кураторов</button>
         <button class="btn btn-primary" onclick="syncAll()">🔄 Синхронизировать</button>
+        <button class="btn btn-bulk" id="bulkModeBtn" onclick="toggleBulkMode()">📋 Массовое изменение статуса</button>
+    </div>
+    
+    <!-- Панель массового выделения -->
+    <div class="bulk-panel" id="bulkPanel">
+        <div class="info">
+            📌 <span id="selectedCount">Выбрано: 0</span> заявок
+        </div>
+        <div class="actions">
+            <select id="bulkStatusSelect">
+                <option value="">Изменить статус...</option>
+                <option value="🟡 В работе">🟡 В работе</option>
+                <option value="✅ Выполнено">✅ Выполнено</option>
+                <option value="🔵 Доделать">🔵 Доделать</option>
+                <option value="🔧 Эвакуация">🔧 Эвакуация</option>
+            </select>
+            <button class="btn-apply" id="applyBulkStatus" onclick="applyBulkStatus()" disabled>Применить</button>
+            <button class="btn-clear" onclick="clearBulkSelection()">Снять все</button>
+            <button class="btn-exit" onclick="toggleBulkMode()">✕ Выйти</button>
+        </div>
     </div>
     
     <div class="tabs" id="tabHeaders">
@@ -162,19 +182,10 @@
     </div>
 </div>
 
-<script>
-    window.__DATA__ = {
-        masters: {{ masters|tojson }},
-        directions: {{ directions|tojson }},
-        now: '{{ now }}'
-    };
-</script>
-<script src="/static/js/admin.js"></script>
 <!-- Контейнер для уведомлений -->
 <div id="toastContainer" class="toast-container"></div>
 
 <script>
-    // Переопределяем window.__DATA__ с актуальными данными
     window.__DATA__ = {
         masters: {{ masters|tojson }},
         directions: {{ directions|tojson }},

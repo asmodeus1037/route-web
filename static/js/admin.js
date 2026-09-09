@@ -11,7 +11,7 @@ var actionTarget = { uid: null, source: null, action: null };
 
 // Переменные для массового выделения
 var selectedRequests = new Set();
-var isBulkMode = false;
+var bulkModeActive = false;
 
 // Маппинг вкладок
 var TAB_NAMES = ['Напр 1', 'Напр 2', 'Напр 3', 'Напр 4', 'Без направления'];
@@ -33,7 +33,6 @@ function showToast(message, isError) {
     setTimeout(function() { toast.style.display = 'none'; }, 3000);
 }
 
-// Современный Toast с контейнером
 function showToastModern(message, type) {
     type = type || 'info';
     var container = document.getElementById('toastContainer');
@@ -167,7 +166,6 @@ function updateStatus(select) {
     var status = select.value;
     var oldStatus = select.dataset.oldStatus || '🟡 В работе';
     
-    // Находим заявку, чтобы взять описание
     var ticketDesc = '';
     for (var dirName in directionsData) {
         var dir = directionsData[dirName];
@@ -182,7 +180,6 @@ function updateStatus(select) {
         if (ticketDesc) break;
     }
     
-    // Для эвакуации — берём описание заявки как комментарий
     var note = '';
     if (status === '🔧 Эвакуация') {
         note = ticketDesc;
@@ -207,7 +204,6 @@ function updateStatus(select) {
         if (data.success) {
             select.dataset.oldStatus = status;
             showToastModern('✅ Статус обновлён на ' + status, 'success');
-            // Обновляем данные
             for (var dirName in directionsData) {
                 var dir = directionsData[dirName];
                 if (dir && dir.tickets) {
@@ -321,99 +317,58 @@ function submitAction() {
 // МАССОВОЕ ИЗМЕНЕНИЕ СТАТУСОВ
 // ============================================================
 
-// Инициализация массового выделения
-function initBulkSelection() {
-    // Удаляем старую панель, если есть
-    var oldPanel = document.getElementById('bulkSelectHeader');
-    if (oldPanel) oldPanel.remove();
+// Включение/выключение режима массового выделения
+function toggleBulkMode() {
+    bulkModeActive = !bulkModeActive;
+    var btn = document.getElementById('bulkModeBtn');
+    var panel = document.getElementById('bulkPanel');
     
-    // Находим контейнер с заявками
-    var tabContent = document.querySelector('.tab-content.active');
-    if (!tabContent) return;
-    
-    var container = tabContent.querySelector('#renderDir1, #renderDir2, #renderDir3, #renderDir4, #renderDir5');
-    if (!container) return;
-    
-    // Проверяем, есть ли заявки
-    var tickets = container.querySelectorAll('.ticket-row');
-    if (tickets.length === 0) return;
-    
-    // Создаем панель массовых действий
-    var bulkHeader = document.createElement('div');
-    bulkHeader.id = 'bulkSelectHeader';
-    bulkHeader.className = 'bulk-select-header';
-    bulkHeader.innerHTML = `
-        <div style="display:flex;align-items:center;gap:6px;">
-            <input type="checkbox" id="selectAll">
-            <label for="selectAll">Выбрать все</label>
-        </div>
-        <div class="bulk-actions">
-            <span class="selected-count" id="selectedCount">Выбрано: 0</span>
-            <select id="bulkStatusSelect">
-                <option value="">Изменить статус...</option>
-                <option value="🟡 В работе">🟡 В работе</option>
-                <option value="✅ Выполнено">✅ Выполнено</option>
-                <option value="🔵 Доделать">🔵 Доделать</option>
-                <option value="🔧 Эвакуация">🔧 Эвакуация</option>
-            </select>
-            <button class="btn-apply" id="applyBulkStatus" disabled>Применить</button>
-            <button class="btn-clear" id="clearSelection">Снять все</button>
-        </div>
-    `;
-    
-    // Вставляем панель перед заявками
-    var parent = container.parentNode;
-    parent.insertBefore(bulkHeader, container);
-    
-    // Добавляем чекбоксы к заявкам
-    addCheckboxesToTickets(container);
-    
-    // Настраиваем обработчики
-    setupBulkEventListeners(container);
-    
-    // Обновляем счетчик
-    updateBulkUI();
+    if (bulkModeActive) {
+        btn.textContent = '❌ Выйти из массового режима';
+        btn.classList.add('active');
+        panel.classList.add('active');
+        selectedRequests.clear();
+        enableBulkMode();
+    } else {
+        btn.textContent = '📋 Массовое изменение статуса';
+        btn.classList.remove('active');
+        panel.classList.remove('active');
+        disableBulkMode();
+        selectedRequests.clear();
+        updateBulkUI();
+    }
 }
 
-// Добавление чекбоксов к заявкам
-function addCheckboxesToTickets(container) {
-    var rows = container.querySelectorAll('.ticket-row');
-    rows.forEach(function(row, index) {
-        // Проверяем, есть ли уже чекбокс
-        if (row.querySelector('.select-checkbox')) return;
-        
-        // Получаем UID
-        var uid = row.dataset.uid || row.getAttribute('data-uid');
-        if (!uid) return;
-        
-        // Создаем ячейку с чекбоксом
-        var selectCell = document.createElement('span');
-        selectCell.className = 'select-cell';
-        
-        var checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.className = 'select-checkbox';
-        checkbox.dataset.uid = uid;
-        checkbox.id = 'select_' + uid;
-        checkbox.setAttribute('aria-label', 'Выбрать заявку ' + uid);
-        
-        selectCell.appendChild(checkbox);
-        
-        // Вставляем в начало строки
-        row.prepend(selectCell);
-        
-        // Обработчик изменения
-        checkbox.addEventListener('change', function(e) {
-            e.stopPropagation();
-            handleTicketSelect(this, uid, row);
-        });
-        
-        // Клик по строке для выделения
+// Включение режима массового выделения
+function enableBulkMode() {
+    var rows = document.querySelectorAll('.ticket-row');
+    rows.forEach(function(row) {
+        row.classList.add('bulk-mode');
+        // Добавляем чекбокс, если его нет
+        if (!row.querySelector('.select-checkbox')) {
+            var checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'select-checkbox';
+            var uid = row.dataset.uid || row.getAttribute('data-uid');
+            if (uid) {
+                checkbox.dataset.uid = uid;
+                checkbox.id = 'select_' + uid;
+            }
+            row.prepend(checkbox);
+            
+            checkbox.addEventListener('change', function(e) {
+                e.stopPropagation();
+                var row = this.closest('.ticket-row');
+                var uid = this.dataset.uid;
+                handleTicketSelect(this, uid, row);
+            });
+        }
+        // Добавляем обработчик клика по строке
         row.addEventListener('click', function(e) {
-            // Игнорируем клики по кнопкам, селектам и ссылкам
             if (e.target.closest('button') || e.target.closest('select') || 
                 e.target.closest('a') || e.target.closest('.status-select') ||
-                e.target.closest('.master-select') || e.target.closest('.action-btn')) {
+                e.target.closest('.master-select') || e.target.closest('.action-btn') ||
+                e.target.closest('.select-checkbox')) {
                 return;
             }
             var cb = this.querySelector('.select-checkbox');
@@ -423,6 +378,22 @@ function addCheckboxesToTickets(container) {
             }
         });
     });
+    updateBulkUI();
+}
+
+// Выключение режима массового выделения
+function disableBulkMode() {
+    var rows = document.querySelectorAll('.ticket-row');
+    rows.forEach(function(row) {
+        row.classList.remove('bulk-mode');
+        var checkbox = row.querySelector('.select-checkbox');
+        if (checkbox) checkbox.remove();
+        // Убираем обработчики (клонируем для удаления)
+        var newRow = row.cloneNode(true);
+        row.parentNode.replaceChild(newRow, row);
+    });
+    selectedRequests.clear();
+    updateBulkUI();
 }
 
 // Обработка выбора заявки
@@ -442,72 +413,30 @@ function updateBulkUI() {
     var count = selectedRequests.size;
     var countEl = document.getElementById('selectedCount');
     var applyBtn = document.getElementById('applyBulkStatus');
-    var selectAll = document.getElementById('selectAll');
     
     if (countEl) countEl.textContent = 'Выбрано: ' + count;
     if (applyBtn) applyBtn.disabled = count === 0;
-    
-    // Обновляем "Выбрать все"
-    if (selectAll) {
-        var total = document.querySelectorAll('.select-checkbox').length;
-        var checked = document.querySelectorAll('.select-checkbox:checked').length;
-        selectAll.checked = total > 0 && checked === total;
-        selectAll.indeterminate = checked > 0 && checked < total;
-    }
-}
-
-// Настройка обработчиков
-function setupBulkEventListeners(container) {
-    // Выбрать все
-    var selectAll = document.getElementById('selectAll');
-    if (selectAll) {
-        selectAll.addEventListener('change', function() {
-            var checkboxes = container.querySelectorAll('.select-checkbox');
-            checkboxes.forEach(function(cb) {
-                if (cb.checked !== this.checked) {
-                    cb.checked = this.checked;
-                    cb.dispatchEvent(new Event('change'));
-                }
-            }.bind(this));
-        });
-    }
-    
-    // Применить статус
-    var applyBtn = document.getElementById('applyBulkStatus');
-    if (applyBtn) {
-        applyBtn.addEventListener('click', function() {
-            var statusSelect = document.getElementById('bulkStatusSelect');
-            var status = statusSelect.value;
-            
-            if (!status) {
-                showToastModern('Выберите статус для применения', 'error');
-                return;
-            }
-            
-            if (selectedRequests.size === 0) {
-                showToastModern('Нет выбранных заявок', 'error');
-                return;
-            }
-            
-            if (!confirm('Изменить статус на "' + status + '" для ' + selectedRequests.size + ' заявок?')) {
-                return;
-            }
-            
-            applyBulkStatus(Array.from(selectedRequests), status);
-        });
-    }
-    
-    // Снять выделение
-    var clearBtn = document.getElementById('clearSelection');
-    if (clearBtn) {
-        clearBtn.addEventListener('click', function() {
-            clearSelection();
-        });
-    }
 }
 
 // Применение массового статуса
-async function applyBulkStatus(uids, status) {
+async function applyBulkStatus() {
+    var statusSelect = document.getElementById('bulkStatusSelect');
+    var status = statusSelect.value;
+    
+    if (!status) {
+        showToastModern('Выберите статус для применения', 'error');
+        return;
+    }
+    
+    if (selectedRequests.size === 0) {
+        showToastModern('Нет выбранных заявок', 'error');
+        return;
+    }
+    
+    if (!confirm('Изменить статус на "' + status + '" для ' + selectedRequests.size + ' заявок?')) {
+        return;
+    }
+    
     var applyBtn = document.getElementById('applyBulkStatus');
     if (applyBtn) {
         applyBtn.disabled = true;
@@ -518,17 +447,18 @@ async function applyBulkStatus(uids, status) {
         var response = await fetch('/api/bulk_update_status', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ uids: uids, status: status })
+            body: JSON.stringify({ 
+                uids: Array.from(selectedRequests), 
+                status: status 
+            })
         });
         
         var data = await response.json();
         
         if (data.success) {
-            showToastModern('✅ Статус изменен для ' + uids.length + ' заявок', 'success');
-            // Обновляем интерфейс
-            updateRequestStatuses(uids, status);
-            clearSelection();
-            // Перезагружаем данные через 2 секунды
+            showToastModern('✅ Статус изменен для ' + selectedRequests.size + ' заявок', 'success');
+            selectedRequests.clear();
+            updateBulkUI();
             setTimeout(function() {
                 location.reload();
             }, 1500);
@@ -546,39 +476,12 @@ async function applyBulkStatus(uids, status) {
     }
 }
 
-// Обновление статусов в интерфейсе
-function updateRequestStatuses(uids, status) {
-    uids.forEach(function(uid) {
-        var rows = document.querySelectorAll('.ticket-row');
-        rows.forEach(function(row) {
-            if (row.dataset.uid === uid) {
-                var statusSelect = row.querySelector('.status-select');
-                if (statusSelect) {
-                    statusSelect.value = status;
-                    statusSelect.dataset.oldStatus = status;
-                    
-                    // Обновляем класс для цвета
-                    var row = statusSelect.closest('.ticket-row');
-                    if (row) {
-                        var classes = ['evacuation-row'];
-                        classes.forEach(function(cls) {
-                            row.classList.remove(cls);
-                        });
-                        if (status === '🔧 Эвакуация') {
-                            row.classList.add('evacuation-row');
-                        }
-                    }
-                }
-            }
-        });
-    });
-}
-
 // Очистка выделения
-function clearSelection() {
+function clearBulkSelection() {
     document.querySelectorAll('.select-checkbox:checked').forEach(function(cb) {
         cb.checked = false;
-        cb.dispatchEvent(new Event('change'));
+        var row = cb.closest('.ticket-row');
+        if (row) row.classList.remove('selected');
     });
     selectedRequests.clear();
     updateBulkUI();
@@ -939,8 +842,6 @@ function renderTicketsGrouped(tickets, containerId) {
     
     if (tickets.length === 0) { 
         container.innerHTML = '<div class="empty-state">📭 Нет активных заявок</div>'; 
-        // Инициализируем массовое выделение
-        setTimeout(initBulkSelection, 50);
         return; 
     }
     
@@ -973,7 +874,6 @@ function renderTicketsGrouped(tickets, containerId) {
         for (var j = 0; j < group.tickets.length; j++) {
             var t = group.tickets[j];
             
-            // Определяем статус для отображения
             var statusDisplay = t.status;
             if (statusDisplay === 'pending') statusDisplay = '🟡 В работе';
             else if (statusDisplay === 'done') statusDisplay = '✅ Выполнено';
@@ -994,7 +894,6 @@ function renderTicketsGrouped(tickets, containerId) {
             else if (t.hours_since >= 32) hoursClass = 'warning';
             
             html += '<div class="ticket-row' + (isEvacuation ? ' evacuation-row' : '') + '" data-uid="' + t.uid + '">';
-            // Чекбокс будет добавлен JS-ом
             html += '<span class="id">' + (t.gos || '-') + '</span>';
             html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + (t.display_desc || t.desc || '-') + '</span>';
             html += '<span class="type-badge">' + typeDisplay + '</span>';
@@ -1005,7 +904,6 @@ function renderTicketsGrouped(tickets, containerId) {
             }
             html += '</select></span>';
             
-            // СТАТУС (компактный, не налезает)
             html += '<span style="min-width:80px;display:inline-block;">';
             html += '<select class="status-select" data-uid="' + t.uid + '" data-old-status="' + statusDisplay + '" onchange="updateStatus(this)" style="padding:2px 6px;border-radius:4px;border:1px solid #d1d5db;font-size:10px;background:white;width:100%;max-width:100px;cursor:pointer;">';
             html += '<option value="🟡 В работе"' + (statusDisplay === '🟡 В работе' ? ' selected' : '') + '>🟡 В работе</option>';
@@ -1029,8 +927,10 @@ function renderTicketsGrouped(tickets, containerId) {
     container.innerHTML = html;
     updateChangesInfo();
     
-    // Инициализируем массовое выделение после рендера
-    setTimeout(initBulkSelection, 100);
+    // Если режим массового выделения активен - включаем его снова
+    if (bulkModeActive) {
+        enableBulkMode();
+    }
 }
 
 function onMasterChange(select) {

@@ -171,6 +171,17 @@ h1 {
     background: #64748b;
 }
 
+.btn-bulk {
+    background: #6f42c1;
+    color: white;
+}
+.btn-bulk:hover {
+    background: #5a32a3;
+}
+.btn-bulk.active {
+    background: #dc3545;
+}
+
 .top-actions {
     display: flex;
     gap: 8px;
@@ -325,7 +336,7 @@ h1 {
 }
 
 /* ============================================================
-   СТИЛИ ДЛЯ КАРТОЧЕК ЗАЯВОК (исправление наслаивания)
+   СТИЛИ ДЛЯ КАРТОЧЕК ЗАЯВОК
    ============================================================ */
 .darks-group {
     background: #f8fafc;
@@ -365,7 +376,7 @@ h1 {
     margin-bottom: 4px;
 }
 
-/* Карточка заявки - исправлено наслаивание */
+/* Карточка заявки */
 .ticket-row {
     display: grid;
     grid-template-columns: 70px 1fr 80px 80px 110px 60px 40px;
@@ -379,6 +390,7 @@ h1 {
     margin-bottom: 2px;
     position: relative;
     min-height: 32px;
+    transition: all 0.2s;
 }
 
 .ticket-row:last-child {
@@ -471,6 +483,123 @@ h1 {
     color: #dc3545;
 }
 
+/* Режим массового выделения */
+.ticket-row.bulk-mode {
+    cursor: pointer;
+    padding-left: 35px;
+}
+
+.ticket-row.bulk-mode .select-checkbox {
+    display: inline-block !important;
+}
+
+.ticket-row .select-checkbox {
+    display: none;
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    z-index: 2;
+}
+
+.ticket-row.selected {
+    background: #e3f0ff !important;
+    border: 2px solid #007bff !important;
+    border-radius: 4px;
+}
+
+.ticket-row.selected .select-checkbox {
+    accent-color: #007bff;
+}
+
+/* Панель массового выделения */
+.bulk-panel {
+    display: none;
+    background: #6f42c1;
+    color: white;
+    padding: 8px 16px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.bulk-panel.active {
+    display: flex;
+}
+
+.bulk-panel .info {
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.bulk-panel .info strong {
+    font-size: 18px;
+}
+
+.bulk-panel .actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.bulk-panel select {
+    padding: 4px 10px;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    background: white;
+    min-width: 140px;
+}
+
+.bulk-panel button {
+    padding: 4px 14px;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.bulk-panel .btn-apply {
+    background: #28a745;
+    color: white;
+}
+
+.bulk-panel .btn-apply:hover:not(:disabled) {
+    background: #218838;
+}
+
+.bulk-panel .btn-apply:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.bulk-panel .btn-clear {
+    background: rgba(255,255,255,0.2);
+    color: white;
+}
+
+.bulk-panel .btn-clear:hover {
+    background: rgba(255,255,255,0.3);
+}
+
+.bulk-panel .btn-exit {
+    background: #dc3545;
+    color: white;
+}
+
+.bulk-panel .btn-exit:hover {
+    background: #c82333;
+}
+
 .status-badge {
     font-size: 9px;
     font-weight: 600;
@@ -561,126 +690,6 @@ h1 {
 
 .assign-all-bar .btn:hover {
     background: #16a34a;
-}
-
-/* ============================================================
-   МАССОВОЕ ВЫДЕЛЕНИЕ
-   ============================================================ */
-.bulk-select-header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 8px 12px;
-    background: #f8f9fa;
-    border-radius: 8px;
-    margin-bottom: 10px;
-    flex-wrap: wrap;
-    border: 1px solid #e9ecef;
-}
-
-.bulk-select-header input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
-    cursor: pointer;
-}
-
-.bulk-select-header label {
-    font-size: 12px;
-    font-weight: 500;
-    color: #495057;
-    cursor: pointer;
-}
-
-.bulk-actions {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    flex-wrap: wrap;
-    flex: 1;
-}
-
-.bulk-actions select {
-    padding: 4px 10px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    background: white;
-    font-size: 12px;
-    min-width: 140px;
-}
-
-.bulk-actions button {
-    padding: 4px 14px;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-    font-weight: 500;
-    transition: all 0.2s;
-}
-
-.bulk-actions .btn-apply {
-    background: #007bff;
-    color: white;
-}
-
-.bulk-actions .btn-apply:hover:not(:disabled) {
-    background: #0056b3;
-}
-
-.bulk-actions .btn-apply:disabled {
-    background: #6c757d;
-    cursor: not-allowed;
-    opacity: 0.6;
-}
-
-.bulk-actions .btn-clear {
-    background: #e9ecef;
-    color: #495057;
-}
-
-.bulk-actions .btn-clear:hover {
-    background: #dee2e6;
-}
-
-.bulk-actions .selected-count {
-    font-size: 12px;
-    color: #495057;
-    font-weight: 500;
-    min-width: 80px;
-}
-
-/* Выделенные заявки */
-.ticket-row.selected {
-    background: #e3f0ff !important;
-    border: 2px solid #007bff !important;
-    border-radius: 4px;
-    position: relative;
-}
-
-.ticket-row.selected .select-checkbox {
-    accent-color: #007bff;
-}
-
-/* Чекбокс выбора */
-.ticket-row .select-checkbox {
-    position: relative;
-    width: 16px;
-    height: 16px;
-    cursor: pointer;
-    margin-right: 2px;
-    flex-shrink: 0;
-}
-
-/* Адаптация grid для чекбокса */
-.ticket-row {
-    grid-template-columns: 24px 60px 1fr 70px 80px 100px 55px 35px;
-    gap: 3px;
-}
-
-.ticket-row .select-cell {
-    display: flex;
-    align-items: center;
-    justify-content: center;
 }
 
 /* Модалка */
@@ -887,7 +896,7 @@ h1 {
    ============================================================ */
 @media (max-width: 992px) {
     .ticket-row {
-        grid-template-columns: 20px 50px 1fr 60px 70px 85px 45px 30px;
+        grid-template-columns: 60px 1fr 60px 70px 95px 50px 35px;
         font-size: 10px;
         padding: 4px 6px;
         gap: 2px;
@@ -911,7 +920,7 @@ h1 {
     }
     
     .ticket-row {
-        grid-template-columns: 18px 45px 1fr 55px 65px 75px 40px 28px;
+        grid-template-columns: 50px 1fr 55px 60px 85px 45px 30px;
         font-size: 9px;
         padding: 3px 4px;
         gap: 2px;
@@ -961,18 +970,17 @@ h1 {
         align-items: stretch;
     }
     
-    .bulk-select-header {
+    .bulk-panel {
         flex-direction: column;
         align-items: stretch;
-        gap: 8px;
-        padding: 8px;
+        gap: 6px;
     }
     
-    .bulk-actions {
+    .bulk-panel .actions {
         flex-wrap: wrap;
     }
     
-    .bulk-actions select {
+    .bulk-panel select {
         flex: 1;
         min-width: 100px;
     }
@@ -985,7 +993,7 @@ h1 {
 
 @media (max-width: 480px) {
     .ticket-row {
-        grid-template-columns: 16px 40px 1fr 50px 60px 70px 35px 24px;
+        grid-template-columns: 40px 1fr 50px 55px 75px 40px 28px;
         font-size: 8px;
         padding: 2px 3px;
         gap: 1px;
