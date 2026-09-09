@@ -1026,3 +1026,156 @@ h1 {
         font-size: 12px;
     }
 }
+/* ============================================================
+   СТАТИСТИКА - ЦВЕТА ДЛЯ ЭВАКУАЦИИ
+   ============================================================ */
+.stat-card .num#evacuationCount {
+    color: #ea580c;
+}
+
+/* ============================================================
+   СТИЛИ ДЛЯ КАРТОЧЕК ЭВАКУАЦИИ
+   ============================================================ */
+.ticket-row.evacuation-row {
+    background: #fff3e0 !important;
+    border-left: 4px solid #f59e0b !important;
+}
+
+.ticket-row.evacuation-row .status-select {
+    border-color: #f59e0b !important;
+}
+
+/* ============================================================
+   ПАНЕЛЬ МАССОВОГО ВЫДЕЛЕНИЯ
+   ============================================================ */
+.bulk-panel {
+    display: none;
+    background: #6f42c1;
+    color: white;
+    padding: 8px 16px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.bulk-panel.active {
+    display: flex;
+}
+
+.bulk-panel .info {
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.bulk-panel .info strong {
+    font-size: 18px;
+}
+
+.bulk-panel .actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.bulk-panel select {
+    padding: 4px 10px;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    background: white;
+    min-width: 140px;
+}
+
+.bulk-panel button {
+    padding: 4px 14px;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.bulk-panel .btn-apply {
+    background: #28a745;
+    color: white;
+}
+
+.bulk-panel .btn-apply:hover:not(:disabled) {
+    background: #218838;
+}
+
+.bulk-panel .btn-apply:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.bulk-panel .btn-clear {
+    background: rgba(255,255,255,0.2);
+    color: white;
+}
+
+.bulk-panel .btn-clear:hover {
+    background: rgba(255,255,255,0.3);
+}
+
+.bulk-panel .btn-exit {
+    background: #dc3545;
+    color: white;
+}
+
+.bulk-panel .btn-exit:hover {
+    background: #c82333;
+}
+
+/* ============================================================
+   КАРТОЧКИ ЗАЯВОК - РЕЖИМ МАССОВОГО ВЫДЕЛЕНИЯ
+   ============================================================ */
+.ticket-row.bulk-mode {
+    cursor: pointer;
+    padding-left: 35px;
+}
+
+.ticket-row.bulk-mode .select-checkbox {
+    display: inline-block !important;
+}
+
+.ticket-row .select-checkbox {
+    display: none;
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    z-index: 2;
+}
+
+.ticket-row.selected {
+    background: #e3f0ff !important;
+    border: 2px solid #007bff !important;
+    border-radius: 4px;
+}
+
+.ticket-row.selected .select-checkbox {
+    accent-color: #007bff;
+}
+
+/* ============================================================
+   КНОПКА МАССОВОГО ИЗМЕНЕНИЯ
+   ============================================================ */
+.btn-bulk {
+    background: #6f42c1;
+    color: white;
+}
+.btn-bulk:hover {
+    background: #5a32a3;
+}
+.btn-bulk.active {
+    background: #dc3545;
+}

@@ -252,15 +252,28 @@ def get_tickets_from_sheets():
                 if len(row) < 14:
                     continue
                 darks_num = row[0].strip()
-                status = row[7].strip() if len(row) > 7 else ''
-                if status in ['Выполнено', '✅ Выполнено', 'done']:
+                status_raw = row[7].strip() if len(row) > 7 else ''
+                note = row[9].strip() if len(row) > 9 else ''
+                
+                # ПРАВИЛЬНОЕ РАСПОЗНАВАНИЕ СТАТУСОВ
+                if status_raw in ['Выполнено', '✅ Выполнено', 'done']:
                     status = 'done'
-                elif status in ['🔵 Доделать', 'Доделать']:
+                elif status_raw in ['🔵 Доделать', 'Доделать']:
                     status = 'todo'
-                elif status in ['⏹️ Обработано', 'Обработано', 'Вело отсутствует']:
+                elif status_raw in ['⏹️ Обработано', 'Обработано', 'Вело отсутствует']:
                     status = 'fail'
+                elif status_raw in ['🔧 Эвакуация', 'Эвакуация']:
+                    status = 'todo'
+                    # Если есть комментарий в J, сохраняем его
+                    if note:
+                        note = f'ЭВАКУАЦИЯ: {note}'
+                    else:
+                        # Если нет комментария, берем описание заявки
+                        desc = row[2].strip() if len(row) > 2 else ''
+                        note = f'ЭВАКУАЦИЯ: {desc}'
                 else:
                     status = 'pending'
+                
                 is_done = status in ['done', 'fail']
                 created_str = row[5].strip() if len(row) > 5 else ''
                 hours_since = get_hours_since(created_str)
@@ -288,13 +301,17 @@ def get_tickets_from_sheets():
                 direction = row[11].strip() if len(row) > 11 else ''
                 if not direction and darks_num in darks_ref:
                     direction = darks_ref[darks_num].get('direction', '')
-                note = row[9].strip() if len(row) > 9 else ''
                 display_desc = row[2].strip() if len(row) > 2 else ''
                 if status == 'todo' and note and 'ЗАБРАЛИ:' in note:
                     match = re.search(r'ЗАБРАЛИ:\s*(\d+)', note)
                     if match:
                         count = match.group(1)
                         display_desc = f'Вернуть {count} АКБ (забирали на ремонт)'
+                
+                # Для эвакуации показываем описание из комментария
+                if status == 'todo' and note and note.startswith('ЭВАКУАЦИЯ:'):
+                    display_desc = note.replace('ЭВАКУАЦИЯ: ', '')
+                
                 tickets.append({
                     'source': 'Заявки',
                     'darks': darks_num,
@@ -351,9 +368,16 @@ def get_tickets_from_sheets():
                 uid = row[1].strip() if len(row) > 1 else ''
                 status_raw = row[3].strip() if len(row) > 3 else ''
                 status_l = row[11].strip() if len(row) > 11 else ''
+                note = row[12].strip() if len(row) > 12 else ''
+                
                 if status_raw == 'Решено' or status_l == 'Выполнено':
                     status = 'done'
                     is_done = True
+                elif status_l == 'Эвакуация':
+                    status = 'todo'
+                    is_done = False
+                    if note:
+                        note = f'ЭВАКУАЦИЯ: {note}'
                 else:
                     status = 'pending'
                     is_done = False
@@ -371,6 +395,7 @@ def get_tickets_from_sheets():
                     'hours_since': hours_since,
                     'master': row[13].strip() if len(row) > 13 else '',
                     'status': status,
+                    'note': note,
                     'uid': uid,
                     'row_index': idx,
                     'address': darks_ref.get(darks_num, {}).get('address', ''),
@@ -507,7 +532,7 @@ def clear_all_masters():
         return 0
 
 def update_status_in_google_sheets(uid, status, note=''):
-    """Обновляет статус заявки в Google Sheets (БЕЗ записи в отчет)"""
+    """Обновляет статус заявки в Google Sheets"""
     try:
         sheet_client = get_sheet_client()
         
@@ -873,17 +898,28 @@ def admin_panel():
 @app.route('/api/sync')
 @login_required
 def api_sync():
-    """Полная синхронизация с Google Sheets"""
+    """Полная синхронизация с Google Sheets - обновляет admin_cache на сервере"""
     global uid_index, darks_ref
     try:
+        logger.info("🔄 Начинаем синхронизацию с Google Sheets...")
+        
+        # Перезагружаем справочник дарксторов
         darks_ref = load_darks_reference()
+        
+        # Получаем свежие данные из Google Sheets
         tickets = get_tickets_from_sheets()
+        
+        # Обновляем индекс
         uid_index = build_uid_index(tickets)
+        
+        # Сохраняем админ-кэш (обновляем файл на сервере)
         save_admin_cache(tickets)
+        
+        # Обновляем кэши всех мастеров
         refresh_all_master_caches()
         
         logger.info(f"✅ Синхронизация завершена: {len(tickets)} заявок")
-        return jsonify({'success': True, 'tickets': tickets})
+        return jsonify({'success': True, 'tickets': tickets, 'count': len(tickets)})
     except Exception as e:
         logger.error(f"Ошибка синхронизации: {e}")
         return jsonify({'success': False, 'error': str(e)})
@@ -937,7 +973,7 @@ def api_notify_curators():
 @app.route('/api/update_status', methods=['POST'])
 @login_required
 def api_update_status():
-    """Обновляет статус заявки в админке и Google Sheets (БЕЗ записи в отчет)"""
+    """Обновляет статус заявки в админке и Google Sheets"""
     data = request.json
     uid = data.get('uid')
     status_display = data.get('status')
@@ -956,6 +992,15 @@ def api_update_status():
         }
         
         new_status = status_map.get(status_display, 'pending')
+        
+        # Если это эвакуация и note пустой - берем описание заявки
+        if status_display == '🔧 Эвакуация' and not note:
+            # Находим заявку
+            tickets = get_tickets_from_sheets()
+            for t in tickets:
+                if t.get('uid') == uid:
+                    note = t.get('desc', 'Эвакуация')
+                    break
         
         update_ticket_in_admin_cache(uid, new_status, note, status_display)
         update_status_in_google_sheets(uid, status_display, note)
@@ -978,7 +1023,7 @@ def api_update_status():
         return jsonify({'success': False, 'error': str(e)})
 
 # ============================================================
-# МАССОВОЕ ОБНОВЛЕНИЕ СТАТУСОВ (BATCH + КОММЕНТАРИЙ)
+# МАССОВОЕ ОБНОВЛЕНИЕ СТАТУСОВ (BATCH)
 # ============================================================
 @app.route('/api/bulk_update_status', methods=['POST'])
 @login_required
@@ -994,6 +1039,10 @@ def api_bulk_update_status():
         if not uids or not status_display:
             return jsonify({'success': False, 'error': 'Не указаны UID или статус'}), 400
         
+        # Получаем все заявки для поиска описаний
+        all_tickets = get_tickets_from_sheets()
+        tickets_by_uid = {t.get('uid'): t for t in all_tickets}
+        
         updates_zayavki = []
         updates_import = []
         updated_count = 0
@@ -1006,13 +1055,14 @@ def api_bulk_update_status():
             row_idx = found['row_index']
             source = found['source']
             
+            # Для эвакуации - берем описание заявки
             final_comment = comment
-            if status_display == '🔧 Эвакуация' and not final_comment:
-                tickets = get_tickets_from_sheets()
-                for t in tickets:
-                    if t.get('uid') == uid:
-                        final_comment = t.get('desc', 'Эвакуация')
-                        break
+            if status_display == '🔧 Эвакуация':
+                ticket = tickets_by_uid.get(uid)
+                if ticket:
+                    final_comment = ticket.get('desc', 'Эвакуация')
+                else:
+                    final_comment = 'Эвакуация'
             
             if source == 'Заявки':
                 updates_zayavki.append({'range': f'H{row_idx}', 'values': [[status_display]]})
@@ -1044,6 +1094,7 @@ def api_bulk_update_status():
             worksheet.batch_update(updates_import)
             logger.info(f"✅ Обновлено {len(updates_import)} ячеек в 'Импорт М4'")
         
+        # ОБНОВЛЯЕМ АДМИН-КЭШ ПОЛНОСТЬЮ (перезагружаем данные из Google Sheets)
         tickets = get_tickets_from_sheets()
         save_admin_cache(tickets)
         
@@ -1079,8 +1130,15 @@ def api_admin_action():
             update_status_in_google_sheets(uid, status_display, extra)
         elif action == 'evacuation':
             status_display = '🔧 Эвакуация'
-            update_ticket_in_admin_cache(uid, 'todo', f'ЭВАКУАЦИЯ: {extra}', status_display)
-            update_status_in_google_sheets(uid, status_display, f'ЭВАКУАЦИЯ: {extra}')
+            # Берем описание заявки
+            tickets = get_tickets_from_sheets()
+            desc = ''
+            for t in tickets:
+                if t.get('uid') == uid:
+                    desc = t.get('desc', 'Эвакуация')
+                    break
+            update_ticket_in_admin_cache(uid, 'todo', f'ЭВАКУАЦИЯ: {desc}', status_display)
+            update_status_in_google_sheets(uid, status_display, desc)
         elif action == 'fail':
             status_display = '🔵 Доделать'
             update_ticket_in_admin_cache(uid, 'fail', 'Вело отсутствует', status_display)

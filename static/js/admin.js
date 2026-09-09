@@ -166,13 +166,14 @@ function updateStatus(select) {
     var status = select.value;
     var oldStatus = select.dataset.oldStatus || '🟡 В работе';
     
+    // Находим описание заявки для эвакуации
     var ticketDesc = '';
     for (var dirName in directionsData) {
         var dir = directionsData[dirName];
         if (dir && dir.tickets) {
             for (var i = 0; i < dir.tickets.length; i++) {
                 if (dir.tickets[i].uid === uid) {
-                    ticketDesc = dir.tickets[i].desc || 'Описание отсутствует';
+                    ticketDesc = dir.tickets[i].desc || 'Эвакуация';
                     break;
                 }
             }
@@ -180,19 +181,11 @@ function updateStatus(select) {
         if (ticketDesc) break;
     }
     
+    // Для эвакуации - берем описание заявки как комментарий (НЕ СПРАШИВАЕМ)
     var note = '';
     if (status === '🔧 Эвакуация') {
-        note = prompt('Введите причину эвакуации:');
-        if (note === null) {
-            select.value = oldStatus;
-            return;
-        }
-        if (!note.trim()) {
-            showToastModern('❌ Укажите причину эвакуации!', 'error');
-            select.value = oldStatus;
-            return;
-        }
-        if (!confirm('Отправить заявку "' + uid + '" на эвакуацию?\nПричина: ' + note)) {
+        note = ticketDesc || 'Эвакуация';
+        if (!confirm('Отправить заявку "' + uid + '" на эвакуацию?\nКомментарий: ' + note)) {
             select.value = oldStatus;
             return;
         }
@@ -229,7 +222,7 @@ function updateStatus(select) {
         }
     }
     
-    // Отправляем на сервер (без записи в отчет)
+    // Отправляем на сервер
     fetch('/api/update_status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -240,8 +233,7 @@ function updateStatus(select) {
         if (data.success) {
             select.dataset.oldStatus = status;
             showToastModern('✅ Статус обновлён на ' + status, 'success');
-            // Перезагружаем данные
-            location.reload();
+            setTimeout(function() { location.reload(); }, 500);
         } else {
             showToastModern('❌ Ошибка: ' + data.error, 'error');
             select.value = oldStatus;
@@ -290,11 +282,14 @@ function selectAction(action) {
     if (['done', 'evacuation', 'taken'].indexOf(action) !== -1) {
         document.getElementById('actionExtra').style.display = 'block';
         if (action === 'evacuation') {
-            document.getElementById('actionExtraInput').placeholder = 'Причина эвакуации...';
+            document.getElementById('actionExtraInput').placeholder = 'Причина эвакуации (будет взято из описания)';
+            document.getElementById('actionExtraInput').readOnly = true;
         } else if (action === 'taken') {
             document.getElementById('actionExtraInput').placeholder = 'Количество АКБ...';
+            document.getElementById('actionExtraInput').readOnly = false;
         } else {
             document.getElementById('actionExtraInput').placeholder = 'Запчасти...';
+            document.getElementById('actionExtraInput').readOnly = false;
         }
     } else {
         document.getElementById('actionExtra').style.display = 'none';
@@ -308,8 +303,23 @@ function submitAction() {
     }
     var extra = document.getElementById('actionExtraInput').value.trim();
     if (['done', 'evacuation', 'taken'].indexOf(actionTarget.action) !== -1 && !extra) {
-        alert('Заполните дополнительную информацию!');
-        return;
+        if (actionTarget.action === 'evacuation') {
+            // Для эвакуации берем описание из заявки автоматически
+            var tickets = getAllTickets();
+            for (var i = 0; i < tickets.length; i++) {
+                if (tickets[i].uid === actionTarget.uid) {
+                    extra = tickets[i].desc || 'Эвакуация';
+                    break;
+                }
+            }
+            if (!extra) {
+                alert('Не удалось получить описание заявки!');
+                return;
+            }
+        } else {
+            alert('Заполните дополнительную информацию!');
+            return;
+        }
     }
     if (!confirm('Применить действие "' + actionTarget.action + '" к заявке ' + actionTarget.uid + '?')) return;
     fetch('/api/admin_action', {
@@ -449,17 +459,6 @@ async function applyBulkStatus() {
         return;
     }
     
-    // Запрашиваем комментарий для эвакуации
-    var comment = '';
-    if (status === '🔧 Эвакуация') {
-        comment = prompt('Введите причину эвакуации (будет записана в комментарий):');
-        if (comment === null) return;
-        if (!comment.trim()) {
-            showToastModern('❌ Укажите причину эвакуации!', 'error');
-            return;
-        }
-    }
-    
     if (!confirm('Изменить статус на "' + status + '" для ' + selectedRequests.size + ' заявок?')) {
         return;
     }
@@ -473,13 +472,14 @@ async function applyBulkStatus() {
     try {
         var uids = Array.from(selectedRequests);
         
+        // Для эвакуации - передаем пустой comment, сервер сам возьмет описание
         var response = await fetch('/api/bulk_update_status', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
                 uids: uids, 
                 status: status,
-                comment: comment,
+                comment: '',  // Пустой - сервер сам возьмет описание
                 skip_report: true
             })
         });
@@ -491,12 +491,10 @@ async function applyBulkStatus() {
             selectedRequests.clear();
             updateBulkUI();
             
-            // Выходим из режима массового выделения
             if (bulkModeActive) {
                 toggleBulkMode();
             }
             
-            // Перезагружаем страницу
             setTimeout(function() {
                 location.reload();
             }, 1000);
@@ -865,7 +863,7 @@ function renderTicketsGrouped(tickets, containerId) {
         if (!allTickets[i].is_done) active.push(allTickets[i]);
     }
     
-    // Считаем статусы КОРРЕКТНО
+    // Считаем статусы КОРРЕКТНО - эвакуация определяется по статусу 'todo' И note с 'ЭВАКУАЦИЯ:'
     var pending = 0;
     var evacuation = 0;
     var todo = 0;
@@ -873,7 +871,7 @@ function renderTicketsGrouped(tickets, containerId) {
     
     for (var i = 0; i < active.length; i++) {
         var t = active[i];
-        // Проверяем на эвакуацию (проверяем статус И наличие note с ЭВАКУАЦИЯ)
+        // Проверяем на эвакуацию
         if (t.status === 'evacuation' || 
             (t.status === 'todo' && t.note && t.note.indexOf('ЭВАКУАЦИЯ:') !== -1)) {
             evacuation++;
