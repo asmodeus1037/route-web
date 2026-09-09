@@ -22,7 +22,7 @@ app.secret_key = secrets.token_hex(16)
 # НАСТРОЙКА
 # ============================================================
 CREDENTIALS_FILE = "/data/credentials.json"
-SHEET_NAME = "Система ремонта ВВ"  # ← НОВАЯ ТАБЛИЦА
+SHEET_NAME = "Система ремонта ВВ"  # НОВАЯ ТАБЛИЦА
 START_COORDS = "55.775267, 37.745690"
 MASTERS = ['Антон', 'Сергей', 'Руслан', 'Транзит', 'Алексей']
 CACHE_TTL = 300
@@ -174,7 +174,7 @@ def update_ticket_in_admin_cache(uid, new_status, note='', display_desc=''):
         return False
 
 # ============================================================
-# GOOGLE SHEETS — ТОЛЬКО ДЛЯ ЧТЕНИЯ!
+# GOOGLE SHEETS
 # ============================================================
 def get_sheet_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -238,7 +238,7 @@ def generate_ticket_id(date_str):
         return None
 
 # ============================================================
-# ЧТЕНИЕ ЗАЯВОК ИЗ ТАБЛИЦЫ (ТОЛЬКО ДЛЯ КЭША)
+# ЧТЕНИЕ ЗАЯВОК ИЗ ТАБЛИЦЫ (С НОВЫМИ СТОЛБЦАМИ)
 # ============================================================
 def get_tickets_from_sheets():
     global darks_ref
@@ -246,16 +246,16 @@ def get_tickets_from_sheets():
     tickets = []
     darks_ref = load_darks_reference()
     
-    # Читаем ТОЛЬКО лист "Заявки" для кэша
+    # Читаем лист "Заявки" (НОВАЯ СТРУКТУРА)
     try:
         worksheet = sheet_client.worksheet("Заявки")
         rows = worksheet.get_all_values()
         if len(rows) > 1:
             for idx, row in enumerate(rows[1:], start=2):
-                if len(row) < 15:
+                if len(row) < 14:
                     continue
-                darks_num = row[0].strip()
-                status = row[7].strip() if len(row) > 7 else ''
+                darks_num = row[0].strip()  # A
+                status = row[7].strip() if len(row) > 7 else ''  # H
                 if status in ['Выполнено', '✅ Выполнено', 'done']:
                     status = 'done'
                 elif status in ['🔵 Доделать', 'Доделать']:
@@ -265,21 +265,21 @@ def get_tickets_from_sheets():
                 else:
                     status = 'pending'
                 is_done = status in ['done', 'fail']
-                created_str = row[5].strip() if len(row) > 5 else ''
+                created_str = row[5].strip() if len(row) > 5 else ''  # F
                 hours_since = get_hours_since(created_str)
-                sent_date = row[14].strip() if len(row) > 14 else ''
-                bike_type = row[1].strip() if len(row) > 1 else ''
-                bike_subtype = row[8].strip() if len(row) > 8 else ''
+                sent_date = row[13].strip() if len(row) > 13 else ''  # N
+                bike_type = row[1].strip() if len(row) > 1 else ''  # B
+                bike_subtype = row[8].strip() if len(row) > 8 else ''  # I
                 if bike_type == 'Электровелосипед' and bike_subtype:
                     display_type = bike_subtype
                 else:
                     display_type = bike_type
-                uid = row[12].strip() if len(row) > 12 else ''
+                uid = row[10].strip() if len(row) > 10 else ''  # K
                 if not uid and created_str:
                     uid = generate_ticket_id(created_str)
                     if uid:
                         try:
-                            worksheet.update_cell(idx, 13, uid)
+                            worksheet.update_cell(idx, 11, uid)
                         except:
                             pass
                 if not row[7].strip():
@@ -288,11 +288,11 @@ def get_tickets_from_sheets():
                         status = 'pending'
                     except:
                         pass
-                direction = row[13].strip() if len(row) > 13 else ''
+                direction = row[11].strip() if len(row) > 11 else ''  # L
                 if not direction and darks_num in darks_ref:
                     direction = darks_ref[darks_num].get('direction', '')
-                note = row[10].strip() if len(row) > 10 else ''
-                display_desc = row[2].strip() if len(row) > 2 else ''
+                note = row[9].strip() if len(row) > 9 else ''  # J
+                display_desc = row[2].strip() if len(row) > 2 else ''  # C
                 if status == 'todo' and note and 'ЗАБРАЛИ:' in note:
                     match = re.search(r'ЗАБРАЛИ:\s*(\d+)', note)
                     if match:
@@ -305,11 +305,11 @@ def get_tickets_from_sheets():
                     'bike_type': display_type,
                     'bike_subtype': bike_subtype,
                     'desc': display_desc,
-                    'gos': row[3].strip() if len(row) > 3 else '',
-                    'contact': row[4].strip() if len(row) > 4 else '',
+                    'gos': row[3].strip() if len(row) > 3 else '',  # D
+                    'contact': row[4].strip() if len(row) > 4 else '',  # E
                     'created': created_str,
                     'hours_since': hours_since,
-                    'master': row[6].strip() if len(row) > 6 else '',
+                    'master': row[6].strip() if len(row) > 6 else '',  # G
                     'status': status,
                     'note': note,
                     'uid': uid,
@@ -320,13 +320,13 @@ def get_tickets_from_sheets():
                     'sent_date': sent_date,
                     'is_done': is_done,
                     'is_active': not is_done,
-                    'parts': row[10].strip() if len(row) > 10 else '',
+                    'parts': row[9].strip() if len(row) > 9 else '',  # J
                     'display_desc': display_desc
                 })
     except Exception as e:
         logger.error(f"Ошибка чтения 'Заявки': {e}")
     
-    # Читаем ТОЛЬКО лист "Импорт М4" для кэша
+    # Читаем лист "Импорт М4"
     try:
         worksheet = sheet_client.worksheet("Импорт М4")
         rows = worksheet.get_all_values()
@@ -334,10 +334,10 @@ def get_tickets_from_sheets():
             for idx, row in enumerate(rows[1:], start=2):
                 if len(row) < 15:
                     continue
-                obj = row[4].strip() if len(row) > 4 else ''
+                obj = row[4].strip() if len(row) > 4 else ''  # E
                 darks_match = re.search(r'^(\d{4})', obj)
                 darks_num = darks_match.group(1) if darks_match else ''
-                model = row[8].strip() if len(row) > 8 else ''
+                model = row[8].strip() if len(row) > 8 else ''  # I
                 bike_type = 'Не указан'
                 if 'Электровелосипед' in model or 'электро' in model:
                     bike_type = 'Электровелосипед'
@@ -351,29 +351,29 @@ def get_tickets_from_sheets():
                     bike_type = 'Номерной знак'
                 elif 'IoT' in model:
                     bike_type = 'IoT'
-                gos = row[9].strip() if len(row) > 9 else ''
-                uid = row[1].strip() if len(row) > 1 else ''
-                status_raw = row[3].strip() if len(row) > 3 else ''
-                status_l = row[11].strip() if len(row) > 11 else ''
+                gos = row[9].strip() if len(row) > 9 else ''  # J
+                uid = row[1].strip() if len(row) > 1 else ''  # B
+                status_raw = row[3].strip() if len(row) > 3 else ''  # D
+                status_l = row[11].strip() if len(row) > 11 else ''  # L
                 if status_raw == 'Решено' or status_l == 'Выполнено':
                     status = 'done'
                     is_done = True
                 else:
                     status = 'pending'
                     is_done = False
-                created_str = row[6].strip() if len(row) > 6 else ''
+                created_str = row[6].strip() if len(row) > 6 else ''  # G
                 hours_since = get_hours_since(created_str)
-                sent_date = row[14].strip() if len(row) > 14 else ''
+                sent_date = row[13].strip() if len(row) > 13 else ''  # N
                 tickets.append({
                     'source': 'Импорт М4',
                     'darks': darks_num,
                     'type': bike_type,
                     'bike_type': bike_type,
-                    'desc': row[7].strip() if len(row) > 7 else '',
+                    'desc': row[7].strip() if len(row) > 7 else '',  # H
                     'gos': gos,
                     'created': created_str,
                     'hours_since': hours_since,
-                    'master': row[13].strip() if len(row) > 13 else '',
+                    'master': row[13].strip() if len(row) > 13 else '',  # N
                     'status': status,
                     'uid': uid,
                     'row_index': idx,
@@ -383,7 +383,7 @@ def get_tickets_from_sheets():
                     'sent_date': sent_date,
                     'is_done': is_done,
                     'is_active': not is_done,
-                    'parts': row[12].strip() if len(row) > 12 else ''
+                    'parts': row[12].strip() if len(row) > 12 else ''  # M
                 })
     except Exception as e:
         logger.error(f"Ошибка чтения 'Импорт М4': {e}")
@@ -524,10 +524,10 @@ def clear_queue():
     write_queue({'tasks': [], 'last_sync': get_msk_now().strftime('%Y-%m-%d %H:%M:%S')})
 
 # ============================================================
-# ЕДИНСТВЕННАЯ ФУНКЦИЯ ЗАПИСИ — ТОЛЬКО В "ОТЧЕТ МАСТЕРА"!
+# ЗАПИСЬ В "ОТЧЕТ МАСТЕРА" — ТОЛЬКО СЮДА!
 # ============================================================
 def write_to_report(tasks):
-    """Записывает задачи ТОЛЬКО в лист 'Отчет мастера'. НИЧЕГО БОЛЬШЕ НЕ ТРОГАЕТ!"""
+    """Записывает задачи ТОЛЬКО в лист 'Отчет мастера'"""
     try:
         sheet_client = get_sheet_client()
         now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
