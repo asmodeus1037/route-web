@@ -170,5 +170,17 @@
     };
 </script>
 <script src="/static/js/admin.js"></script>
+<!-- Контейнер для уведомлений -->
+<div id="toastContainer" class="toast-container"></div>
+
+<script>
+    // Переопределяем window.__DATA__ с актуальными данными
+    window.__DATA__ = {
+        masters: {{ masters|tojson }},
+        directions: {{ directions|tojson }},
+        now: '{{ now }}'
+    };
+</script>
+<script src="/static/js/admin.js"></script>
 </body>
 </html>

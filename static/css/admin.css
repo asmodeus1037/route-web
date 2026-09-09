@@ -324,12 +324,16 @@ h1 {
     }
 }
 
+/* ============================================================
+   СТИЛИ ДЛЯ КАРТОЧЕК ЗАЯВОК (исправление наслаивания)
+   ============================================================ */
 .darks-group {
     background: #f8fafc;
     border-radius: 8px;
-    padding: 6px 10px;
+    padding: 8px 10px;
     margin-bottom: 6px;
     border-left: 3px solid #3b82f6;
+    position: relative;
 }
 
 .darks-header {
@@ -358,16 +362,23 @@ h1 {
 .darks-contact {
     font-size: 11px;
     color: #64748b;
+    margin-bottom: 4px;
 }
 
+/* Карточка заявки - исправлено наслаивание */
 .ticket-row {
     display: grid;
-    grid-template-columns: 60px 1fr 60px 70px 65px 40px 30px;
-    gap: 3px;
-    padding: 2px 4px;
+    grid-template-columns: 70px 1fr 80px 80px 110px 60px 40px;
+    gap: 4px;
+    padding: 6px 8px;
     border-bottom: 1px solid #eef2f6;
     align-items: center;
     font-size: 11px;
+    background: white;
+    border-radius: 4px;
+    margin-bottom: 2px;
+    position: relative;
+    min-height: 32px;
 }
 
 .ticket-row:last-child {
@@ -383,11 +394,17 @@ h1 {
     font-weight: 600;
     color: #0f172a;
     font-size: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .ticket-row .desc {
     color: #334155;
     font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .ticket-row .type-badge {
@@ -397,21 +414,35 @@ h1 {
     padding: 1px 6px;
     border-radius: 30px;
     display: inline-block;
+    white-space: nowrap;
 }
 
-.ticket-row select {
+.ticket-row select.master-select {
     padding: 2px 4px;
     border: 1px solid #d1d5db;
     border-radius: 4px;
     font-size: 10px;
     background: white;
-    min-width: 65px;
+    width: 100%;
+    max-width: 80px;
+}
+
+.ticket-row .status-select {
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid #d1d5db;
+    font-size: 10px;
+    background: white;
+    width: 100%;
+    max-width: 100px;
+    cursor: pointer;
 }
 
 .ticket-row .hours {
     font-size: 10px;
     color: #64748b;
     font-weight: 500;
+    white-space: nowrap;
 }
 
 .ticket-row .hours.overdue {
@@ -422,6 +453,22 @@ h1 {
 .ticket-row .hours.warning {
     color: #8b5cf6 !important;
     font-weight: 700;
+}
+
+.ticket-row .action-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    color: #64748b;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: 0.15s;
+}
+
+.ticket-row .action-btn:hover {
+    background: #f1f5f9;
+    color: #dc3545;
 }
 
 .status-badge {
@@ -436,22 +483,6 @@ h1 {
 .status-pending {
     background: #fef3c7;
     color: #92400e;
-}
-
-.action-btn {
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    font-size: 14px;
-    color: #64748b;
-    padding: 2px 4px;
-    border-radius: 4px;
-    transition: 0.15s;
-}
-
-.action-btn:hover {
-    background: #f1f5f9;
-    color: #dc3545;
 }
 
 .tab-content {
@@ -532,6 +563,127 @@ h1 {
     background: #16a34a;
 }
 
+/* ============================================================
+   МАССОВОЕ ВЫДЕЛЕНИЕ
+   ============================================================ */
+.bulk-select-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+    border: 1px solid #e9ecef;
+}
+
+.bulk-select-header input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.bulk-select-header label {
+    font-size: 12px;
+    font-weight: 500;
+    color: #495057;
+    cursor: pointer;
+}
+
+.bulk-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    flex: 1;
+}
+
+.bulk-actions select {
+    padding: 4px 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: white;
+    font-size: 12px;
+    min-width: 140px;
+}
+
+.bulk-actions button {
+    padding: 4px 14px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+
+.bulk-actions .btn-apply {
+    background: #007bff;
+    color: white;
+}
+
+.bulk-actions .btn-apply:hover:not(:disabled) {
+    background: #0056b3;
+}
+
+.bulk-actions .btn-apply:disabled {
+    background: #6c757d;
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.bulk-actions .btn-clear {
+    background: #e9ecef;
+    color: #495057;
+}
+
+.bulk-actions .btn-clear:hover {
+    background: #dee2e6;
+}
+
+.bulk-actions .selected-count {
+    font-size: 12px;
+    color: #495057;
+    font-weight: 500;
+    min-width: 80px;
+}
+
+/* Выделенные заявки */
+.ticket-row.selected {
+    background: #e3f0ff !important;
+    border: 2px solid #007bff !important;
+    border-radius: 4px;
+    position: relative;
+}
+
+.ticket-row.selected .select-checkbox {
+    accent-color: #007bff;
+}
+
+/* Чекбокс выбора */
+.ticket-row .select-checkbox {
+    position: relative;
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    margin-right: 2px;
+    flex-shrink: 0;
+}
+
+/* Адаптация grid для чекбокса */
+.ticket-row {
+    grid-template-columns: 24px 60px 1fr 70px 80px 100px 55px 35px;
+    gap: 3px;
+}
+
+.ticket-row .select-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Модалка */
 .modal {
     display: none;
     position: fixed;
@@ -667,32 +819,202 @@ h1 {
     opacity: 0.85;
 }
 
+/* Toast уведомления */
+.toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: 400px;
+    width: 100%;
+}
+
+.toast {
+    padding: 12px 18px;
+    border-radius: 8px;
+    color: white;
+    font-size: 13px;
+    font-weight: 500;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    animation: slideIn 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.toast-success {
+    background: #28a745;
+}
+
+.toast-error {
+    background: #dc3545;
+}
+
+.toast-info {
+    background: #17a2b8;
+}
+
+.toast-close {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 5px;
+    opacity: 0.8;
+}
+
+.toast-close:hover {
+    opacity: 1;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+/* ============================================================
+   АДАПТИВНОСТЬ
+   ============================================================ */
+@media (max-width: 992px) {
+    .ticket-row {
+        grid-template-columns: 20px 50px 1fr 60px 70px 85px 45px 30px;
+        font-size: 10px;
+        padding: 4px 6px;
+        gap: 2px;
+    }
+    
+    .ticket-row .desc {
+        font-size: 10px;
+    }
+    
+    .ticket-row select.master-select,
+    .ticket-row .status-select {
+        font-size: 9px;
+        padding: 1px 3px;
+        max-width: 100%;
+    }
+}
+
 @media (max-width: 768px) {
     body {
         padding: 8px;
     }
+    
     .ticket-row {
-        grid-template-columns: 1fr;
+        grid-template-columns: 18px 45px 1fr 55px 65px 75px 40px 28px;
+        font-size: 9px;
+        padding: 3px 4px;
         gap: 2px;
-        padding: 4px;
+        min-height: 28px;
     }
-    .ticket-row select {
-        width: 100%;
+    
+    .ticket-row .id {
+        font-size: 9px;
     }
+    
+    .ticket-row .desc {
+        font-size: 9px;
+    }
+    
+    .ticket-row .type-badge {
+        font-size: 8px;
+        padding: 0 4px;
+    }
+    
+    .ticket-row select.master-select,
+    .ticket-row .status-select {
+        font-size: 8px;
+        padding: 1px 2px;
+    }
+    
+    .ticket-row .hours {
+        font-size: 9px;
+    }
+    
     .tab-btn {
         font-size: 10px;
         padding: 4px 8px;
         min-width: 50px;
     }
+    
     .filters {
         flex-direction: column;
         align-items: stretch;
     }
+    
     .filters select {
         min-width: auto;
     }
+    
     .save-bar {
         flex-direction: column;
         align-items: stretch;
+    }
+    
+    .bulk-select-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+        padding: 8px;
+    }
+    
+    .bulk-actions {
+        flex-wrap: wrap;
+    }
+    
+    .bulk-actions select {
+        flex: 1;
+        min-width: 100px;
+    }
+    
+    .top-actions .btn {
+        font-size: 10px;
+        padding: 4px 10px;
+    }
+}
+
+@media (max-width: 480px) {
+    .ticket-row {
+        grid-template-columns: 16px 40px 1fr 50px 60px 70px 35px 24px;
+        font-size: 8px;
+        padding: 2px 3px;
+        gap: 1px;
+    }
+    
+    .ticket-row .id {
+        font-size: 8px;
+    }
+    
+    .ticket-row .desc {
+        font-size: 8px;
+    }
+    
+    .ticket-row .type-badge {
+        font-size: 7px;
+        padding: 0 3px;
+    }
+    
+    .ticket-row select.master-select,
+    .ticket-row .status-select {
+        font-size: 7px;
+        padding: 1px 2px;
+    }
+    
+    .ticket-row .hours {
+        font-size: 8px;
+    }
+    
+    .ticket-row .action-btn {
+        font-size: 12px;
     }
 }

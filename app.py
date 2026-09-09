@@ -1371,6 +1371,66 @@ def transit_replace():
         return jsonify({'success': False, 'error': str(e)})
 
 # ============================================================
+# МАССОВОЕ ОБНОВЛЕНИЕ СТАТУСОВ
+# ============================================================
+@app.route('/api/bulk_update_status', methods=['POST'])
+@login_required
+def api_bulk_update_status():
+    """Массовое обновление статусов заявок"""
+    try:
+        data = request.json
+        uids = data.get('uids', [])
+        status_display = data.get('status', '')
+        
+        if not uids or not status_display:
+            return jsonify({'success': False, 'error': 'Не указаны UID или статус'}), 400
+        
+        # Маппинг статусов
+        status_map = {
+            '🟡 В работе': 'pending',
+            '✅ Выполнено': 'done',
+            '🔵 Доделать': 'todo',
+            '🔧 Эвакуация': 'evacuation'
+        }
+        new_status = status_map.get(status_display, 'pending')
+        
+        updated_count = 0
+        
+        # Обновляем каждую заявку
+        for uid in uids:
+            try:
+                # Обновляем в админ-кэше
+                update_ticket_in_admin_cache(uid, new_status, '', status_display)
+                
+                # Обновляем в Google Sheets
+                update_status_in_google_sheets(uid, status_display, '')
+                
+                # Добавляем в очередь
+                add_to_queue({
+                    'uid': uid,
+                    'source': 'Заявки',
+                    'type': 'status_update',
+                    'data': {
+                        'status': status_display,
+                        'new_status': new_status,
+                        'note': ''
+                    }
+                })
+                updated_count += 1
+            except Exception as e:
+                logger.error(f"Ошибка обновления статуса для {uid}: {e}")
+        
+        return jsonify({
+            'success': True,
+            'updated': updated_count,
+            'message': f'Обновлено {updated_count} заявок'
+        })
+        
+    except Exception as e:
+        logger.error(f'Ошибка при массовом обновлении статусов: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+# ============================================================
 # ЗАПУСК
 # ============================================================
 if __name__ == "__main__":
