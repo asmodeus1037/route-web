@@ -22,7 +22,7 @@ app.secret_key = secrets.token_hex(16)
 # НАСТРОЙКА
 # ============================================================
 CREDENTIALS_FILE = "/data/credentials.json"
-SHEET_NAME = "Учет ремонта ВкусВилл"
+SHEET_NAME = "Система ремонта ВВ"
 START_COORDS = "55.775267, 37.745690"
 MASTERS = ['Антон', 'Сергей', 'Руслан', 'Транзит', 'Алексей']
 CACHE_TTL = 300
@@ -106,7 +106,6 @@ def get_admin_cache():
     return read_cache("admin_cache.json")
 
 def save_admin_cache(tickets):
-    # Всегда показываем все 4 направления + Без направления
     directions_data = {
         'Напр 1': {'tickets': [], 'active_count': 0},
         'Напр 2': {'tickets': [], 'active_count': 0},
@@ -115,7 +114,6 @@ def save_admin_cache(tickets):
         'Без направления': {'tickets': [], 'active_count': 0}
     }
     
-    # Распределяем заявки по направлениям
     for t in tickets:
         if not is_active_status(t.get('status')):
             continue
@@ -125,7 +123,6 @@ def save_admin_cache(tickets):
         directions_data[dir_name]['tickets'].append(t)
         directions_data[dir_name]['active_count'] += 1
     
-    # Сохраняем в порядке: Напр 1, Напр 2, Напр 3, Напр 4, Без направления
     order = ['Напр 1', 'Напр 2', 'Напр 3', 'Напр 4', 'Без направления']
     sorted_directions = {}
     for key in order:
@@ -152,21 +149,41 @@ def get_ticket_row_by_uid(uid):
     return None
 
 def find_uid_in_sheets(uid):
-    """Ищет UID в Google Sheets и возвращает строку"""
+    """Ищет UID в Google Sheets и возвращает данные заявки"""
     try:
         sheet_client = get_sheet_client()
         
-        # Ищем в листе "Заявки"
+        # Ищем в листе "Заявки" (столбец K — ID заявки)
         worksheet = sheet_client.worksheet("Заявки")
         cell = worksheet.find(uid)
         if cell:
-            return {'source': 'Заявки', 'row_index': cell.row}
+            row = worksheet.row_values(cell.row)
+            if len(row) >= 14:
+                return {
+                    'source': 'Заявки',
+                    'row_index': cell.row,
+                    'gos': row[3].strip() if len(row) > 3 else '',
+                    'desc': row[2].strip() if len(row) > 2 else '',
+                    'type': row[1].strip() if len(row) > 1 else '',
+                    'darks': row[0].strip() if len(row) > 0 else '',
+                    'created': row[5].strip() if len(row) > 5 else ''
+                }
         
-        # Ищем в листе "Импорт М4"
+        # Ищем в листе "Импорт М4" (столбец B — Номер REQ)
         worksheet = sheet_client.worksheet("Импорт М4")
         cell = worksheet.find(uid)
         if cell:
-            return {'source': 'Импорт М4', 'row_index': cell.row}
+            row = worksheet.row_values(cell.row)
+            if len(row) >= 15:
+                return {
+                    'source': 'Импорт М4',
+                    'row_index': cell.row,
+                    'gos': row[9].strip() if len(row) > 9 else '',
+                    'desc': row[7].strip() if len(row) > 7 else '',
+                    'type': 'Электровелосипед' if 'велосипед' in row[8].lower() else 'Не указан',
+                    'darks': row[4].strip() if len(row) > 4 else '',
+                    'created': row[6].strip() if len(row) > 6 else ''
+                }
         
         return None
     except Exception as e:
@@ -276,11 +293,11 @@ def get_tickets_from_sheets():
         rows = worksheet.get_all_values()
         if len(rows) > 1:
             for idx, row in enumerate(rows[1:], start=2):
-                if len(row) < 15:
+                if len(row) < 14:
                     continue
                 darks_num = row[0].strip()
                 status = row[7].strip() if len(row) > 7 else ''
-                if status in ['Выполнено', '✅ Выполнено', 'done']:
+                if status in ['✅ Выполнено', 'Выполнено', 'done']:
                     status = 'done'
                 elif status in ['🔵 Доделать', 'Доделать']:
                     status = 'todo'
@@ -291,19 +308,19 @@ def get_tickets_from_sheets():
                 is_done = status in ['done', 'fail']
                 created_str = row[5].strip() if len(row) > 5 else ''
                 hours_since = get_hours_since(created_str)
-                sent_date = row[14].strip() if len(row) > 14 else ''
+                sent_date = row[13].strip() if len(row) > 13 else ''
                 bike_type = row[1].strip() if len(row) > 1 else ''
                 bike_subtype = row[8].strip() if len(row) > 8 else ''
                 if bike_type == 'Электровелосипед' and bike_subtype:
                     display_type = bike_subtype
                 else:
                     display_type = bike_type
-                uid = row[12].strip() if len(row) > 12 else ''
+                uid = row[10].strip() if len(row) > 10 else ''
                 if not uid and created_str:
                     uid = generate_ticket_id(created_str)
                     if uid:
                         try:
-                            worksheet.update_cell(idx, 13, uid)
+                            worksheet.update_cell(idx, 11, uid)
                         except:
                             pass
                 if not row[7].strip():
@@ -312,10 +329,10 @@ def get_tickets_from_sheets():
                         status = 'pending'
                     except:
                         pass
-                direction = row[13].strip() if len(row) > 13 else ''
+                direction = row[11].strip() if len(row) > 11 else ''
                 if not direction and darks_num in darks_ref:
                     direction = darks_ref[darks_num].get('direction', '')
-                note = row[10].strip() if len(row) > 10 else ''
+                note = row[9].strip() if len(row) > 9 else ''
                 display_desc = row[2].strip() if len(row) > 2 else ''
                 if status == 'todo' and note and 'ЗАБРАЛИ:' in note:
                     match = re.search(r'ЗАБРАЛИ:\s*(\d+)', note)
@@ -344,7 +361,7 @@ def get_tickets_from_sheets():
                     'sent_date': sent_date,
                     'is_done': is_done,
                     'is_active': not is_done,
-                    'parts': row[10].strip() if len(row) > 10 else '',
+                    'parts': row[9].strip() if len(row) > 9 else '',
                     'display_desc': display_desc
                 })
     except Exception as e:
@@ -385,7 +402,7 @@ def get_tickets_from_sheets():
                     is_done = False
                 created_str = row[6].strip() if len(row) > 6 else ''
                 hours_since = get_hours_since(created_str)
-                sent_date = row[14].strip() if len(row) > 14 else ''
+                sent_date = row[13].strip() if len(row) > 13 else ''
                 tickets.append({
                     'source': 'Импорт М4',
                     'darks': darks_num,
@@ -544,32 +561,34 @@ def add_to_queue(task):
 def clear_queue():
     write_queue({'tasks': [], 'last_sync': get_msk_now().strftime('%Y-%m-%d %H:%M:%S')})
 
-def send_tasks_to_google_sheets(tasks):
-    """Отправляет задачи в Google Sheets"""
+# ============================================================
+# ГЛАВНАЯ ФУНКЦИЯ: ЗАПИСЬ В "ОТЧЕТ МАСТЕРА"
+# ============================================================
+def write_to_report(tasks):
+    """Записывает задачи в лист 'Отчет мастера'"""
     try:
         sheet_client = get_sheet_client()
         now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
-        updates_status = []
-        updates_note = []
-        updates_import = []
-        report_updates = []
         
-        # Получаем лист "Отчет мастера"
+        # Получаем или создаём лист "Отчет мастера"
         try:
             report_sheet = sheet_client.worksheet("Отчет мастера")
         except:
             report_sheet = sheet_client.add_worksheet("Отчет мастера", 100, 20)
-            headers = ['Дата выполнения', 'Мастер', 'ID заявки', 'Госномер', 'Описание', 'Тип техники', 'Количество', 'Статус', 'Запчасти', 'Комментарий', 'Даркстор', 'Время создания']
+            headers = ['Дата выполнения', 'Мастер', 'ID заявки', 'Госномер', 'Описание', 
+                      'Тип техники', 'Количество', 'Статус', 'Запчасти', 'Комментарий', 
+                      'Номер даркстора', 'Время создания заявки', 'Статус обработки']
             for i, h in enumerate(headers, start=1):
                 report_sheet.update_cell(1, i, h)
         
-        # Получаем текущие строки для отчета
+        # Получаем текущие строки
         current_rows = report_sheet.get_all_values()
         start_row = len(current_rows) + 1
         
+        updates_report = []
+        
         for idx, task in enumerate(tasks):
             uid = task.get('uid')
-            source = task.get('source')
             task_type = task.get('type')
             data = task.get('data', {})
             master = data.get('master', '')
@@ -578,103 +597,66 @@ def send_tasks_to_google_sheets(tasks):
             reason = data.get('reason', '')
             extra = data.get('extra', '')
             
-            # Ищем заявку в Google Sheets по UID
-            found = find_uid_in_sheets(uid)
-            if not found:
-                logger.warning(f"UID {uid} не найден в Google Sheets")
+            # Получаем информацию о заявке
+            ticket = None
+            if uid in uid_index:
+                ticket = uid_index[uid]['ticket']
+            
+            # Если нет в кэше — ищем в Google Sheets
+            if not ticket:
+                found = find_uid_in_sheets(uid)
+                if found:
+                    ticket = found
+            
+            if not ticket:
+                logger.warning(f"❌ Заявка {uid} не найдена в Google Sheets")
                 continue
             
-            row_idx = found['row_index']
-            source = found['source']
+            # Определяем статус для отчета
+            status_map = {
+                'done': '✅ Выполнено',
+                'fail': '🔵 Доделать',
+                'evacuation': '🔧 Эвакуация',
+                'replace_yes': '✅ Выполнено',
+                'taken_no_replace': '🔵 Доделать',
+                'replace_no': '🔵 Доделать',
+                'transit_replace': '✅ Выполнено'
+            }
+            status = status_map.get(task_type, '✅ Выполнено')
             
-            # Обновляем в зависимости от источника
-            if source == 'Заявки':
-                if task_type == 'done':
-                    updates_status.append({'range': f'H{row_idx}', 'values': [['✅ Выполнено']]})
-                    if parts:
-                        updates_note.append({'range': f'K{row_idx}', 'values': [[parts]]})
-                elif task_type == 'fail':
-                    updates_status.append({'range': f'H{row_idx}', 'values': [['⏹️ Обработано']]})
-                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'Вело отсутствует {now}']]})
-                elif task_type == 'evacuation':
-                    updates_status.append({'range': f'H{row_idx}', 'values': [['🔵 Доделать']]})
-                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'ЭВАКУАЦИЯ: {reason}']]})
-                elif task_type == 'replace_yes':
-                    updates_status.append({'range': f'H{row_idx}', 'values': [['✅ Выполнено']]})
-                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'Заменено {parts} шт.']]})
-                elif task_type == 'taken_no_replace':
-                    updates_status.append({'range': f'H{row_idx}', 'values': [['🔵 Доделать']]})
-                    updates_note.append({'range': f'K{row_idx}', 'values': [[f'ЗАБРАЛИ: {parts} АКБ']]})
-                elif task_type == 'replace_no':
-                    updates_status.append({'range': f'H{row_idx}', 'values': [['🔵 Доделать']]})
-                    updates_note.append({'range': f'K{row_idx}', 'values': [['Куратор не предоставил']]})
-                elif task_type == 'transit_replace':
-                    updates_status.append({'range': f'H{row_idx}', 'values': [['✅ Выполнено']]})
-                    updates_note.append({'range': f'K{row_idx}', 'values': [['Заменен Транзитом']]})
-                
-                # Добавляем запись в отчет
-                ticket = None
-                if uid in uid_index:
-                    ticket = uid_index[uid]['ticket']
-                if not ticket:
-                    # Пытаемся получить данные из Google Sheets
-                    worksheet = sheet_client.worksheet("Заявки")
-                    row_data = worksheet.row_values(row_idx)
-                    if len(row_data) >= 15:
-                        ticket = {
-                            'gos': row_data[3].strip() if len(row_data) > 3 else '',
-                            'desc': row_data[2].strip() if len(row_data) > 2 else '',
-                            'type': row_data[1].strip() if len(row_data) > 1 else '',
-                            'created': row_data[5].strip() if len(row_data) > 5 else ''
-                        }
-                
-                if ticket:
-                    report_row = start_row + len(report_updates) // 12
-                    report_updates.append({'range': f'A{report_row}', 'values': [[now]]})
-                    report_updates.append({'range': f'B{report_row}', 'values': [[master]]})
-                    report_updates.append({'range': f'C{report_row}', 'values': [[uid]]})
-                    report_updates.append({'range': f'D{report_row}', 'values': [[ticket.get('gos', '')]]})
-                    report_updates.append({'range': f'E{report_row}', 'values': [[ticket.get('desc', '')]]})
-                    report_updates.append({'range': f'F{report_row}', 'values': [[ticket.get('type', '')]]})
-                    report_updates.append({'range': f'G{report_row}', 'values': [[parts or extra]]})
-                    report_updates.append({'range': f'H{report_row}', 'values': [[task_type]]})
-                    report_updates.append({'range': f'I{report_row}', 'values': [[parts or extra]]})
-                    report_updates.append({'range': f'J{report_row}', 'values': [[reason]]})
-                    report_updates.append({'range': f'K{report_row}', 'values': [[darks_number]]})
-                    report_updates.append({'range': f'L{report_row}', 'values': [[ticket.get('created', '')]]})
+            # Определяем количество
+            if ticket.get('type') in ['Аккумуляторная батарея', 'Зарядное устройство']:
+                quantity = parts or extra or '1'
+            else:
+                quantity = '1'
             
-            elif source == 'Импорт М4':
-                if task_type == 'done':
-                    updates_import.append({'range': f'L{row_idx}', 'values': [['Выполнено']]})
-                elif task_type == 'fail':
-                    updates_import.append({'range': f'L{row_idx}', 'values': [['Вело отсутствует']]})
-                    updates_import.append({'range': f'M{row_idx}', 'values': [[f'Вело отсутствует на дарксторе {now}']]})
-                elif task_type == 'evacuation':
-                    updates_import.append({'range': f'L{row_idx}', 'values': [['Эвакуация']]})
-                    updates_import.append({'range': f'M{row_idx}', 'values': [['Запланирована эвакуация велосипеда']]})
+            row_idx = start_row + idx
+            
+            updates_report.append({'range': f'A{row_idx}', 'values': [[now]]})
+            updates_report.append({'range': f'B{row_idx}', 'values': [[master]]})
+            updates_report.append({'range': f'C{row_idx}', 'values': [[uid]]})
+            updates_report.append({'range': f'D{row_idx}', 'values': [[ticket.get('gos', '')]]})
+            updates_report.append({'range': f'E{row_idx}', 'values': [[ticket.get('desc', '')]]})
+            updates_report.append({'range': f'F{row_idx}', 'values': [[ticket.get('type', '')]]})
+            updates_report.append({'range': f'G{row_idx}', 'values': [[quantity]]})
+            updates_report.append({'range': f'H{row_idx}', 'values': [[status]]})
+            updates_report.append({'range': f'I{row_idx}', 'values': [[parts or extra or '-']]})
+            updates_report.append({'range': f'J{row_idx}', 'values': [[reason or '-']]})
+            updates_report.append({'range': f'K{row_idx}', 'values': [[darks_number or ticket.get('darks', '')]]})
+            updates_report.append({'range': f'L{row_idx}', 'values': [[ticket.get('created', '')]]})
+            updates_report.append({'range': f'M{row_idx}', 'values': [['Новый']]})
         
-        # Применяем обновления
-        if updates_status or updates_note:
-            worksheet = sheet_client.worksheet("Заявки")
-            if updates_status:
-                worksheet.batch_update(updates_status)
-            if updates_note:
-                worksheet.batch_update(updates_note)
-        
-        if updates_import:
-            worksheet_import = sheet_client.worksheet("Импорт М4")
-            worksheet_import.batch_update(updates_import)
-        
-        if report_updates:
-            report_sheet.batch_update(report_updates)
-            logger.info(f"✅ Записано {len(report_updates)//12} записей в Отчет мастера")
-        
-        logger.info(f"✅ Отправлено {len(tasks)} задач в Google Sheets")
+        if updates_report:
+            report_sheet.batch_update(updates_report)
+            logger.info(f"✅ Записано {len(updates_report)//13} записей в Отчет мастера")
         
     except Exception as e:
-        logger.error(f"Ошибка отправки в Google Sheets: {e}")
+        logger.error(f"❌ Ошибка записи в Отчет мастера: {e}")
         raise
 
+# ============================================================
+# ФОНОВЫЙ ПРОЦЕСС ОБРАБОТКИ ОЧЕРЕДИ
+# ============================================================
 def process_queue_background():
     last_gs_sync = time.time()
     while True:
@@ -687,6 +669,7 @@ def process_queue_background():
             tasks = queue_data['tasks']
             logger.info(f"📋 Обработка {len(tasks)} задач из очереди")
             
+            # Обновляем админ-кэш
             for task in tasks:
                 uid = task.get('uid')
                 task_type = task.get('type')
@@ -709,13 +692,13 @@ def process_queue_background():
             
             current_time = time.time()
             if current_time - last_gs_sync >= 30:
-                send_tasks_to_google_sheets(tasks)
+                write_to_report(tasks)
                 clear_queue()
                 last_gs_sync = current_time
                 logger.info("✅ Очередь очищена")
             
         except Exception as e:
-            logger.error(f"Ошибка в фоновом процессе: {e}")
+            logger.error(f"❌ Ошибка в фоновом процессе: {e}")
 
 # ============================================================
 # ОТПРАВКА УВЕДОМЛЕНИЙ
@@ -737,7 +720,6 @@ def generate_curator_message(tickets_data):
     
     message = f"📢 Привет, на связи Vanta Bikes! ({now})\n\n"
     
-    # Группируем по дарксторам
     groups = {}
     for t in tickets_data:
         darks = t.get('darks', 'без номера')
@@ -752,12 +734,10 @@ def generate_curator_message(tickets_data):
         message += f"📍 {group['address']} (даркстор {darks})\n"
         message += f"📋 Заявки ({len(group['tickets'])}):\n"
         for t in group['tickets']:
-            # Для АКБ и зарядок показываем тип вместо госномера
             if t.get('type') in ['Аккумуляторная батарея', 'Зарядное устройство']:
                 identifier = t.get('type', 'Без номера')
             else:
                 identifier = t.get('gos', 'Без номера')
-            
             message += f"   {identifier} | {t.get('desc', '-')}\n"
         message += "\n"
     
@@ -1114,7 +1094,7 @@ def api_master_history(name):
 @app.route('/master/<name>/darks/<darks_number>/done/<uid>', methods=['POST'])
 @login_required
 def master_done(name, darks_number, uid):
-    logger.info(f"📝 master_done вызван: name={name}, uid={uid}, session={session}")
+    logger.info(f"📝 master_done вызван: name={name}, uid={uid}")
     if session.get('master_name') != name:
         logger.warning(f"❌ Сессия не совпадает: {session.get('master_name')} != {name}")
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
