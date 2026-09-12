@@ -1759,6 +1759,7 @@ def load_iot_source():
                         continue
                     status_velo = row[7].strip() if len(row) > 7 else ''
                     status_iot = row[8].strip() if len(row) > 8 else ''
+                    # Читаем столбец J (индекс 9) - там запись о замене
                     replaced_text = row[9].strip() if len(row) > 9 else ''
                     iot_data[iot] = {
                         'status_velo': status_velo,
@@ -1777,8 +1778,8 @@ def load_iot_source():
         logger.error(f"Ошибка загрузки IOT Source: {e}")
         return {}
 
-
 def get_iot_source():
+    """Возвращает кэш IOT Source"""
     cache = read_cache(IOT_SOURCE_FILE)
     if not cache or 'iot_list' not in cache:
         return load_iot_source()
@@ -1786,7 +1787,7 @@ def get_iot_source():
 
 
 def load_iot_vehicles():
-    """Загружает данные велосипедов из листа 'Учет вело ВВ'"""
+    """Загружает данные велосипедов из таблицы №2 (лист 'Учет вело ВВ')"""
     try:
         sheet = get_iot_sheet_by_id(IOT_VEHICLES_SHEET_ID, "Учет вело ВВ")
         rows = sheet.get_all_values()
@@ -1838,19 +1839,19 @@ def get_iot_history():
 def save_iot_history(history_data):
     return write_cache(IOT_HISTORY_FILE, history_data)
 
-
 def update_iot_source_column_j(old_iot, new_iot):
     """Записывает в столбец J листа 'Все IoT' информацию о замене (в строку СТАРОГО IOT)"""
     try:
         sheet = get_iot_sheet_by_id(IOT_SOURCE_SHEET_ID, "Все IoT")
         rows = sheet.get_all_values()
         
+        # Ищем строку со старым IOT
         for idx, row in enumerate(rows, start=1):
             if len(row) > 0 and row[0].strip() == old_iot:
                 now = get_msk_now()
                 date_str = now.strftime('%d.%m')
                 text = f"{date_str} поменяли на прошитый (новый IOT: {new_iot})"
-                sheet.update_cell(idx, 10, text)
+                sheet.update_cell(idx, 10, text)  # Столбец J = 10
                 logger.info(f"✅ Запись в J для {old_iot}: {text}")
                 return True
         
@@ -1886,7 +1887,7 @@ def write_iot_report(frame_number, new_iot, old_iot=''):
     except Exception as e:
         logger.error(f"Ошибка записи отчёта IOT: {e}")
         return False
-
+    
 
 @app.route('/iot')
 @login_required
@@ -1942,6 +1943,7 @@ def iot_main():
                           replaced_today=replaced_today,
                           darks_groups=darks_list,
                           now=get_msk_now().strftime('%H:%M:%S'))
+
 
 
 @app.route('/iot/darks/<darks_number>')
@@ -2010,7 +2012,7 @@ def iot_history_page():
 @app.route('/api/iot/load_bag', methods=['POST'])
 @login_required
 def api_iot_load_bag():
-    """Загружает IOT в багажник БЕЗ проверок"""
+    """Загружает IOT в багажник БЕЗ проверок - можно добавить любой IOT"""
     if session.get('role') != 'iot':
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
     
@@ -2062,7 +2064,6 @@ def api_iot_load_bag():
         logger.error(f"Ошибка загрузки багажника: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
-
 @app.route('/api/iot/remove_from_bag', methods=['POST'])
 @login_required
 def api_iot_remove_from_bag():
@@ -2080,9 +2081,11 @@ def api_iot_remove_from_bag():
         bag_data = get_iot_bag()
         current_bag = bag_data.get('bag', [])
         
+        # Проверяем, есть ли этот IOT в багажнике
         if not any(item.get('iot') == iot for item in current_bag):
             return jsonify({'success': False, 'error': f'IOT {iot} не найден в багажнике'})
         
+        # Удаляем
         bag_data['bag'] = [item for item in current_bag if item.get('iot') != iot]
         save_iot_bag(bag_data)
         
@@ -2150,6 +2153,8 @@ def api_iot_bag():
 
 @app.route('/api/iot/replace', methods=['POST'])
 @login_required
+@app.route('/api/iot/replace', methods=['POST'])
+@login_required
 def api_iot_replace():
     """Заменяет IOT: пишет в 'Все IoT' столбец J и в 'КОРРЕКТИРОВКИ ВЕЛО'"""
     if session.get('role') != 'iot':
@@ -2188,11 +2193,23 @@ def api_iot_replace():
         # 2. Запись в "Все IoT" столбец J (в строку СТАРОГО IOT)
         update_iot_source_column_j(old_iot, new_iot)
         
-        # 3. Убираем новый IOT из багажника
+        # 3. НОВОЕ: Обновляем кэш iot_source
+        try:
+            source_cache = read_cache(IOT_SOURCE_FILE)
+            if source_cache and 'iot_list' in source_cache:
+                if old_iot in source_cache['iot_list']:
+                    now_str = get_msk_now().strftime('%d.%m')
+                    source_cache['iot_list'][old_iot]['replaced_text'] = f"{now_str} поменяли на прошитый (новый IOT: {new_iot})"
+                    write_cache(IOT_SOURCE_FILE, source_cache)
+                    logger.info(f"✅ Кэш iot_source обновлён: {old_iot} помечен как заменённый")
+        except Exception as e:
+            logger.error(f"Ошибка обновления кэша iot_source: {e}")
+        
+        # 4. Убираем новый IOT из багажника
         bag_data['bag'] = [item for item in bag_data.get('bag', []) if item.get('iot') != new_iot]
         save_iot_bag(bag_data)
         
-        # 4. Сохраняем в локальную историю
+        # 5. Сохраняем в локальную историю
         now = get_msk_now()
         history_data = get_iot_history()
         history_data['history'].append({
