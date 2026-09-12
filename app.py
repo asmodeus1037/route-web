@@ -1888,6 +1888,7 @@ def write_iot_report(frame_number, new_iot, old_iot=''):
         logger.error(f"Ошибка записи отчёта IOT: {e}")
         return False
     
+
 @app.route('/iot')
 @login_required
 def iot_main():
@@ -1912,7 +1913,10 @@ def iot_main():
     source_data = get_iot_source()
     
     darks_groups = {}
-    
+    for iot, info in source_data.items():
+        if (info.get('status_velo') == 'В аренде' 
+            and info.get('status_iot') == 'Требует перепрошивки'
+            and not info.get('replaced_text')):
             if iot in vehicles_data:
                 v = vehicles_data[iot]
                 darks = v.get('darks', 'без номера')
@@ -1941,6 +1945,7 @@ def iot_main():
                           now=get_msk_now().strftime('%H:%M:%S'))
 
 
+
 @app.route('/iot/darks/<darks_number>')
 @login_required
 def iot_darks(darks_number):
@@ -1957,9 +1962,9 @@ def iot_darks(darks_number):
     vehicles = []
     address = ''
     for iot, info in source_data.items():
-    if (info.get('status_velo') == 'В аренде' 
-        and info.get('status_iot') == 'Требует перепрошивки'
-        and not info.get('replaced_text')):  # НОВОЕ - J пусто
+        if (info.get('status_velo') == 'В аренде' 
+            and info.get('status_iot') == 'Требует перепрошивки'
+            and not info.get('replaced_text')):
             if iot in vehicles_data:
                 v = vehicles_data[iot]
                 if v.get('darks') == darks_number:
