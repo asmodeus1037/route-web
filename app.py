@@ -29,6 +29,15 @@ CACHE_TTL = 300
 CACHE_DIR = "/data/cache"
 BOT_API_URL = "https://route-bot-dzufear.waw0.amvera.tech"
 
+# IOT настройки
+IOT_SOURCE_SHEET_ID = "1BoZ7GFmL2q56bjqt1CFVV_PeqnKVaeb3anTJkf0s6xA"
+IOT_VEHICLES_SHEET_ID = "1s_hXPSWueMAo3W1pgLCG0eHhYKoW0uoIZ6CGWFf55VU"
+IOT_REPORT_SHEET_ID = "1s_hXPSWueMAo3W1pgLCG0eHhYKoW0uoIZ6CGWFf55VU"
+
+IOT_BAG_FILE = "iot_bag.json"
+IOT_SOURCE_FILE = "iot_source.json"
+IOT_HISTORY_FILE = "iot_history.json"
+
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 MSK = pytz.timezone('Europe/Moscow')
@@ -42,7 +51,7 @@ MASTER_CREDENTIALS = {
     'ruslan': {'password': 'ruslan1985', 'name': 'Руслан', 'role': 'master'},
     'transit': {'password': 'transit2024', 'name': 'Сергей Транзит', 'role': 'master'},
     'alexey': {'password': 'alexey0304', 'name': 'Алексей', 'role': 'master'},
-    'iot': {'password': 'iot2026', 'name': 'IOT', 'role': 'iot'}
+    'iot': {'password': 'iot2026', 'name': 'IOT-Мастер', 'role': 'iot'}
 }
 
 # ============================================================
@@ -183,6 +192,16 @@ def get_sheet_client():
     client = gspread.authorize(creds)
     return client.open(SHEET_NAME)
 
+def get_iot_sheet_by_id(sheet_id, sheet_name=None):
+    """Открывает Google Sheet по ID (для IOT таблиц)"""
+    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+    client = gspread.authorize(creds)
+    spreadsheet = client.open_by_key(sheet_id)
+    if sheet_name:
+        return spreadsheet.worksheet(sheet_name)
+    return spreadsheet
+
 def load_darks_reference():
     global darks_ref
     darks_ref = {}
@@ -255,7 +274,6 @@ def get_tickets_from_sheets():
                 status_raw = row[7].strip() if len(row) > 7 else ''
                 note = row[9].strip() if len(row) > 9 else ''
                 
-                # ПРАВИЛЬНОЕ РАСПОЗНАВАНИЕ СТАТУСОВ
                 if status_raw in ['Выполнено', '✅ Выполнено', 'done']:
                     status = 'done'
                 elif status_raw in ['🔵 Доделать', 'Доделать']:
@@ -264,11 +282,9 @@ def get_tickets_from_sheets():
                     status = 'fail'
                 elif status_raw in ['🔧 Эвакуация', 'Эвакуация']:
                     status = 'todo'
-                    # Если есть комментарий в J, сохраняем его
                     if note:
                         note = f'ЭВАКУАЦИЯ: {note}'
                     else:
-                        # Если нет комментария, берем описание заявки
                         desc = row[2].strip() if len(row) > 2 else ''
                         note = f'ЭВАКУАЦИЯ: {desc}'
                 else:
@@ -308,7 +324,6 @@ def get_tickets_from_sheets():
                         count = match.group(1)
                         display_desc = f'Вернуть {count} АКБ (забирали на ремонт)'
                 
-                # Для эвакуации показываем описание из комментария
                 if status == 'todo' and note and note.startswith('ЭВАКУАЦИЯ:'):
                     display_desc = note.replace('ЭВАКУАЦИЯ: ', '')
                 
@@ -532,7 +547,6 @@ def clear_all_masters():
         return 0
 
 def update_status_in_google_sheets(uid, status, note=''):
-    """Обновляет статус заявки в Google Sheets"""
     try:
         sheet_client = get_sheet_client()
         
@@ -850,7 +864,7 @@ def auto_login(login):
         if role == 'admin':
             return redirect(url_for('admin_panel'))
         elif role == 'iot':
-            return "🚧 IOT модуль в разработке. Скоро появится!"
+            return redirect(url_for('iot_main'))
         else:
             return redirect(url_for('master_overview', name=master_name))
     return redirect(url_for('login_page'))
@@ -898,26 +912,14 @@ def admin_panel():
 @app.route('/api/sync')
 @login_required
 def api_sync():
-    """Полная синхронизация с Google Sheets - обновляет admin_cache на сервере"""
     global uid_index, darks_ref
     try:
         logger.info("🔄 Начинаем синхронизацию с Google Sheets...")
-        
-        # Перезагружаем справочник дарксторов
         darks_ref = load_darks_reference()
-        
-        # Получаем свежие данные из Google Sheets
         tickets = get_tickets_from_sheets()
-        
-        # Обновляем индекс
         uid_index = build_uid_index(tickets)
-        
-        # Сохраняем админ-кэш (обновляем файл на сервере)
         save_admin_cache(tickets)
-        
-        # Обновляем кэши всех мастеров
         refresh_all_master_caches()
-        
         logger.info(f"✅ Синхронизация завершена: {len(tickets)} заявок")
         return jsonify({'success': True, 'tickets': tickets, 'count': len(tickets)})
     except Exception as e:
@@ -967,13 +969,9 @@ def api_notify_curators():
     success = notify_curators(message)
     return jsonify({'success': success})
 
-# ============================================================
-# ОБНОВЛЕНИЕ СТАТУСА (ОДНА ЗАЯВКА)
-# ============================================================
 @app.route('/api/update_status', methods=['POST'])
 @login_required
 def api_update_status():
-    """Обновляет статус заявки в админке и Google Sheets"""
     data = request.json
     uid = data.get('uid')
     status_display = data.get('status')
@@ -993,9 +991,7 @@ def api_update_status():
         
         new_status = status_map.get(status_display, 'pending')
         
-        # Если это эвакуация и note пустой - берем описание заявки
         if status_display == '🔧 Эвакуация' and not note:
-            # Находим заявку
             tickets = get_tickets_from_sheets()
             for t in tickets:
                 if t.get('uid') == uid:
@@ -1022,13 +1018,9 @@ def api_update_status():
         logger.error(f"Ошибка обновления статуса: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
-# ============================================================
-# МАССОВОЕ ОБНОВЛЕНИЕ СТАТУСОВ (BATCH)
-# ============================================================
 @app.route('/api/bulk_update_status', methods=['POST'])
 @login_required
 def api_bulk_update_status():
-    """Массовое обновление статусов заявок (ОДНИМ BATCH-запросом)"""
     try:
         data = request.json
         uids = data.get('uids', [])
@@ -1039,7 +1031,6 @@ def api_bulk_update_status():
         if not uids or not status_display:
             return jsonify({'success': False, 'error': 'Не указаны UID или статус'}), 400
         
-        # Получаем все заявки для поиска описаний
         all_tickets = get_tickets_from_sheets()
         tickets_by_uid = {t.get('uid'): t for t in all_tickets}
         
@@ -1055,7 +1046,6 @@ def api_bulk_update_status():
             row_idx = found['row_index']
             source = found['source']
             
-            # Для эвакуации - берем описание заявки
             final_comment = comment
             if status_display == '🔧 Эвакуация':
                 ticket = tickets_by_uid.get(uid)
@@ -1094,7 +1084,6 @@ def api_bulk_update_status():
             worksheet.batch_update(updates_import)
             logger.info(f"✅ Обновлено {len(updates_import)} ячеек в 'Импорт М4'")
         
-        # ОБНОВЛЯЕМ АДМИН-КЭШ ПОЛНОСТЬЮ (перезагружаем данные из Google Sheets)
         tickets = get_tickets_from_sheets()
         save_admin_cache(tickets)
         
@@ -1130,7 +1119,6 @@ def api_admin_action():
             update_status_in_google_sheets(uid, status_display, extra)
         elif action == 'evacuation':
             status_display = '🔧 Эвакуация'
-            # Берем описание заявки
             tickets = get_tickets_from_sheets()
             desc = ''
             for t in tickets:
@@ -1520,7 +1508,6 @@ def transit_replace():
 # ФУНКЦИИ ДЛЯ ЭВАКУАЦИИ
 # ============================================================
 def find_bike_in_database(gos_number, darks_number):
-    """Поиск велосипеда по госномеру и даркстору"""
     try:
         sheet_client = get_sheet_client()
         worksheet = sheet_client.worksheet("База данных вело")
@@ -1556,7 +1543,6 @@ def find_bike_in_database(gos_number, darks_number):
 @app.route('/api/get_bike_data')
 @login_required
 def api_get_bike_data():
-    """Получение данных велосипеда из БД по госномеру и даркстору"""
     try:
         gos = request.args.get('gos', '')
         darks = request.args.get('darks', '')
@@ -1572,7 +1558,6 @@ def api_get_bike_data():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 def write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data):
-    """Запись эвакуации в Google Sheets"""
     try:
         sheet_client = get_sheet_client()
         now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1614,7 +1599,6 @@ def write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data,
 @app.route('/master/evacuation/replace', methods=['POST'])
 @login_required
 def master_evacuation_replace():
-    """Эвакуация велосипеда (для всех мастеров)"""
     try:
         data = request.json
         uid = data.get('uid')
@@ -1666,7 +1650,6 @@ def master_evacuation_replace():
 # ФУНКЦИИ ДЛЯ ТРАНЗИТА (ОБЪЕДИНЕНИЕ ЗАЯВОК)
 # ============================================================
 def get_transit_tickets_by_gos(master_name, gos_number):
-    """Получает все активные заявки Транзита по госномеру"""
     try:
         tickets = get_tickets_from_sheets()
         result = []
@@ -1681,7 +1664,6 @@ def get_transit_tickets_by_gos(master_name, gos_number):
         return []
 
 def close_all_transit_tickets(uid, master_name, gos_number, parts=''):
-    """Закрывает ВСЕ заявки Транзита по госномеру"""
     try:
         tickets = get_transit_tickets_by_gos(master_name, gos_number)
         
@@ -1721,7 +1703,6 @@ def close_all_transit_tickets(uid, master_name, gos_number, parts=''):
 @app.route('/master/transit/done/<uid>', methods=['POST'])
 @login_required
 def transit_done(uid):
-    """Закрытие заявки Транзитом - закрывает ВСЕ заявки с этим госномером"""
     try:
         master_name = session.get('master_name')
         if master_name != 'Сергей Транзит':
@@ -1760,36 +1741,14 @@ def transit_done(uid):
         logger.error(f"Ошибка закрытия заявок Транзита: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-    
 # ============================================================
 # IOT-СИСТЕМА (ЗАМЕНА IOT-МОДУЛЕЙ)
 # ============================================================
 
-IOT_SOURCE_SHEET_ID = "1BoZ7GFmL2q56bjqt1CFVV_PeqnKVaeb3anTJkf0s6xA"
-IOT_VEHICLES_SHEET_ID = "1s_hXPSWueMAo3W1pgLCG0eHhYKoW0uoIZ6CGWFf55VU"
-IOT_REPORT_SHEET_ID = "1s_hXPSWueMAo3W1pgLCG0eHhYKoW0uoIZ6CGWFf55VU"
-IOT_REPORT_GID = "48833279"
-
-IOT_BAG_FILE = "iot_bag.json"
-IOT_SOURCE_FILE = "iot_source.json"
-IOT_HISTORY_FILE = "iot_history.json"
-
-
-def get_iot_sheet(sheet_id, sheet_name=None):
-    """Открывает Google Sheet по ID"""
-    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-    client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key(sheet_id)
-    if sheet_name:
-        return spreadsheet.worksheet(sheet_name)
-    return spreadsheet
-
-
 def load_iot_source():
     """Загружает список IOT из таблицы №1 и кэширует"""
     try:
-        sheet = get_iot_sheet(IOT_SOURCE_SHEET_ID)
+        sheet = get_iot_sheet_by_id(IOT_SOURCE_SHEET_ID)
         worksheet = sheet.get_worksheet(0)
         rows = worksheet.get_all_values()
         
@@ -1800,8 +1759,8 @@ def load_iot_source():
                     iot = row[0].strip()
                     if not iot:
                         continue
-                    status_velo = row[7].strip() if len(row) > 7 else ''  # H
-                    status_iot = row[8].strip() if len(row) > 8 else ''   # I
+                    status_velo = row[7].strip() if len(row) > 7 else ''
+                    status_iot = row[8].strip() if len(row) > 8 else ''
                     iot_data[iot] = {
                         'status_velo': status_velo,
                         'status_iot': status_iot
@@ -1830,18 +1789,18 @@ def get_iot_source():
 def load_iot_vehicles():
     """Загружает данные велосипедов из таблицы №2 (лист 'Учет вело ВВ')"""
     try:
-        sheet = get_iot_sheet(IOT_VEHICLES_SHEET_ID, "Учет вело ВВ")
+        sheet = get_iot_sheet_by_id(IOT_VEHICLES_SHEET_ID, "Учет вело ВВ")
         rows = sheet.get_all_values()
         
         vehicles = {}
         if len(rows) > 1:
             for row in rows[1:]:
                 if len(row) >= 5:
-                    frame_number = row[0].strip()  # A
-                    gos = row[1].strip()           # B
-                    iot = row[2].strip()           # C
-                    address = row[3].strip()       # D
-                    darks = row[4].strip()         # E
+                    frame_number = row[0].strip()
+                    gos = row[1].strip()
+                    iot = row[2].strip()
+                    address = row[3].strip()
+                    darks = row[4].strip()
                     
                     if iot:
                         vehicles[iot] = {
@@ -1860,7 +1819,6 @@ def load_iot_vehicles():
 
 
 def get_iot_bag():
-    """Возвращает текущий багажник"""
     cache = read_cache(IOT_BAG_FILE)
     if not cache:
         return {'bag': []}
@@ -1868,12 +1826,10 @@ def get_iot_bag():
 
 
 def save_iot_bag(bag_data):
-    """Сохраняет багажник"""
     return write_cache(IOT_BAG_FILE, bag_data)
 
 
 def get_iot_history():
-    """Возвращает историю замен"""
     cache = read_cache(IOT_HISTORY_FILE)
     if not cache:
         return {'history': []}
@@ -1881,25 +1837,21 @@ def get_iot_history():
 
 
 def save_iot_history(history_data):
-    """Сохраняет историю замен"""
     return write_cache(IOT_HISTORY_FILE, history_data)
 
 
 def write_iot_report(frame_number, new_iot, old_iot=''):
     """Записывает отчёт в таблицу №3"""
     try:
-        sheet = get_iot_sheet(IOT_REPORT_SHEET_ID)
+        sheet = get_iot_sheet_by_id(IOT_REPORT_SHEET_ID)
         worksheet = sheet.get_worksheet(0)
         
-        # Формат даты: 12.09
         now = get_msk_now()
         date_str = now.strftime('%d.%m')
         
-        # Находим последнюю строку
         all_values = worksheet.get_all_values()
         new_row = len(all_values) + 1
         
-        # Обновляем строку
         worksheet.update(f'A{new_row}:F{new_row}', [[
             date_str,
             'Изменить IOT',
@@ -1926,7 +1878,6 @@ def iot_main():
     bag_data = get_iot_bag()
     bag_items = [item.get('iot') for item in bag_data.get('bag', [])]
     
-    # Подсчёт замен за сегодня
     history_data = get_iot_history()
     today = get_msk_now().strftime('%d.%m')
     replaced_today = 0
@@ -1934,20 +1885,15 @@ def iot_main():
         if h.get('date') == today:
             replaced_today += 1
     
-    # Если багажник пуст - показываем пустое состояние
     if not bag_items:
         return render_template('iot_empty.html', now=get_msk_now().strftime('%H:%M:%S'))
     
-    # Загружаем данные велосипедов для IOT из багажника
     vehicles_data = load_iot_vehicles()
     source_data = get_iot_source()
     
-    # Формируем список велосипедов, которым нужна замена
-    # (IOT с "Требует перепрошивки" + "В аренде")
     darks_groups = {}
     for iot, info in source_data.items():
         if info.get('status_velo') == 'В аренде' and info.get('status_iot') == 'Требует перепрошивки':
-            # Ищем в базе велосипедов
             if iot in vehicles_data:
                 v = vehicles_data[iot]
                 darks = v.get('darks', 'без номера')
@@ -1989,7 +1935,6 @@ def iot_darks(darks_number):
     vehicles_data = load_iot_vehicles()
     source_data = get_iot_source()
     
-    # Находим все велосипеды на этом дарксторе, требующие замены
     vehicles = []
     address = ''
     for iot, info in source_data.items():
@@ -2026,9 +1971,8 @@ def iot_history_page():
     history_data = get_iot_history()
     history = history_data.get('history', [])
     
-    # Группируем по дарксторам
     history_by_darks = {}
-    for h in reversed(history):  # Сначала новые
+    for h in reversed(history):
         darks = h.get('darks', 'без номера')
         if darks not in history_by_darks:
             history_by_darks[darks] = []
@@ -2042,7 +1986,6 @@ def iot_history_page():
 @app.route('/api/iot/load_bag', methods=['POST'])
 @login_required
 def api_iot_load_bag():
-    """Загружает IOT в багажник с проверкой"""
     if session.get('role') != 'iot':
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
     
@@ -2053,7 +1996,6 @@ def api_iot_load_bag():
         if not iots:
             return jsonify({'success': False, 'error': 'Пустой список'})
         
-        # Загружаем актуальный источник
         source_data = load_iot_source()
         
         bag_data = get_iot_bag()
@@ -2069,17 +2011,14 @@ def api_iot_load_bag():
             if not iot:
                 continue
             
-            # Проверка на дубликат в этом же вводе
             if iot in seen_in_input:
                 continue
             seen_in_input.add(iot)
             
-            # Проверка: уже в багажнике
             if iot in current_bag:
                 duplicates.append(iot)
                 continue
             
-            # Проверка 1: существует в таблице №1?
             if iot not in source_data:
                 errors.append({
                     'iot': iot,
@@ -2087,7 +2026,6 @@ def api_iot_load_bag():
                 })
                 continue
             
-            # Проверка 2: статус IOT = "ОК"?
             status_iot = source_data[iot].get('status_iot', '')
             if status_iot != 'ОК':
                 errors.append({
@@ -2096,10 +2034,8 @@ def api_iot_load_bag():
                 })
                 continue
             
-            # ✅ Всё ок - добавляем
             added.append(iot)
         
-        # Сохраняем
         for iot in added:
             bag_data['bag'].append({
                 'iot': iot,
@@ -2123,7 +2059,6 @@ def api_iot_load_bag():
 @app.route('/api/iot/sync_source', methods=['POST'])
 @login_required
 def api_iot_sync_source():
-    """Синхронизирует список IOT из таблицы №1"""
     if session.get('role') != 'iot':
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
     
@@ -2137,7 +2072,6 @@ def api_iot_sync_source():
 @app.route('/api/iot/bag')
 @login_required
 def api_iot_bag():
-    """Возвращает текущий багажник"""
     if session.get('role') != 'iot':
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
     
@@ -2148,7 +2082,6 @@ def api_iot_bag():
 @app.route('/api/iot/replace', methods=['POST'])
 @login_required
 def api_iot_replace():
-    """Заменяет IOT"""
     if session.get('role') != 'iot':
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
     
@@ -2164,17 +2097,14 @@ def api_iot_replace():
         if not old_iot or not new_iot or not frame_number:
             return jsonify({'success': False, 'error': 'Недостаточно данных'})
         
-        # Проверка: новый IOT в багажнике?
         bag_data = get_iot_bag()
         current_bag = [item.get('iot') for item in bag_data.get('bag', [])]
         
         if new_iot not in current_bag:
             return jsonify({'success': False, 'error': f'IOT {new_iot} не в багажнике'})
         
-        # Проверка: новый IOT не установлен на другом велосипеде?
         vehicles_data = load_iot_vehicles()
         if new_iot in vehicles_data:
-            # Уже установлен на каком-то велосипеде - ОШИБКА
             bag_data['bag'] = [item for item in bag_data.get('bag', []) if item.get('iot') != new_iot]
             save_iot_bag(bag_data)
             return jsonify({
@@ -2182,20 +2112,16 @@ def api_iot_replace():
                 'error': f'IOT {new_iot} уже установлен на велосипеде {vehicles_data[new_iot].get("frame_number", "")}! Верните его в цех.'
             })
         
-        # Проверка: старый IOT есть на этом велосипеде?
         if old_iot in vehicles_data:
             v = vehicles_data[old_iot]
             if v.get('frame_number') != frame_number:
                 return jsonify({'success': False, 'error': 'Несовпадение номера рамы'})
         
-        # Записываем отчёт в Google Sheets
         write_iot_report(frame_number, new_iot, old_iot)
         
-        # Убираем новый IOT из багажника
         bag_data['bag'] = [item for item in bag_data.get('bag', []) if item.get('iot') != new_iot]
         save_iot_bag(bag_data)
         
-        # Сохраняем в историю
         now = get_msk_now()
         history_data = get_iot_history()
         history_data['history'].append({
@@ -2221,6 +2147,7 @@ def api_iot_replace():
     except Exception as e:
         logger.error(f"Ошибка замены IOT: {e}")
         return jsonify({'success': False, 'error': str(e)})
+
 # ============================================================
 # ЗАПУСК
 # ============================================================
