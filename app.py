@@ -1760,6 +1760,467 @@ def transit_done(uid):
         logger.error(f"Ошибка закрытия заявок Транзита: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+    
+# ============================================================
+# IOT-СИСТЕМА (ЗАМЕНА IOT-МОДУЛЕЙ)
+# ============================================================
+
+IOT_SOURCE_SHEET_ID = "1BoZ7GFmL2q56bjqt1CFVV_PeqnKVaeb3anTJkf0s6xA"
+IOT_VEHICLES_SHEET_ID = "1s_hXPSWueMAo3W1pgLCG0eHhYKoW0uoIZ6CGWFf55VU"
+IOT_REPORT_SHEET_ID = "1s_hXPSWueMAo3W1pgLCG0eHhYKoW0uoIZ6CGWFf55VU"
+IOT_REPORT_GID = "48833279"
+
+IOT_BAG_FILE = "iot_bag.json"
+IOT_SOURCE_FILE = "iot_source.json"
+IOT_HISTORY_FILE = "iot_history.json"
+
+
+def get_iot_sheet(sheet_id, sheet_name=None):
+    """Открывает Google Sheet по ID"""
+    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+    client = gspread.authorize(creds)
+    spreadsheet = client.open_by_key(sheet_id)
+    if sheet_name:
+        return spreadsheet.worksheet(sheet_name)
+    return spreadsheet
+
+
+def load_iot_source():
+    """Загружает список IOT из таблицы №1 и кэширует"""
+    try:
+        sheet = get_iot_sheet(IOT_SOURCE_SHEET_ID)
+        worksheet = sheet.get_worksheet(0)
+        rows = worksheet.get_all_values()
+        
+        iot_data = {}
+        if len(rows) > 1:
+            for row in rows[1:]:
+                if len(row) >= 9:
+                    iot = row[0].strip()
+                    if not iot:
+                        continue
+                    status_velo = row[7].strip() if len(row) > 7 else ''  # H
+                    status_iot = row[8].strip() if len(row) > 8 else ''   # I
+                    iot_data[iot] = {
+                        'status_velo': status_velo,
+                        'status_iot': status_iot
+                    }
+        
+        cache_data = {
+            'updated_at': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
+            'iot_list': iot_data
+        }
+        write_cache(IOT_SOURCE_FILE, cache_data)
+        logger.info(f"✅ IOT Source загружен: {len(iot_data)} записей")
+        return iot_data
+    except Exception as e:
+        logger.error(f"Ошибка загрузки IOT Source: {e}")
+        return {}
+
+
+def get_iot_source():
+    """Возвращает кэш IOT Source"""
+    cache = read_cache(IOT_SOURCE_FILE)
+    if not cache or 'iot_list' not in cache:
+        return load_iot_source()
+    return cache.get('iot_list', {})
+
+
+def load_iot_vehicles():
+    """Загружает данные велосипедов из таблицы №2 (лист 'Учет вело ВВ')"""
+    try:
+        sheet = get_iot_sheet(IOT_VEHICLES_SHEET_ID, "Учет вело ВВ")
+        rows = sheet.get_all_values()
+        
+        vehicles = {}
+        if len(rows) > 1:
+            for row in rows[1:]:
+                if len(row) >= 5:
+                    frame_number = row[0].strip()  # A
+                    gos = row[1].strip()           # B
+                    iot = row[2].strip()           # C
+                    address = row[3].strip()       # D
+                    darks = row[4].strip()         # E
+                    
+                    if iot:
+                        vehicles[iot] = {
+                            'frame_number': frame_number,
+                            'gos': gos,
+                            'iot': iot,
+                            'address': address,
+                            'darks': darks
+                        }
+        
+        logger.info(f"✅ IOT Vehicles загружен: {len(vehicles)} записей")
+        return vehicles
+    except Exception as e:
+        logger.error(f"Ошибка загрузки IOT Vehicles: {e}")
+        return {}
+
+
+def get_iot_bag():
+    """Возвращает текущий багажник"""
+    cache = read_cache(IOT_BAG_FILE)
+    if not cache:
+        return {'bag': []}
+    return cache
+
+
+def save_iot_bag(bag_data):
+    """Сохраняет багажник"""
+    return write_cache(IOT_BAG_FILE, bag_data)
+
+
+def get_iot_history():
+    """Возвращает историю замен"""
+    cache = read_cache(IOT_HISTORY_FILE)
+    if not cache:
+        return {'history': []}
+    return cache
+
+
+def save_iot_history(history_data):
+    """Сохраняет историю замен"""
+    return write_cache(IOT_HISTORY_FILE, history_data)
+
+
+def write_iot_report(frame_number, new_iot, old_iot=''):
+    """Записывает отчёт в таблицу №3"""
+    try:
+        sheet = get_iot_sheet(IOT_REPORT_SHEET_ID)
+        worksheet = sheet.get_worksheet(0)
+        
+        # Формат даты: 12.09
+        now = get_msk_now()
+        date_str = now.strftime('%d.%m')
+        
+        # Находим последнюю строку
+        all_values = worksheet.get_all_values()
+        new_row = len(all_values) + 1
+        
+        # Обновляем строку
+        worksheet.update(f'A{new_row}:F{new_row}', [[
+            date_str,
+            'Изменить IOT',
+            frame_number,
+            new_iot,
+            '',
+            'IOT с прошивкой'
+        ]])
+        
+        logger.info(f"✅ Отчёт записан: {frame_number} → {new_iot}")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка записи отчёта IOT: {e}")
+        return False
+
+
+@app.route('/iot')
+@login_required
+def iot_main():
+    """Главная страница IOT-мастера"""
+    if session.get('role') != 'iot':
+        return redirect(url_for('login_page'))
+    
+    bag_data = get_iot_bag()
+    bag_items = [item.get('iot') for item in bag_data.get('bag', [])]
+    
+    # Подсчёт замен за сегодня
+    history_data = get_iot_history()
+    today = get_msk_now().strftime('%d.%m')
+    replaced_today = 0
+    for h in history_data.get('history', []):
+        if h.get('date') == today:
+            replaced_today += 1
+    
+    # Если багажник пуст - показываем пустое состояние
+    if not bag_items:
+        return render_template('iot_empty.html', now=get_msk_now().strftime('%H:%M:%S'))
+    
+    # Загружаем данные велосипедов для IOT из багажника
+    vehicles_data = load_iot_vehicles()
+    source_data = get_iot_source()
+    
+    # Формируем список велосипедов, которым нужна замена
+    # (IOT с "Требует перепрошивки" + "В аренде")
+    darks_groups = {}
+    for iot, info in source_data.items():
+        if info.get('status_velo') == 'В аренде' and info.get('status_iot') == 'Требует перепрошивки':
+            # Ищем в базе велосипедов
+            if iot in vehicles_data:
+                v = vehicles_data[iot]
+                darks = v.get('darks', 'без номера')
+                if darks not in darks_groups:
+                    darks_groups[darks] = {
+                        'darks_number': darks,
+                        'address': v.get('address', 'Адрес не указан'),
+                        'vehicles_count': 0,
+                        'preview': []
+                    }
+                darks_groups[darks]['vehicles_count'] += 1
+                if len(darks_groups[darks]['preview']) < 3:
+                    darks_groups[darks]['preview'].append({
+                        'gos': v.get('gos', ''),
+                        'old_iot': iot
+                    })
+    
+    darks_list = list(darks_groups.values())
+    darks_list.sort(key=lambda x: int(x['darks_number']) if x['darks_number'].isdigit() else 999999)
+    
+    return render_template('iot_main.html',
+                          bag_items=bag_items,
+                          bag_count=len(bag_items),
+                          replaced_today=replaced_today,
+                          darks_groups=darks_list,
+                          now=get_msk_now().strftime('%H:%M:%S'))
+
+
+@app.route('/iot/darks/<darks_number>')
+@login_required
+def iot_darks(darks_number):
+    """Страница даркстора для IOT-мастера"""
+    if session.get('role') != 'iot':
+        return redirect(url_for('login_page'))
+    
+    bag_data = get_iot_bag()
+    bag_items = [item.get('iot') for item in bag_data.get('bag', [])]
+    
+    vehicles_data = load_iot_vehicles()
+    source_data = get_iot_source()
+    
+    # Находим все велосипеды на этом дарксторе, требующие замены
+    vehicles = []
+    address = ''
+    for iot, info in source_data.items():
+        if info.get('status_velo') == 'В аренде' and info.get('status_iot') == 'Требует перепрошивки':
+            if iot in vehicles_data:
+                v = vehicles_data[iot]
+                if v.get('darks') == darks_number:
+                    if not address:
+                        address = v.get('address', '')
+                    vehicles.append({
+                        'old_iot': iot,
+                        'frame_number': v.get('frame_number', ''),
+                        'gos': v.get('gos', ''),
+                        'address': v.get('address', ''),
+                        'darks': v.get('darks', '')
+                    })
+    
+    return render_template('iot_darks.html',
+                          darks_number=darks_number,
+                          address=address or 'Адрес не указан',
+                          vehicles=vehicles,
+                          bag_items=bag_items,
+                          bag_count=len(bag_items),
+                          now=get_msk_now().strftime('%H:%M:%S'))
+
+
+@app.route('/iot/history')
+@login_required
+def iot_history_page():
+    """Страница истории замен"""
+    if session.get('role') != 'iot':
+        return redirect(url_for('login_page'))
+    
+    history_data = get_iot_history()
+    history = history_data.get('history', [])
+    
+    # Группируем по дарксторам
+    history_by_darks = {}
+    for h in reversed(history):  # Сначала новые
+        darks = h.get('darks', 'без номера')
+        if darks not in history_by_darks:
+            history_by_darks[darks] = []
+        history_by_darks[darks].append(h)
+    
+    return render_template('iot_history.html',
+                          history_by_darks=history_by_darks,
+                          now=get_msk_now().strftime('%H:%M:%S'))
+
+
+@app.route('/api/iot/load_bag', methods=['POST'])
+@login_required
+def api_iot_load_bag():
+    """Загружает IOT в багажник с проверкой"""
+    if session.get('role') != 'iot':
+        return jsonify({'success': False, 'error': 'Доступ запрещён'})
+    
+    try:
+        data = request.json
+        iots = data.get('iots', [])
+        
+        if not iots:
+            return jsonify({'success': False, 'error': 'Пустой список'})
+        
+        # Загружаем актуальный источник
+        source_data = load_iot_source()
+        
+        bag_data = get_iot_bag()
+        current_bag = [item.get('iot') for item in bag_data.get('bag', [])]
+        
+        added = []
+        errors = []
+        duplicates = []
+        seen_in_input = set()
+        
+        for iot in iots:
+            iot = iot.strip()
+            if not iot:
+                continue
+            
+            # Проверка на дубликат в этом же вводе
+            if iot in seen_in_input:
+                continue
+            seen_in_input.add(iot)
+            
+            # Проверка: уже в багажнике
+            if iot in current_bag:
+                duplicates.append(iot)
+                continue
+            
+            # Проверка 1: существует в таблице №1?
+            if iot not in source_data:
+                errors.append({
+                    'iot': iot,
+                    'reason': 'Не найден в системе'
+                })
+                continue
+            
+            # Проверка 2: статус IOT = "ОК"?
+            status_iot = source_data[iot].get('status_iot', '')
+            if status_iot != 'ОК':
+                errors.append({
+                    'iot': iot,
+                    'reason': f'Статус "{status_iot}" (ожидается "ОК")'
+                })
+                continue
+            
+            # ✅ Всё ок - добавляем
+            added.append(iot)
+        
+        # Сохраняем
+        for iot in added:
+            bag_data['bag'].append({
+                'iot': iot,
+                'added': get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
+            })
+        save_iot_bag(bag_data)
+        
+        return jsonify({
+            'success': True,
+            'added': added,
+            'errors': errors,
+            'duplicates': duplicates,
+            'total_input': len(seen_in_input)
+        })
+        
+    except Exception as e:
+        logger.error(f"Ошибка загрузки багажника: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/iot/sync_source', methods=['POST'])
+@login_required
+def api_iot_sync_source():
+    """Синхронизирует список IOT из таблицы №1"""
+    if session.get('role') != 'iot':
+        return jsonify({'success': False, 'error': 'Доступ запрещён'})
+    
+    try:
+        source_data = load_iot_source()
+        return jsonify({'success': True, 'count': len(source_data)})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/iot/bag')
+@login_required
+def api_iot_bag():
+    """Возвращает текущий багажник"""
+    if session.get('role') != 'iot':
+        return jsonify({'success': False, 'error': 'Доступ запрещён'})
+    
+    bag_data = get_iot_bag()
+    return jsonify({'success': True, 'bag': bag_data})
+
+
+@app.route('/api/iot/replace', methods=['POST'])
+@login_required
+def api_iot_replace():
+    """Заменяет IOT"""
+    if session.get('role') != 'iot':
+        return jsonify({'success': False, 'error': 'Доступ запрещён'})
+    
+    try:
+        data = request.json
+        old_iot = data.get('old_iot', '').strip()
+        new_iot = data.get('new_iot', '').strip()
+        frame_number = data.get('frame_number', '').strip()
+        gos = data.get('gos', '').strip()
+        darks = data.get('darks', '').strip()
+        address = data.get('address', '').strip()
+        
+        if not old_iot or not new_iot or not frame_number:
+            return jsonify({'success': False, 'error': 'Недостаточно данных'})
+        
+        # Проверка: новый IOT в багажнике?
+        bag_data = get_iot_bag()
+        current_bag = [item.get('iot') for item in bag_data.get('bag', [])]
+        
+        if new_iot not in current_bag:
+            return jsonify({'success': False, 'error': f'IOT {new_iot} не в багажнике'})
+        
+        # Проверка: новый IOT не установлен на другом велосипеде?
+        vehicles_data = load_iot_vehicles()
+        if new_iot in vehicles_data:
+            # Уже установлен на каком-то велосипеде - ОШИБКА
+            bag_data['bag'] = [item for item in bag_data.get('bag', []) if item.get('iot') != new_iot]
+            save_iot_bag(bag_data)
+            return jsonify({
+                'success': False,
+                'error': f'IOT {new_iot} уже установлен на велосипеде {vehicles_data[new_iot].get("frame_number", "")}! Верните его в цех.'
+            })
+        
+        # Проверка: старый IOT есть на этом велосипеде?
+        if old_iot in vehicles_data:
+            v = vehicles_data[old_iot]
+            if v.get('frame_number') != frame_number:
+                return jsonify({'success': False, 'error': 'Несовпадение номера рамы'})
+        
+        # Записываем отчёт в Google Sheets
+        write_iot_report(frame_number, new_iot, old_iot)
+        
+        # Убираем новый IOT из багажника
+        bag_data['bag'] = [item for item in bag_data.get('bag', []) if item.get('iot') != new_iot]
+        save_iot_bag(bag_data)
+        
+        # Сохраняем в историю
+        now = get_msk_now()
+        history_data = get_iot_history()
+        history_data['history'].append({
+            'date': now.strftime('%d.%m'),
+            'time': now.strftime('%H:%M'),
+            'old_iot': old_iot,
+            'new_iot': new_iot,
+            'frame_number': frame_number,
+            'gos': gos,
+            'darks': darks,
+            'address': address,
+            'timestamp': now.strftime('%Y-%m-%d %H:%M:%S')
+        })
+        save_iot_history(history_data)
+        
+        logger.info(f"✅ IOT заменён: {old_iot} → {new_iot} (рама {frame_number})")
+        
+        return jsonify({
+            'success': True,
+            'message': f'IOT {old_iot} заменён на {new_iot}'
+        })
+        
+    except Exception as e:
+        logger.error(f"Ошибка замены IOT: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 # ============================================================
 # ЗАПУСК
 # ============================================================

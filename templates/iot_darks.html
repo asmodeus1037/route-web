@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="icon" href="/data/vanta.png" type="image/png">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Даркстор #{{ darks_number }} - IOT</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="/static/css/iot.css">
+</head>
+<body>
+    <div id="toast" class="toast">✅ Готово</div>
+
+    <h1>📍 {{ address }}</h1>
+    <div class="sub-title">
+        <span>#{{ darks_number }} · {{ vehicles|length }} вело</span>
+        <span>
+            <a href="/iot" class="back-link">← Назад к маршруту</a>
+        </span>
+        <span>🕒 {{ now }}</span>
+    </div>
+
+    <div class="bag-mini">
+        📦 В багажнике: <strong>{{ bag_count }}</strong> IOT
+    </div>
+
+    <div id="vehicles-container">
+        {% for v in vehicles %}
+        <div class="vehicle-card" id="vehicle-{{ v.old_iot }}">
+            <div class="vehicle-header">
+                <span class="vehicle-gos">{{ v.gos or 'Без номера' }}</span>
+                <span class="vehicle-status">🔴 Требует замены</span>
+            </div>
+
+            <div class="vehicle-info">
+                <div><strong>Рама:</strong> {{ v.frame_number }}</div>
+                <div><strong>Адрес:</strong> {{ v.address }}</div>
+                <div><strong>Даркстор:</strong> {{ v.darks }}</div>
+            </div>
+
+            <div class="iot-section">
+                <div class="iot-old">
+                    🔴 Старый IOT: <strong>{{ v.old_iot }}</strong>
+                    <small>(требует перепрошивки)</small>
+                </div>
+
+                <div class="iot-new">
+                    <label>🟢 Новый IOT (из багажника):</label>
+                    {% if bag_count > 0 %}
+                    <select id="new_iot_{{ v.old_iot }}">
+                        <option value="">— Выберите прошитый IOT —</option>
+                        {% for iot in bag_items %}
+                        <option value="{{ iot }}">{{ iot }}</option>
+                        {% endfor %}
+                    </select>
+                    {% else %}
+                    <div class="error-msg">📭 Багажник пуст! Загрузите IOT сначала.</div>
+                    {% endif %}
+                </div>
+
+                {% if bag_count > 0 %}
+                <button class="btn btn-success" onclick="openReplaceModal('{{ v.old_iot }}', '{{ v.frame_number }}', '{{ v.gos }}', '{{ v.address }}', '{{ v.darks }}')">
+                    ✅ Заменить IOT
+                </button>
+                {% endif %}
+            </div>
+        </div>
+        {% else %}
+        <div class="no-tickets">Нет велосипедов для замены IOT</div>
+        {% endfor %}
+    </div>
+
+    <!-- Модалка подтверждения -->
+    <div class="modal" id="replaceModal">
+        <div class="modal-content">
+            <button class="close-btn" onclick="closeReplaceModal()">×</button>
+            <h3>✅ Подтверждение замены IOT</h3>
+            <div id="replaceContent"></div>
+            <div style="margin-top:12px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
+                <button class="btn btn-secondary" onclick="closeReplaceModal()">Отмена</button>
+                <button class="btn btn-success" onclick="confirmReplace()">✅ Подтвердить замену</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">Обновлено: {{ now }}</div>
+
+    <script>
+        var BAG_ITEMS = {{ bag_items|tojson }};
+    </script>
+    <script src="/static/js/iot.js"></script>
+</body>
+</html>

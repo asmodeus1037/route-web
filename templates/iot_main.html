@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="icon" href="/data/vanta.png" type="image/png">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IOT-Мастер</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="/static/css/iot.css">
+</head>
+<body>
+    <div id="toast" class="toast">✅ Готово</div>
+    <div class="header">
+        <h1>🔧 IOT-Мастер</h1>
+        <a href="/logout" class="logout-btn" onclick="logout(event)">🚪 Выйти</a>
+    </div>
+
+    <div class="sub-title">
+        <span>📦 В багажнике: <strong>{{ bag_count }}</strong> IOT</span>
+        <span>✅ Заменено сегодня: <strong>{{ replaced_today }}</strong></span>
+        <span>🕒 {{ now }}</span>
+    </div>
+
+    <div class="actions-bar">
+        <button class="btn btn-primary" onclick="openBagModal()">📥 Загрузить багажник</button>
+        <button class="btn btn-secondary" onclick="syncSource()">🔄 Обновить данные</button>
+        <a href="/iot/history" class="btn btn-info">📜 История замен</a>
+    </div>
+
+    {% if bag_count > 0 %}
+    <div class="bag-section">
+        <div class="section-title">📦 БАГАЖНИК (прошитые IOT):</div>
+        <div class="bag-items">
+            {% for iot in bag_items %}
+            <span class="bag-item">{{ iot }}</span>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if darks_groups %}
+    <div class="section-title">📍 ДАРКСТОРЫ С IOT ДЛЯ ЗАМЕНЫ:</div>
+    <div class="darks-grid">
+        {% for group in darks_groups %}
+        <div class="darks-card" onclick="location.href='/iot/darks/{{ group.darks_number }}'">
+            <div class="address">{{ group.address }}</div>
+            <div class="number">#{{ group.darks_number }}</div>
+            <div class="stats">
+                <span class="pending-count">🚲 {{ group.vehicles_count }} вело</span>
+            </div>
+            <div style="margin-top:8px;">
+                {% for v in group.preview %}
+                <div class="ticket-preview">
+                    <span>{{ v.gos or 'Без номера' }}</span>
+                    <span>{{ v.old_iot }}</span>
+                </div>
+                {% endfor %}
+                {% if group.vehicles_count > 3 %}
+                <div style="font-size:12px;color:#94a3b8;padding-top:4px;">+ ещё {{ group.vehicles_count - 3 }}</div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="no-tickets">📭 Нет дарксторов с IOT для замены</div>
+    {% endif %}
+
+    <!-- Модалка загрузки багажника -->
+    <div class="modal" id="bagModal">
+        <div class="modal-content">
+            <button class="close-btn" onclick="closeBagModal()">×</button>
+            <h3>📥 Загрузить багажник</h3>
+            <p style="color:#64748b;margin-bottom:12px;">
+                Вставьте номера <strong>прошитых</strong> IOT (по одному в строке):<br>
+                <small>💡 Только IOT со статусом "ОК"</small>
+            </p>
+            <textarea id="bagInput" placeholder="25-8800&#10;25-8801&#10;25-8802" style="width:100%;height:200px;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-family:monospace;font-size:14px;resize:vertical;"></textarea>
+            <div style="margin-top:12px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
+                <button class="btn btn-secondary" onclick="closeBagModal()">Отмена</button>
+                <button class="btn btn-primary" onclick="loadBag()">✅ Проверить и загрузить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модалка результата проверки -->
+    <div class="modal" id="resultModal">
+        <div class="modal-content">
+            <button class="close-btn" onclick="closeResultModal()">×</button>
+            <h3>📋 Результат проверки</h3>
+            <div id="resultContent"></div>
+            <div style="margin-top:12px;text-align:right;">
+                <button class="btn btn-primary" onclick="closeResultModalAndReload()">✅ Понятно</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">Обновлено: {{ now }}</div>
+
+    <script src="/static/js/iot.js"></script>
+</body>
+</html>
