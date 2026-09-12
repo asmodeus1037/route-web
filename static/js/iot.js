@@ -274,3 +274,101 @@ document.addEventListener('DOMContentLoaded', function() {
         })(modals[i]);
     }
 });
+
+// ============================================================
+// УДАЛЕНИЕ IOT ИЗ БАГАЖНИКА
+// ============================================================
+async function removeFromBag(iot) {
+    if (!confirm('Удалить IOT ' + iot + ' из багажника?')) {
+        return;
+    }
+    
+    try {
+        var response = await fetch('/api/iot/remove_from_bag', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ iot: iot })
+        });
+        
+        var data = await response.json();
+        
+        if (data.success) {
+            showToast('✅ IOT ' + iot + ' удалён', false);
+            
+            var item = document.getElementById('bag-item-' + iot);
+            if (item) {
+                item.style.transition = 'opacity 0.3s, transform 0.3s';
+                item.style.opacity = '0';
+                item.style.transform = 'translateX(-20px)';
+                setTimeout(function() {
+                    item.remove();
+                    
+                    var remaining = document.querySelectorAll('.bag-item-row');
+                    if (remaining.length === 0) {
+                        location.reload();
+                    } else {
+                        updateBagCount();
+                    }
+                }, 300);
+            } else {
+                location.reload();
+            }
+        } else {
+            showToast('❌ Ошибка: ' + (data.error || 'Неизвестная'), true);
+        }
+    } catch (error) {
+        console.error('Ошибка удаления:', error);
+        showToast('❌ Ошибка соединения', true);
+    }
+}
+
+// ============================================================
+// ОЧИСТКА БАГАЖНИКА
+// ============================================================
+async function clearBag() {
+    var count = document.querySelectorAll('.bag-item-row').length;
+    
+    if (count === 0) {
+        showToast('❌ Багажник уже пуст', true);
+        return;
+    }
+    
+    if (!confirm('Удалить ВСЕ ' + count + ' IOT из багажника?')) {
+        return;
+    }
+    
+    try {
+        var response = await fetch('/api/iot/clear_bag', {
+            method: 'POST'
+        });
+        
+        var data = await response.json();
+        
+        if (data.success) {
+            showToast('✅ Багажник очищен (' + data.count + ' IOT удалено)', false);
+            setTimeout(function() { location.reload(); }, 800);
+        } else {
+            showToast('❌ Ошибка: ' + (data.error || 'Неизвестная'), true);
+        }
+    } catch (error) {
+        console.error('Ошибка очистки:', error);
+        showToast('❌ Ошибка соединения', true);
+    }
+}
+
+// ============================================================
+// ОБНОВЛЕНИЕ СЧЁТЧИКА БАГАЖНИКА
+// ============================================================
+function updateBagCount() {
+    var count = document.querySelectorAll('.bag-item-row').length;
+    
+    var sectionTitle = document.querySelector('.bag-section .section-title span');
+    if (sectionTitle) {
+        sectionTitle.textContent = count + ' шт.';
+    }
+    
+    var subTitle = document.querySelector('.sub-title strong');
+    if (subTitle) {
+        subTitle.textContent = count;
+    }
+}

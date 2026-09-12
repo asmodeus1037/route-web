@@ -27,16 +27,25 @@
         <a href="/iot/history" class="btn btn-info">📜 История замен</a>
     </div>
 
-    {% if bag_count > 0 %}
-    <div class="bag-section">
-        <div class="section-title">📦 БАГАЖНИК (прошитые IOT):</div>
-        <div class="bag-items">
-            {% for iot in bag_items %}
-            <span class="bag-item">{{ iot }}</span>
-            {% endfor %}
-        </div>
+   {% if bag_count > 0 %}
+<div class="bag-section">
+    <div class="section-title">
+        📦 БАГАЖНИК (прошитые IOT): 
+        <span style="color:#64748b;font-weight:400;font-size:13px;">{{ bag_count }} шт.</span>
     </div>
-    {% endif %}
+    <div class="bag-items-with-remove">
+        {% for iot in bag_items %}
+        <div class="bag-item-row" id="bag-item-{{ iot }}">
+            <span class="bag-item">{{ iot }}</span>
+            <button class="btn-remove-iot" onclick="removeFromBag('{{ iot }}')" title="Удалить из багажника">❌</button>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="bag-actions">
+        <button class="btn btn-danger-outline" onclick="clearBag()">🗑️ Очистить багажник</button>
+    </div>
+</div>
+{% endif %}
 
     {% if darks_groups %}
     <div class="section-title">📍 ДАРКСТОРЫ С IOT ДЛЯ ЗАМЕНЫ:</div>

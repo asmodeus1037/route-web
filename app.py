@@ -1745,11 +1745,10 @@ def transit_done(uid):
 # ============================================================
 
 def load_iot_source():
-    """Загружает список IOT из таблицы №1 и кэширует"""
+    """Загружает список IOT из листа 'Все IOT' и кэширует"""
     try:
-        sheet = get_iot_sheet_by_id(IOT_SOURCE_SHEET_ID)
-        worksheet = sheet.get_worksheet(0)
-        rows = worksheet.get_all_values()
+        sheet = get_iot_sheet_by_id(IOT_SOURCE_SHEET_ID, "Все IOT")
+        rows = sheet.get_all_values()
         
         iot_data = {}
         if len(rows) > 1:
@@ -1775,7 +1774,6 @@ def load_iot_source():
     except Exception as e:
         logger.error(f"Ошибка загрузки IOT Source: {e}")
         return {}
-
 
 def get_iot_source():
     """Возвращает кэш IOT Source"""
@@ -1840,18 +1838,17 @@ def save_iot_history(history_data):
 
 
 def write_iot_report(frame_number, new_iot, old_iot=''):
-    """Записывает отчёт в таблицу №3"""
+    """Записывает отчёт в лист 'КОРРЕКТИРОВКИ ВЕЛО'"""
     try:
-        sheet = get_iot_sheet_by_id(IOT_REPORT_SHEET_ID)
-        worksheet = sheet.get_worksheet(0)
+        sheet = get_iot_sheet_by_id(IOT_REPORT_SHEET_ID, "КОРРЕКТИРОВКИ ВЕЛО")
         
         now = get_msk_now()
         date_str = now.strftime('%d.%m')
         
-        all_values = worksheet.get_all_values()
+        all_values = sheet.get_all_values()
         new_row = len(all_values) + 1
         
-        worksheet.update(f'A{new_row}:F{new_row}', [[
+        sheet.update(f'A{new_row}:F{new_row}', [[
             date_str,
             'Изменить IOT',
             frame_number,
@@ -1865,7 +1862,6 @@ def write_iot_report(frame_number, new_iot, old_iot=''):
     except Exception as e:
         logger.error(f"Ошибка записи отчёта IOT: {e}")
         return False
-
 
 @app.route('/iot')
 @login_required
@@ -2035,6 +2031,69 @@ def api_iot_load_bag():
         
     except Exception as e:
         logger.error(f"Ошибка загрузки багажника: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/iot/remove_from_bag', methods=['POST'])
+@login_required
+def api_iot_remove_from_bag():
+    """Удаляет один IOT из багажника"""
+    if session.get('role') != 'iot':
+        return jsonify({'success': False, 'error': 'Доступ запрещён'})
+    
+    try:
+        data = request.json
+        iot = data.get('iot', '').strip()
+        
+        if not iot:
+            return jsonify({'success': False, 'error': 'Не указан IOT'})
+        
+        bag_data = get_iot_bag()
+        current_bag = bag_data.get('bag', [])
+        
+        # Проверяем, есть ли этот IOT в багажнике
+        if not any(item.get('iot') == iot for item in current_bag):
+            return jsonify({'success': False, 'error': f'IOT {iot} не найден в багажнике'})
+        
+        # Удаляем
+        bag_data['bag'] = [item for item in current_bag if item.get('iot') != iot]
+        save_iot_bag(bag_data)
+        
+        logger.info(f"✅ IOT {iot} удалён из багажника")
+        
+        return jsonify({
+            'success': True,
+            'message': f'IOT {iot} удалён из багажника'
+        })
+        
+    except Exception as e:
+        logger.error(f"Ошибка удаления IOT из багажника: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/iot/clear_bag', methods=['POST'])
+@login_required
+def api_iot_clear_bag():
+    """Полностью очищает багажник"""
+    if session.get('role') != 'iot':
+        return jsonify({'success': False, 'error': 'Доступ запрещён'})
+    
+    try:
+        bag_data = get_iot_bag()
+        count = len(bag_data.get('bag', []))
+        
+        bag_data['bag'] = []
+        save_iot_bag(bag_data)
+        
+        logger.info(f"✅ Багажник очищен ({count} IOT удалено)")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Багажник очищен ({count} IOT удалено)',
+            'count': count
+        })
+        
+    except Exception as e:
+        logger.error(f"Ошибка очистки багажника: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 
