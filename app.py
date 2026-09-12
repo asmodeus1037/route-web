@@ -193,7 +193,6 @@ def get_sheet_client():
     return client.open(SHEET_NAME)
 
 def get_iot_sheet_by_id(sheet_id, sheet_name=None):
-    """Открывает Google Sheet по ID (для IOT таблиц)"""
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
     client = gspread.authorize(creds)
@@ -1985,9 +1984,8 @@ def iot_history_page():
 
 @app.route('/api/iot/load_bag', methods=['POST'])
 @login_required
-@app.route('/api/iot/load_bag', methods=['POST'])
-@login_required
 def api_iot_load_bag():
+    """Загружает IOT в багажник БЕЗ проверок - можно добавить любой IOT"""
     if session.get('role') != 'iot':
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
     
@@ -2014,12 +2012,10 @@ def api_iot_load_bag():
                 continue
             seen_in_input.add(iot)
             
-            # Проверяем только на дубликат в багажнике
             if iot in current_bag:
                 duplicates.append(iot)
                 continue
             
-            # Добавляем ЛЮБОЙ IOT без проверок
             added.append(iot)
         
         for iot in added:
@@ -2040,6 +2036,7 @@ def api_iot_load_bag():
     except Exception as e:
         logger.error(f"Ошибка загрузки багажника: {e}")
         return jsonify({'success': False, 'error': str(e)})
+
 
 @app.route('/api/iot/sync_source', methods=['POST'])
 @login_required
