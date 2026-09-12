@@ -1747,7 +1747,7 @@ def transit_done(uid):
 def load_iot_source():
     """Загружает список IOT из листа 'Все IOT' и кэширует"""
     try:
-        sheet = get_iot_sheet_by_id(IOT_SOURCE_SHEET_ID, "Все IOT")
+        sheet = get_iot_sheet_by_id(IOT_SOURCE_SHEET_ID, "Все IoT")
         rows = sheet.get_all_values()
         
         iot_data = {}
