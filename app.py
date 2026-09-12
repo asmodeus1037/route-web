@@ -1745,7 +1745,7 @@ def transit_done(uid):
 # ============================================================
 
 def load_iot_source():
-    """Загружает список IOT из листа 'Все IOT' и кэширует"""
+    """Загружает список IOT из листа 'Все IoT' и кэширует"""
     try:
         sheet = get_iot_sheet_by_id(IOT_SOURCE_SHEET_ID, "Все IoT")
         rows = sheet.get_all_values()
@@ -1759,9 +1759,12 @@ def load_iot_source():
                         continue
                     status_velo = row[7].strip() if len(row) > 7 else ''
                     status_iot = row[8].strip() if len(row) > 8 else ''
+                    # Читаем столбец J (индекс 9) - там запись о замене
+                    replaced_text = row[9].strip() if len(row) > 9 else ''
                     iot_data[iot] = {
                         'status_velo': status_velo,
-                        'status_iot': status_iot
+                        'status_iot': status_iot,
+                        'replaced_text': replaced_text
                     }
         
         cache_data = {
@@ -1836,6 +1839,28 @@ def get_iot_history():
 def save_iot_history(history_data):
     return write_cache(IOT_HISTORY_FILE, history_data)
 
+def update_iot_source_column_j(old_iot, new_iot):
+    """Записывает в столбец J листа 'Все IoT' информацию о замене (в строку СТАРОГО IOT)"""
+    try:
+        sheet = get_iot_sheet_by_id(IOT_SOURCE_SHEET_ID, "Все IoT")
+        rows = sheet.get_all_values()
+        
+        # Ищем строку со старым IOT
+        for idx, row in enumerate(rows, start=1):
+            if len(row) > 0 and row[0].strip() == old_iot:
+                now = get_msk_now()
+                date_str = now.strftime('%d.%m')
+                text = f"{date_str} поменяли на прошитый (новый IOT: {new_iot})"
+                sheet.update_cell(idx, 10, text)  # Столбец J = 10
+                logger.info(f"✅ Запись в J для {old_iot}: {text}")
+                return True
+        
+        logger.warning(f"⚠️ IOT {old_iot} не найден в листе 'Все IoT'")
+        return False
+    except Exception as e:
+        logger.error(f"Ошибка записи в столбец J: {e}")
+        return False
+
 
 def write_iot_report(frame_number, new_iot, old_iot=''):
     """Записывает отчёт в лист 'КОРРЕКТИРОВКИ ВЕЛО'"""
@@ -1862,7 +1887,7 @@ def write_iot_report(frame_number, new_iot, old_iot=''):
     except Exception as e:
         logger.error(f"Ошибка записи отчёта IOT: {e}")
         return False
-
+    
 @app.route('/iot')
 @login_required
 def iot_main():
@@ -1887,8 +1912,7 @@ def iot_main():
     source_data = get_iot_source()
     
     darks_groups = {}
-    for iot, info in source_data.items():
-        if info.get('status_velo') == 'В аренде' and info.get('status_iot') == 'Требует перепрошивки':
+    
             if iot in vehicles_data:
                 v = vehicles_data[iot]
                 darks = v.get('darks', 'без номера')
@@ -1933,7 +1957,9 @@ def iot_darks(darks_number):
     vehicles = []
     address = ''
     for iot, info in source_data.items():
-        if info.get('status_velo') == 'В аренде' and info.get('status_iot') == 'Требует перепрошивки':
+    if (info.get('status_velo') == 'В аренде' 
+        and info.get('status_iot') == 'Требует перепрошивки'
+        and not info.get('replaced_text')):  # НОВОЕ - J пусто
             if iot in vehicles_data:
                 v = vehicles_data[iot]
                 if v.get('darks') == darks_number:
@@ -2122,6 +2148,8 @@ def api_iot_bag():
 
 @app.route('/api/iot/replace', methods=['POST'])
 @login_required
+@app.route('/api/iot/replace', methods=['POST'])
+@login_required
 def api_iot_replace():
     if session.get('role') != 'iot':
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
@@ -2153,16 +2181,17 @@ def api_iot_replace():
                 'error': f'IOT {new_iot} уже установлен на велосипеде {vehicles_data[new_iot].get("frame_number", "")}! Верните его в цех.'
             })
         
-        if old_iot in vehicles_data:
-            v = vehicles_data[old_iot]
-            if v.get('frame_number') != frame_number:
-                return jsonify({'success': False, 'error': 'Несовпадение номера рамы'})
-        
+        # 1. Запись в "КОРРЕКТИРОВКИ ВЕЛО" (таблица №2)
         write_iot_report(frame_number, new_iot, old_iot)
         
+        # 2. Запись в "Все IoT" столбец J (таблица №1) - в строку СТАРОГО IOT
+        update_iot_source_column_j(old_iot, new_iot)
+        
+        # 3. Убираем новый IOT из багажника
         bag_data['bag'] = [item for item in bag_data.get('bag', []) if item.get('iot') != new_iot]
         save_iot_bag(bag_data)
         
+        # 4. Сохраняем в локальную историю
         now = get_msk_now()
         history_data = get_iot_history()
         history_data['history'].append({

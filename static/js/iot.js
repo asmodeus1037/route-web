@@ -79,12 +79,14 @@ async function loadBag() {
         
         var data = await response.json();
         
-        if (data.success) {
-            closeBagModal();
-            showResult(data);
-        } else {
-            showToast('❌ Ошибка: ' + (data.error || 'Неизвестная ошибка'), true);
-        }
+      if (data.success) {
+    showToast('✅ IOT заменён: ' + replaceTarget.old_iot + ' → ' + replaceTarget.new_iot, false);
+    closeReplaceModal();
+    // Принудительная перезагрузка после замены
+    setTimeout(function() { location.reload(); }, 800);
+} else {
+    showToast('❌ Ошибка: ' + (data.error || 'Неизвестная'), true);
+}
     } catch (error) {
         console.error('Ошибка загрузки багажника:', error);
         showToast('❌ Ошибка соединения', true);

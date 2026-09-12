@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="icon" href="/data/vanta.png" type="image/png">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>История замен IOT</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="/static/css/iot.css">
+</head>
+<body>
+    <div class="header">
+        <h1>📜 История замен IOT</h1>
+        <a href="/logout" class="logout-btn" onclick="logout(event)">🚪 Выйти</a>
+    </div>
+
+    <a href="/iot" class="back-link">← Назад к маршруту</a>
+
+    <div id="historyContainer">
+        {% if history_by_darks %}
+            {% for darks, items in history_by_darks.items() %}
+            <div class="history-group">
+                <div class="history-group-title">📍 Даркстор #{{ darks }} ({{ items|length }} замен)</div>
+                {% for item in items %}
+                <div class="history-item">
+                    <div class="history-time">{{ item.date }} · {{ item.time }}</div>
+                    <div class="history-info">
+                        <div><strong>Рама:</strong> {{ item.frame_number }}</div>
+                        <div><strong>Гос:</strong> {{ item.gos }}</div>
+                    </div>
+                    <div class="history-iot">
+                        <span class="old-iot">🔴 {{ item.old_iot }}</span>
+                        <span class="arrow">→</span>
+                        <span class="new-iot">🟢 {{ item.new_iot }}</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        {% else %}
+        <div class="no-tickets">📭 История пуста</div>
+        {% endif %}
+    </div>
+
+    <div class="footer">Обновлено: {{ now }}</div>
+
+    <script src="/static/js/iot.js"></script>
+</body>
+</html>
