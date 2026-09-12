@@ -1985,6 +1985,8 @@ def iot_history_page():
 
 @app.route('/api/iot/load_bag', methods=['POST'])
 @login_required
+@app.route('/api/iot/load_bag', methods=['POST'])
+@login_required
 def api_iot_load_bag():
     if session.get('role') != 'iot':
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
@@ -1996,13 +1998,10 @@ def api_iot_load_bag():
         if not iots:
             return jsonify({'success': False, 'error': 'Пустой список'})
         
-        source_data = load_iot_source()
-        
         bag_data = get_iot_bag()
         current_bag = [item.get('iot') for item in bag_data.get('bag', [])]
         
         added = []
-        errors = []
         duplicates = []
         seen_in_input = set()
         
@@ -2015,25 +2014,12 @@ def api_iot_load_bag():
                 continue
             seen_in_input.add(iot)
             
+            # Проверяем только на дубликат в багажнике
             if iot in current_bag:
                 duplicates.append(iot)
                 continue
             
-            if iot not in source_data:
-                errors.append({
-                    'iot': iot,
-                    'reason': 'Не найден в системе'
-                })
-                continue
-            
-            status_iot = source_data[iot].get('status_iot', '')
-            if status_iot != 'ОК':
-                errors.append({
-                    'iot': iot,
-                    'reason': f'Статус "{status_iot}" (ожидается "ОК")'
-                })
-                continue
-            
+            # Добавляем ЛЮБОЙ IOT без проверок
             added.append(iot)
         
         for iot in added:
@@ -2046,7 +2032,7 @@ def api_iot_load_bag():
         return jsonify({
             'success': True,
             'added': added,
-            'errors': errors,
+            'errors': [],
             'duplicates': duplicates,
             'total_input': len(seen_in_input)
         })
@@ -2054,7 +2040,6 @@ def api_iot_load_bag():
     except Exception as e:
         logger.error(f"Ошибка загрузки багажника: {e}")
         return jsonify({'success': False, 'error': str(e)})
-
 
 @app.route('/api/iot/sync_source', methods=['POST'])
 @login_required
