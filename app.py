@@ -2153,8 +2153,6 @@ def api_iot_bag():
 
 @app.route('/api/iot/replace', methods=['POST'])
 @login_required
-@app.route('/api/iot/replace', methods=['POST'])
-@login_required
 def api_iot_replace():
     """Заменяет IOT: пишет в 'Все IoT' столбец J и в 'КОРРЕКТИРОВКИ ВЕЛО'"""
     if session.get('role') != 'iot':
