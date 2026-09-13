@@ -36,6 +36,7 @@ IOT_REPORT_SHEET_ID = "1s_hXPSWueMAo3W1pgLCG0eHhYKoW0uoIZ6CGWFf55VU"
 
 IOT_BAG_FILE = "iot_bag.json"
 IOT_SOURCE_FILE = "iot_source.json"
+IOT_VEHICLES_FILE = "iot_vehicles.json"
 IOT_HISTORY_FILE = "iot_history.json"
 
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -60,6 +61,14 @@ MASTER_CREDENTIALS = {
 uid_index = {}
 darks_ref = {}
 queue_lock = threading.Lock()
+
+# Кэш в памяти для IOT (мгновенный доступ)
+_iot_source_memory = None
+_iot_vehicles_memory = None
+
+# Глобальный gspread-клиент (переиспользование)
+_gspread_client = None
+_gspread_client_lock = threading.Lock()
 
 # ============================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -186,16 +195,22 @@ def update_ticket_in_admin_cache(uid, new_status, note='', display_desc=''):
 # ============================================================
 # GOOGLE SHEETS
 # ============================================================
+def get_gspread_client():
+    """Возвращает переиспользуемый gspread-клиент"""
+    global _gspread_client
+    with _gspread_client_lock:
+        if _gspread_client is None:
+            scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+            creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+            _gspread_client = gspread.authorize(creds)
+        return _gspread_client
+
 def get_sheet_client():
-    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-    client = gspread.authorize(creds)
+    client = get_gspread_client()
     return client.open(SHEET_NAME)
 
 def get_iot_sheet_by_id(sheet_id, sheet_name=None):
-    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-    client = gspread.authorize(creds)
+    client = get_gspread_client()
     spreadsheet = client.open_by_key(sheet_id)
     if sheet_name:
         return spreadsheet.worksheet(sheet_name)
@@ -1744,8 +1759,23 @@ def transit_done(uid):
 # IOT-СИСТЕМА (ЗАМЕНА IOT-МОДУЛЕЙ)
 # ============================================================
 
-def load_iot_source():
-    """Загружает список IOT из листа 'Все IoT' и кэширует"""
+def load_iot_source(force_reload=False):
+    """Загружает список IOT из листа 'Все IoT' (кэш в памяти + JSON)"""
+    global _iot_source_memory
+    
+    # Если не force_reload и есть кэш в памяти — вернуть
+    if not force_reload and _iot_source_memory is not None:
+        return _iot_source_memory
+    
+    # Если не force_reload и есть JSON — прочитать
+    if not force_reload:
+        cache = read_cache(IOT_SOURCE_FILE)
+        if cache and 'iot_list' in cache:
+            _iot_source_memory = cache['iot_list']
+            logger.info(f"✅ IOT Source загружен из кэша: {len(_iot_source_memory)} записей")
+            return _iot_source_memory
+    
+    # Иначе — тянем из Google Sheets
     try:
         sheet = get_iot_sheet_by_id(IOT_SOURCE_SHEET_ID, "Все IoT")
         rows = sheet.get_all_values()
@@ -1759,7 +1789,6 @@ def load_iot_source():
                         continue
                     status_velo = row[7].strip() if len(row) > 7 else ''
                     status_iot = row[8].strip() if len(row) > 8 else ''
-                    # Читаем столбец J (индекс 9) - там запись о замене
                     replaced_text = row[9].strip() if len(row) > 9 else ''
                     iot_data[iot] = {
                         'status_velo': status_velo,
@@ -1772,22 +1801,36 @@ def load_iot_source():
             'iot_list': iot_data
         }
         write_cache(IOT_SOURCE_FILE, cache_data)
-        logger.info(f"✅ IOT Source загружен: {len(iot_data)} записей")
+        _iot_source_memory = iot_data
+        logger.info(f"✅ IOT Source загружен из Google Sheets: {len(iot_data)} записей")
         return iot_data
     except Exception as e:
         logger.error(f"Ошибка загрузки IOT Source: {e}")
         return {}
 
+
 def get_iot_source():
-    """Возвращает кэш IOT Source"""
-    cache = read_cache(IOT_SOURCE_FILE)
-    if not cache or 'iot_list' not in cache:
-        return load_iot_source()
-    return cache.get('iot_list', {})
+    """Возвращает кэш IOT Source (из памяти)"""
+    return load_iot_source(force_reload=False)
 
 
-def load_iot_vehicles():
-    """Загружает данные велосипедов из таблицы №2 (лист 'Учет вело ВВ')"""
+def load_iot_vehicles(force_reload=False):
+    """Загружает данные велосипедов из листа 'Учет вело ВВ' (кэш в памяти + JSON)"""
+    global _iot_vehicles_memory
+    
+    # Если не force_reload и есть кэш в памяти — вернуть
+    if not force_reload and _iot_vehicles_memory is not None:
+        return _iot_vehicles_memory
+    
+    # Если не force_reload и есть JSON — прочитать
+    if not force_reload:
+        cache = read_cache(IOT_VEHICLES_FILE)
+        if cache and 'vehicles' in cache:
+            _iot_vehicles_memory = cache['vehicles']
+            logger.info(f"✅ IOT Vehicles загружен из кэша: {len(_iot_vehicles_memory)} записей")
+            return _iot_vehicles_memory
+    
+    # Иначе — тянем из Google Sheets
     try:
         sheet = get_iot_sheet_by_id(IOT_VEHICLES_SHEET_ID, "Учет вело ВВ")
         rows = sheet.get_all_values()
@@ -1811,11 +1854,29 @@ def load_iot_vehicles():
                             'darks': darks
                         }
         
-        logger.info(f"✅ IOT Vehicles загружен: {len(vehicles)} записей")
+        cache_data = {
+            'updated_at': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
+            'vehicles': vehicles
+        }
+        write_cache(IOT_VEHICLES_FILE, cache_data)
+        _iot_vehicles_memory = vehicles
+        logger.info(f"✅ IOT Vehicles загружен из Google Sheets: {len(vehicles)} записей")
         return vehicles
     except Exception as e:
         logger.error(f"Ошибка загрузки IOT Vehicles: {e}")
         return {}
+
+
+def get_iot_vehicles():
+    """Возвращает кэш IOT Vehicles (из памяти)"""
+    return load_iot_vehicles(force_reload=False)
+
+
+def reset_iot_memory():
+    """Сбрасывает кэш в памяти (при обновлении данных)"""
+    global _iot_source_memory, _iot_vehicles_memory
+    _iot_source_memory = None
+    _iot_vehicles_memory = None
 
 
 def get_iot_bag():
@@ -1839,19 +1900,19 @@ def get_iot_history():
 def save_iot_history(history_data):
     return write_cache(IOT_HISTORY_FILE, history_data)
 
+
 def update_iot_source_column_j(old_iot, new_iot):
     """Записывает в столбец J листа 'Все IoT' информацию о замене (в строку СТАРОГО IOT)"""
     try:
         sheet = get_iot_sheet_by_id(IOT_SOURCE_SHEET_ID, "Все IoT")
         rows = sheet.get_all_values()
         
-        # Ищем строку со старым IOT
         for idx, row in enumerate(rows, start=1):
             if len(row) > 0 and row[0].strip() == old_iot:
                 now = get_msk_now()
                 date_str = now.strftime('%d.%m')
                 text = f"{date_str} поменяли на прошитый (новый IOT: {new_iot})"
-                sheet.update_cell(idx, 10, text)  # Столбец J = 10
+                sheet.update_cell(idx, 10, text)
                 logger.info(f"✅ Запись в J для {old_iot}: {text}")
                 return True
         
@@ -1887,12 +1948,12 @@ def write_iot_report(frame_number, new_iot, old_iot=''):
     except Exception as e:
         logger.error(f"Ошибка записи отчёта IOT: {e}")
         return False
-    
+
 
 @app.route('/iot')
 @login_required
 def iot_main():
-    """Главная страница IOT-мастера"""
+    """Главная страница IOT-мастера (МГНОВЕННО из кэша)"""
     if session.get('role') != 'iot':
         return redirect(url_for('login_page'))
     
@@ -1909,7 +1970,8 @@ def iot_main():
     if not bag_items:
         return render_template('iot_empty.html', now=get_msk_now().strftime('%H:%M:%S'))
     
-    vehicles_data = load_iot_vehicles()
+    # Читаем из кэша (мгновенно)
+    vehicles_data = get_iot_vehicles()
     source_data = get_iot_source()
     
     darks_groups = {}
@@ -1945,18 +2007,18 @@ def iot_main():
                           now=get_msk_now().strftime('%H:%M:%S'))
 
 
-
 @app.route('/iot/darks/<darks_number>')
 @login_required
 def iot_darks(darks_number):
-    """Страница даркстора для IOT-мастера"""
+    """Страница даркстора для IOT-мастера (МГНОВЕННО из кэша)"""
     if session.get('role') != 'iot':
         return redirect(url_for('login_page'))
     
     bag_data = get_iot_bag()
     bag_items = [item.get('iot') for item in bag_data.get('bag', [])]
     
-    vehicles_data = load_iot_vehicles()
+    # Читаем из кэша (мгновенно)
+    vehicles_data = get_iot_vehicles()
     source_data = get_iot_source()
     
     vehicles = []
@@ -2012,7 +2074,7 @@ def iot_history_page():
 @app.route('/api/iot/load_bag', methods=['POST'])
 @login_required
 def api_iot_load_bag():
-    """Загружает IOT в багажник БЕЗ проверок - можно добавить любой IOT"""
+    """Загружает IOT в багажник БЕЗ проверок"""
     if session.get('role') != 'iot':
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
     
@@ -2064,6 +2126,7 @@ def api_iot_load_bag():
         logger.error(f"Ошибка загрузки багажника: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
+
 @app.route('/api/iot/remove_from_bag', methods=['POST'])
 @login_required
 def api_iot_remove_from_bag():
@@ -2081,11 +2144,9 @@ def api_iot_remove_from_bag():
         bag_data = get_iot_bag()
         current_bag = bag_data.get('bag', [])
         
-        # Проверяем, есть ли этот IOT в багажнике
         if not any(item.get('iot') == iot for item in current_bag):
             return jsonify({'success': False, 'error': f'IOT {iot} не найден в багажнике'})
         
-        # Удаляем
         bag_data['bag'] = [item for item in current_bag if item.get('iot') != iot]
         save_iot_bag(bag_data)
         
@@ -2131,13 +2192,27 @@ def api_iot_clear_bag():
 @app.route('/api/iot/sync_source', methods=['POST'])
 @login_required
 def api_iot_sync_source():
+    """Обновляет ОБА кэша: iot_source и iot_vehicles"""
     if session.get('role') != 'iot':
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
     
     try:
-        source_data = load_iot_source()
-        return jsonify({'success': True, 'count': len(source_data)})
+        # Сбрасываем кэш в памяти
+        reset_iot_memory()
+        
+        # Принудительно тянем из Google Sheets
+        source_data = load_iot_source(force_reload=True)
+        vehicles_data = load_iot_vehicles(force_reload=True)
+        
+        logger.info(f"✅ Обновлено: IOT Source = {len(source_data)}, IOT Vehicles = {len(vehicles_data)}")
+        
+        return jsonify({
+            'success': True,
+            'source_count': len(source_data),
+            'vehicles_count': len(vehicles_data)
+        })
     except Exception as e:
+        logger.error(f"Ошибка синхронизации IOT: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 
@@ -2191,17 +2266,18 @@ def api_iot_replace():
         # 2. Запись в "Все IoT" столбец J (в строку СТАРОГО IOT)
         update_iot_source_column_j(old_iot, new_iot)
         
-        # 3. НОВОЕ: Обновляем кэш iot_source
-        try:
-            source_cache = read_cache(IOT_SOURCE_FILE)
-            if source_cache and 'iot_list' in source_cache:
-                if old_iot in source_cache['iot_list']:
-                    now_str = get_msk_now().strftime('%d.%m')
-                    source_cache['iot_list'][old_iot]['replaced_text'] = f"{now_str} поменяли на прошитый (новый IOT: {new_iot})"
-                    write_cache(IOT_SOURCE_FILE, source_cache)
-                    logger.info(f"✅ Кэш iot_source обновлён: {old_iot} помечен как заменённый")
-        except Exception as e:
-            logger.error(f"Ошибка обновления кэша iot_source: {e}")
+        # 3. Обновляем кэш в памяти: помечаем старый IOT как заменённый
+        global _iot_source_memory
+        if _iot_source_memory and old_iot in _iot_source_memory:
+            now_str = get_msk_now().strftime('%d.%m')
+            _iot_source_memory[old_iot]['replaced_text'] = f"{now_str} поменяли на прошитый (новый IOT: {new_iot})"
+            # Сохраняем в JSON
+            cache_data = {
+                'updated_at': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
+                'iot_list': _iot_source_memory
+            }
+            write_cache(IOT_SOURCE_FILE, cache_data)
+            logger.info(f"✅ Кэш в памяти обновлён: {old_iot} помечен как заменённый")
         
         # 4. Убираем новый IOT из багажника
         bag_data['bag'] = [item for item in bag_data.get('bag', []) if item.get('iot') != new_iot]
@@ -2258,6 +2334,15 @@ if __name__ == "__main__":
             master_tickets = [t for t in tickets if t.get('master') == master and is_active_status(t.get('status'))]
             save_master_cache(master, master_tickets, '')
             logger.info(f"   ✅ Кэш для {master}: {len(master_tickets)} заявок")
+        
+        # Создаём кэш IOT при старте
+        logger.info("📂 Создание IOT кэшей...")
+        try:
+            load_iot_source(force_reload=True)
+            load_iot_vehicles(force_reload=True)
+            logger.info("   ✅ IOT кэши созданы")
+        except Exception as e:
+            logger.error(f"   ❌ Ошибка создания IOT кэшей: {e}")
         
         queue_path = get_queue_path()
         if not os.path.exists(queue_path):
