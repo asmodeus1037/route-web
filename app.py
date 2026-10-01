@@ -794,12 +794,42 @@ def apply_queue_to_sheets(tasks):
         elif task_type == 'replace_no':
             updates.append({'range': f'H{row_idx}', 'values': [['🔵 Доделать']]})
             updates.append({'range': f'J{row_idx}', 'values': [[data.get('reason') or 'Куратор не предоставил']]})
-    if not updates:
-        return 0
-    worksheet = get_sheet_client().worksheet('Заявки')
-    worksheet.batch_update(updates)
-    logger.info(f"✅ Очередь записана в Заявки: {len(updates)} ячеек")
-    return len(updates)
+        elif task_type == 'status_update':
+            updates.append({'range': f'H{row_idx}', 'values': [[data.get('status') or '🟡 В работе']]})
+            if data.get('note'):
+                updates.append({'range': f'J{row_idx}', 'values': [[data.get('note')]]})
+    import_updates = []
+    for task in tasks:
+        if task.get('source') != 'Импорт М4' or task.get('type') != 'status_update':
+            continue
+        uid = task.get('uid')
+        row_idx = get_ticket_row_by_uid(uid)
+        if not row_idx:
+            found = find_uid_in_sheets(uid)
+            if not found or found.get('source') != 'Импорт М4':
+                continue
+            row_idx = found['row_index']
+        data = task.get('data') or {}
+        status_map_import = {
+            '🟡 В работе': 'В работе',
+            '✅ Выполнено': 'Выполнено',
+            '🔵 Доделать': 'Доделать',
+            '⏹️ Обработано': 'Обработано',
+            '🔧 Эвакуация': 'Эвакуация'
+        }
+        import_updates.append({'range': f'L{row_idx}', 'values': [[status_map_import.get(data.get('status'), 'В работе')]]})
+        if data.get('note'):
+            import_updates.append({'range': f'M{row_idx}', 'values': [[data.get('note')]]})
+    written = 0
+    if updates:
+        get_sheet_client().worksheet('Заявки').batch_update(updates)
+        written += len(updates)
+        logger.info(f"✅ Очередь записана в Заявки: {len(updates)} ячеек")
+    if import_updates:
+        get_sheet_client().worksheet('Импорт М4').batch_update(import_updates)
+        written += len(import_updates)
+        logger.info(f"✅ Очередь записана в Импорт М4: {len(import_updates)} ячеек")
+    return written
 
 def append_master_history(master, action, data):
     if not master:
@@ -1182,6 +1212,50 @@ def api_notify_curators():
     success = notify_curators(message)
     return jsonify({'success': success})
 
+def refresh_master_caches_from_admin():
+    admin_cache = get_admin_cache() or {}
+    all_tickets = []
+    for dir_data in admin_cache.get('directions', {}).values():
+        all_tickets.extend(dir_data.get('tickets', []))
+    for master in MASTERS:
+        master_tickets = [t for t in all_tickets if t.get('master') == master and is_active_status(t.get('status'))]
+        save_master_cache(master, master_tickets, '')
+
+def queue_admin_status(uid, status_display, note='', skip_report=True, actor='Админ'):
+    if status_display == '⏹️ Обработано':
+        mark_bike_missing(uid, actor)
+        return
+    if status_display == '🔧 Эвакуация':
+        new_status = 'todo'
+        ticket = find_cached_ticket(uid) or {}
+        plain = (note or ticket.get('desc') or 'Эвакуация').replace('ЭВАКУАЦИЯ: ', '').strip() or 'Эвакуация'
+        cache_note = 'ЭВАКУАЦИЯ: ' + plain
+        sheet_note = plain
+    else:
+        status_map = {
+            '🟡 В работе': 'pending',
+            '✅ Выполнено': 'done',
+            '🔵 Доделать': 'todo'
+        }
+        new_status = status_map.get(status_display, 'pending')
+        cache_note = note
+        sheet_note = note
+    source = 'Заявки'
+    if uid in uid_index:
+        source = (uid_index[uid].get('ticket') or {}).get('source') or 'Заявки'
+    update_ticket_in_admin_cache(uid, new_status, cache_note, status_display)
+    add_to_queue({
+        'uid': uid,
+        'source': source,
+        'type': 'status_update',
+        'data': {
+            'status': status_display,
+            'new_status': new_status,
+            'note': sheet_note,
+            'skip_report': skip_report
+        }
+    })
+
 @app.route('/api/update_status', methods=['POST'])
 @login_required
 def api_update_status():
@@ -1190,46 +1264,11 @@ def api_update_status():
     status_display = data.get('status')
     note = data.get('note', '')
     skip_report = data.get('skip_report', True)
-    
     if not uid or not status_display:
         return jsonify({'success': False, 'error': 'Недостаточно данных'})
-    
     try:
-        status_map = {
-            '🟡 В работе': 'pending',
-            '✅ Выполнено': 'done',
-            '🔵 Доделать': 'todo',
-            '🔧 Эвакуация': 'evacuation'
-        }
-        
-        if status_display == '⏹️ Обработано':
-            mark_bike_missing(uid, session.get('master_name') or 'Админ')
-            return jsonify({'success': True})
-
-        new_status = status_map.get(status_display, 'pending')
-        
-        if status_display == '🔧 Эвакуация' and not note:
-            tickets = get_tickets_from_sheets()
-            for t in tickets:
-                if t.get('uid') == uid:
-                    note = t.get('desc', 'Эвакуация')
-                    break
-        
-        update_ticket_in_admin_cache(uid, new_status, note, status_display)
-        update_status_in_google_sheets(uid, status_display, note)
-        
-        add_to_queue({
-            'uid': uid,
-            'source': 'Заявки',
-            'type': 'status_update',
-            'data': {
-                'status': status_display,
-                'new_status': new_status,
-                'note': note,
-                'skip_report': skip_report
-            }
-        })
-        
+        queue_admin_status(uid, status_display, note, skip_report, session.get('master_name') or 'Админ')
+        refresh_master_caches_from_admin()
         return jsonify({'success': True})
     except Exception as e:
         logger.error(f"Ошибка обновления статуса: {e}")
@@ -1244,83 +1283,13 @@ def api_bulk_update_status():
         status_display = data.get('status', '')
         comment = data.get('comment', '')
         skip_report = data.get('skip_report', True)
-        
         if not uids or not status_display:
             return jsonify({'success': False, 'error': 'Не указаны UID или статус'}), 400
-
-        if status_display == '⏹️ Обработано':
-            actor = session.get('master_name') or 'Админ'
-            for uid in uids:
-                mark_bike_missing(uid, actor)
-            return jsonify({'success': True, 'updated': len(uids), 'message': f'Обработано {len(uids)} заявок'})
-        
-        all_tickets = get_tickets_from_sheets()
-        tickets_by_uid = {t.get('uid'): t for t in all_tickets}
-        
-        updates_zayavki = []
-        updates_import = []
-        updated_count = 0
-        
+        actor = session.get('master_name') or 'Админ'
         for uid in uids:
-            found = find_uid_in_sheets(uid)
-            if not found:
-                continue
-            
-            row_idx = found['row_index']
-            source = found['source']
-            
-            final_comment = comment
-            if status_display == '🔧 Эвакуация':
-                ticket = tickets_by_uid.get(uid)
-                if ticket:
-                    final_comment = ticket.get('desc', 'Эвакуация')
-                else:
-                    final_comment = 'Эвакуация'
-            
-            if source == 'Заявки':
-                updates_zayavki.append({'range': f'H{row_idx}', 'values': [[status_display]]})
-                if final_comment:
-                    updates_zayavki.append({'range': f'J{row_idx}', 'values': [[final_comment]]})
-                updated_count += 1
-            elif source == 'Импорт М4':
-                status_map_import = {
-                    '🟡 В работе': 'В работе',
-                    '✅ Выполнено': 'Выполнено',
-                    '🔵 Доделать': 'Доделать',
-                    '🔧 Эвакуация': 'Эвакуация'
-                }
-                new_status_import = status_map_import.get(status_display, 'В работе')
-                updates_import.append({'range': f'L{row_idx}', 'values': [[new_status_import]]})
-                if final_comment:
-                    updates_import.append({'range': f'M{row_idx}', 'values': [[final_comment]]})
-                updated_count += 1
-        
-        sheet_client = get_sheet_client()
-        
-        if updates_zayavki:
-            worksheet = sheet_client.worksheet("Заявки")
-            worksheet.batch_update(updates_zayavki)
-            logger.info(f"✅ Обновлено {len(updates_zayavki)} ячеек в 'Заявки'")
-        
-        if updates_import:
-            worksheet = sheet_client.worksheet("Импорт М4")
-            worksheet.batch_update(updates_import)
-            logger.info(f"✅ Обновлено {len(updates_import)} ячеек в 'Импорт М4'")
-        
-        tickets = get_tickets_from_sheets()
-        save_admin_cache(tickets)
-        
-        global uid_index
-        uid_index = build_uid_index(tickets)
-        
-        refresh_all_master_caches()
-        
-        return jsonify({
-            'success': True,
-            'updated': updated_count,
-            'message': f'Обновлено {updated_count} заявок'
-        })
-        
+            queue_admin_status(uid, status_display, comment, skip_report, actor)
+        refresh_master_caches_from_admin()
+        return jsonify({'success': True, 'updated': len(uids), 'message': f'Обновлено {len(uids)} заявок'})
     except Exception as e:
         logger.error(f'Ошибка при массовом обновлении статусов: {e}')
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -1547,9 +1516,14 @@ def master_done(name, darks_number, uid):
     if session.get('master_name') != name:
         logger.warning(f"❌ Сессия не совпадает: {session.get('master_name')} != {name}")
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
-    parts = request.form.get('parts', '')
-    if not parts.strip():
+    parts = request.form.get('parts', '').strip()
+    if not parts:
         return jsonify({'success': False, 'error': 'Укажите запчасти'})
+    ticket = find_cached_ticket(uid) or {}
+    previous = (ticket.get('note') or '').strip()
+    comment = parts
+    if previous:
+        comment = previous + '\n' + parts
     
     cache_data = get_master_cache(name)
     if cache_data:
@@ -1561,7 +1535,7 @@ def master_done(name, darks_number, uid):
         'uid': uid,
         'source': 'Заявки',
         'type': 'done',
-        'data': {'parts': parts, 'master': name, 'darks_number': darks_number}
+        'data': {'parts': comment, 'master': name, 'darks_number': darks_number}
     })
     return jsonify({'success': True})
 

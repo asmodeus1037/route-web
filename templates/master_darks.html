@@ -195,6 +195,7 @@
             </div>
             
             <div class="ticket-desc">{{ t.desc }}</div>
+            <div class="bike-kind {% if 'Неопределен' in (t.bike_type or '') %}kind-bad{% endif %}">{{ t.bike_type }}</div>
             
             <div class="gos-display">
                 <span class="label">🚲 Велосипед:</span> {{ t.gos or 'Гос номер не указан' }}
@@ -202,7 +203,7 @@
             
             {% if is_evacuation %}
             <div class="warning">
-                ⚠️ Этот велосипед нужно эвакуировать и заменить!
+                ⚠️ Этот велосипед нужно заменить!
             </div>
             {% endif %}
             
@@ -292,7 +293,7 @@
                     <div class="fast-line">
                         <div class="fast-gos">
                             {% if is_battery %}{{ t.type }}{% else %}{{ t.gos or 'Без номера' }}{% endif %}
-                            {% if is_retry %}<span class="retry">повтор</span>{% endif %}
+                            {% if is_retry %}<span class="retry">Повторная заявка</span>{% endif %}
                             {% if t.status == 'todo' and not is_battery %}<span class="retry">доделать</span>{% endif %}
                         </div>
                         <span class="age {% if is_hot %}hot{% endif %}">{{ (t.hours_since or 0)|round(0)|int }} ч</span>
@@ -321,7 +322,7 @@
                 </div>
                 {% else %}
                 <form class="fast-panel" id="panel-{{ t.uid }}" hidden action="/master/{{ name }}/darks/{{ darks_number }}/done/{{ t.uid }}" method="POST" onsubmit="return closeTicket(this)">
-                    <input type="text" name="parts" placeholder="Что заменил" value="{{ t.parts or '' }}" required>
+                    <input type="text" name="parts" placeholder="Что заменил" required>
                     <button type="submit" class="fast-ok">Отправить</button>
                 </form>
                 <div class="fast-more-panel" id="more-{{ t.uid }}" hidden>
