@@ -279,65 +279,52 @@
             </form>
         </div>
         
-        <!-- Иначе показываем обычные кнопки мастера -->
+        <!-- Обычная заявка: госномер и поломка сразу, редкие действия спрятаны -->
         {% else %}
-        <div class="ticket {{ t.status }} {% if is_battery %}battery-ticket{% endif %}" id="ticket-{{ t.uid }}">
-            <div class="ticket-header">
-                <span class="ticket-id">
-                    {% if is_battery %}
-                        {{ t.type }}
-                    {% else %}
-                        {{ t.gos or 'Без номера' }}
-                    {% endif %}
-                </span>
-                <span class="status-badge status-{{ t.status if t.status != 'pending' else 'pending' }}">
-                    {% if t.status == 'done' %}✅ Выполнено
-                    {% elif t.status == 'processed' or t.status == 'fail' %}повтор
-                    {% elif t.status == 'todo' and t.note and 'ЭВАКУАЦИЯ:' in t.note %}🔧 Эвакуация
-                    {% elif t.status == 'todo' %}🔧 Доделать
-                    {% else %}⏳ В работе{% endif %}
-                </span>
-            </div>
-            <div class="ticket-desc">{{ t.desc }}</div>
-            <div><span class="ticket-type">{{ t.bike_type }}</span></div>
-            <div class="ticket-meta">
-                <span>⏱️ {{ t.hours_since }} ч</span>
-                <span>🆔 {{ t.uid }}</span>
-            </div>
-            <div class="ticket-actions">
-                {% if t.status == 'pending' or t.status == 'todo' or t.status == 'processed' or t.status == 'fail' %}
-                    
-                    {% if is_battery %}
-                        <form action="/master/{{ name }}/darks/{{ darks_number }}/replace_yes/{{ t.uid }}" method="POST" style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;" onsubmit="return validateQuantity(this)">
-                            <input type="number" name="parts" placeholder="Кол-во" value="0" min="0" required style="width:60px;padding:2px 8px;border:1px solid #d1d5db;border-radius:30px;font-size:12px;outline:none;background:#f8fafc;height:32px;text-align:center;">
-                            <button type="submit" class="btn btn-done">✅ Да</button>
-                        </form>
-                        
-                        <button class="btn btn-taken-no-replace" onclick="openTakenModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">
-                            📦 Забираю без замены
-                        </button>
-                        
-                        <button class="btn btn-replace-no" onclick="openReplaceNoModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">
-                            ❌ Куратор не смог предоставить
-                        </button>
-                        
-                    {% else %}
-                        <form action="/master/{{ name }}/darks/{{ darks_number }}/done/{{ t.uid }}" method="POST" class="parts-form" onsubmit="return closeTicket(this, 'done')">
-                            <input type="text" name="parts" placeholder="Запчасти..." value="{{ t.parts or '' }}" required>
-                            <button type="submit" class="btn btn-done">✅ Выполнено</button>
-                        </form>
-                        <button class="btn btn-evacuation" onclick="openModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'evacuation', '🚚 Причина эвакуации')">
-                            <span class="icon">🚚</span> Эвакуация
-                        </button>
-                        <button class="btn btn-fail" onclick="closeTicketInstant('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'fail')">
-                            🚫 Вело отсутствует
-                        </button>
-                    {% endif %}
-                    
-                {% else %}
-                    <a href="/master/{{ name }}/darks/{{ darks_number }}/reset/{{ t.uid }}" class="btn btn-reset">↩️ Вернуть</a>
+        {% set is_retry = t.status in ['processed', 'fail'] %}
+        {% set is_hot = (t.hours_since or 0) > 48 and not is_retry %}
+        <div class="ticket fast-ticket {{ t.status }} {% if is_battery %}battery-ticket{% endif %}" id="ticket-{{ t.uid }}" data-uid="{{ t.uid }}">
+            <div class="fast-top">
+                <div class="fast-main">
+                    <div class="fast-gos">
+                        {% if is_battery %}{{ t.type }}{% else %}{{ t.gos or 'Без номера' }}{% endif %}
+                        {% if is_retry %}<span class="retry">повтор</span>{% endif %}
+                        {% if t.status == 'todo' and not is_battery %}<span class="retry">доделать</span>{% endif %}
+                    </div>
+                    <div class="fast-desc">{{ t.desc }}</div>
+                    <div class="fast-meta">
+                        <span class="age {% if is_hot %}hot{% endif %}">{{ t.hours_since }} ч</span>
+                        <span>{{ t.bike_type }}</span>
+                    </div>
+                </div>
+                {% if t.status in ['pending', 'todo', 'processed', 'fail'] %}
+                <div class="fast-btns">
+                    <button type="button" class="fast-ok" onclick="togglePanel('{{ t.uid }}')">Готово</button>
+                    <button type="button" class="fast-more" onclick="toggleMore('{{ t.uid }}')">⋯</button>
+                </div>
                 {% endif %}
             </div>
+            {% if t.status in ['pending', 'todo', 'processed', 'fail'] %}
+                {% if is_battery %}
+                <form class="fast-panel" id="panel-{{ t.uid }}" hidden action="/master/{{ name }}/darks/{{ darks_number }}/replace_yes/{{ t.uid }}" method="POST" onsubmit="return closeTicket(this)">
+                    <input type="number" name="parts" min="1" placeholder="Сколько отдал" required>
+                    <button type="submit" class="fast-ok">Отправить</button>
+                </form>
+                <div class="fast-more-panel" id="more-{{ t.uid }}" hidden>
+                    <button type="button" class="fast-side" onclick="openTakenModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">Забираю без замены</button>
+                    <button type="button" class="fast-side" onclick="openReplaceNoModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">Куратор не дал</button>
+                </div>
+                {% else %}
+                <form class="fast-panel" id="panel-{{ t.uid }}" hidden action="/master/{{ name }}/darks/{{ darks_number }}/done/{{ t.uid }}" method="POST" onsubmit="return closeTicket(this)">
+                    <input type="text" name="parts" placeholder="Что заменил" value="{{ t.parts or '' }}" required>
+                    <button type="submit" class="fast-ok">Отправить</button>
+                </form>
+                <div class="fast-more-panel" id="more-{{ t.uid }}" hidden>
+                    <button type="button" class="fast-side" onclick="openModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'evacuation', 'Причина эвакуации')">Эвакуация</button>
+                    <button type="button" class="fast-side" onclick="closeTicketInstant('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'fail')">Вело нет</button>
+                </div>
+                {% endif %}
+            {% endif %}
         </div>
         {% endif %}
         {% else %}

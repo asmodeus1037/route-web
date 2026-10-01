@@ -962,14 +962,19 @@ function renderTicketsGrouped(tickets, containerId) {
             var typeDisplay = t.bike_type || t.type || 'Не указан';
             
             var isProcessed = t.status === 'processed' || t.status === 'fail';
+            var isQueued = !!(window.queuedUids && window.queuedUids[t.uid]);
             
             var hoursClass = '';
             if (!isProcessed && t.hours_since > 48) hoursClass = 'overdue';
             else if (!isProcessed && t.hours_since >= 32) hoursClass = 'warning';
             
-            html += '<div class="ticket-row' + (isEvacuation ? ' evacuation-row' : '') + (isProcessed ? ' processed-row' : '') + '" data-uid="' + t.uid + '">';
+            html += '<div class="ticket-row' + (isEvacuation ? ' evacuation-row' : '') + (isProcessed ? ' processed-row' : '') + (isQueued ? ' queued-row' : '') + '" data-uid="' + t.uid + '">';
             html += '<span class="id">' + (t.gos || '-') + '</span>';
-            html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + (t.display_desc || t.desc || '-') + '</span>';
+            html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + (t.display_desc || t.desc || '-');
+            if (t.contact) {
+                html += '<span class="who">отправил: ' + String(t.contact).replace(/[&<>]/g, '') + '</span>';
+            }
+            html += '</span>';
             html += '<span class="type-badge">' + typeDisplay + '</span>';
             html += '<span><select class="master-select" data-uid="' + t.uid + '" data-source="' + t.source + '" onchange="onMasterChange(this)"><option value="">—</option>';
             for (var mi = 0; mi < masters.length; mi++) {
@@ -1151,4 +1156,47 @@ document.addEventListener('DOMContentLoaded', function() {
         })(tabs[i]);
     }
     renderCurrentTab();
+    refreshQueueStatus();
+    setInterval(refreshQueueStatus, 15000);
 });
+
+function refreshQueueStatus() {
+    fetch('/api/queue_status')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            window.queuedUids = {};
+            var uids = data.uids || [];
+            for (var i = 0; i < uids.length; i++) window.queuedUids[uids[i]] = 1;
+            var el = document.getElementById('queueText');
+            if (el) {
+                el.textContent = data.count
+                    ? ('Ещё не записано в таблицу: ' + data.count)
+                    : 'В таблице всё записано';
+            }
+            var rows = document.querySelectorAll('.ticket-row');
+            for (var j = 0; j < rows.length; j++) {
+                var uid = rows[j].getAttribute('data-uid');
+                if (window.queuedUids[uid]) rows[j].classList.add('queued-row');
+                else rows[j].classList.remove('queued-row');
+            }
+        })
+        .catch(function() {});
+}
+
+function flushQueueNow() {
+    var el = document.getElementById('queueText');
+    if (el) el.textContent = 'Записываем в таблицу…';
+    fetch('/api/flush_now', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.success) {
+                showToastModern('Не удалось записать: ' + (data.error || ''), 'error');
+                return;
+            }
+            showToastModern('Таблица обновлена', 'success');
+            setTimeout(function() { location.reload(); }, 700);
+        })
+        .catch(function() {
+            showToastModern('Нет сети', 'error');
+        });
+}
