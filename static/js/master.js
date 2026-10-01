@@ -157,188 +157,29 @@ function submitEvacuation(name, darksNumber, uid, gos) {
     fetch('/master/evacuation/replace', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
         body: JSON.stringify(data)
     })
-    .then(readJsonResponse)
+    .then(function(response) { return response.json(); })
     .then(function(result) {
         if (result.success) {
+            showToast('✅ Замена отправлена!', false);
+            // Удаляем карточку
             var card = document.getElementById('ticket-' + uid);
-            if (card) card.style.display = 'none';
-            showToast('Замена отправлена');
+            if (card) {
+                card.style.transition = 'opacity 0.3s';
+                card.style.opacity = '0';
+                setTimeout(function() { card.remove(); }, 300);
+            }
         } else {
-            showToast(result.error || 'Не получилось', true);
+            showToast('❌ Ошибка: ' + result.error, true);
         }
     })
     .catch(function() {
-        queueAction({
-            url: '/master/evacuation/replace',
-            method: 'POST',
-            body: JSON.stringify(data),
-            contentType: 'application/json',
-            uid: uid
-        });
-        var card = document.getElementById('ticket-' + uid);
-        if (card) card.style.display = 'none';
-        showToast('Сохранено на телефоне. Отправится, когда будет сеть.');
+        showToast('❌ Ошибка соединения', true);
     });
     
     return false;
 }
-
-// ============================================================
-// ОЧЕРЕДЬ НА ТЕЛЕФОНЕ
-// ============================================================
-var OUTBOX_KEY = 'master_outbox_v1';
-var outboxFlushing = false;
-
-function readOutbox() {
-    try {
-        return JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]');
-    } catch (e) {
-        return [];
-    }
-}
-
-function writeOutbox(items) {
-    localStorage.setItem(OUTBOX_KEY, JSON.stringify(items));
-    renderOutboxBar();
-    hideQueuedTickets();
-}
-
-function queueAction(item) {
-    var items = readOutbox().filter(function(x) { return x.uid !== item.uid; });
-    item.id = Date.now() + '-' + Math.random().toString(16).slice(2);
-    items.push(item);
-    writeOutbox(items);
-}
-
-function hideQueuedTickets() {
-    var uids = {};
-    readOutbox().forEach(function(x) { if (x.uid) uids[x.uid] = 1; });
-    var cards = document.querySelectorAll('[data-uid]');
-    for (var i = 0; i < cards.length; i++) {
-        if (uids[cards[i].getAttribute('data-uid')]) cards[i].style.display = 'none';
-    }
-}
-
-function renderOutboxBar() {
-    var count = readOutbox().length;
-    var bar = document.getElementById('outboxBar');
-    if (!bar) {
-        bar = document.createElement('div');
-        bar.id = 'outboxBar';
-        bar.className = 'outbox-bar';
-        document.body.insertBefore(bar, document.body.firstChild);
-    }
-    if (!count) {
-        bar.style.display = 'none';
-        return;
-    }
-    bar.style.display = 'block';
-    bar.textContent = 'На телефоне ждёт отправки: ' + count + '. Уйдёт само, когда появится сеть.';
-}
-
-function formBody(formData) {
-    var params = new URLSearchParams();
-    formData.forEach(function(value, key) { params.append(key, value); });
-    return params.toString();
-}
-
-function readJsonResponse(response) {
-    var type = response.headers.get('content-type') || '';
-    if (type.indexOf('application/json') === -1) {
-        throw new Error('not json');
-    }
-    return response.json();
-}
-
-function flushOutbox() {
-    if (outboxFlushing || !navigator.onLine) return;
-    var items = readOutbox();
-    if (!items.length) return;
-    outboxFlushing = true;
-    var item = items[0];
-    var opts = { method: item.method || 'POST', credentials: 'same-origin' };
-    if (item.body) {
-        opts.body = item.body;
-        opts.headers = { 'Content-Type': item.contentType || 'application/x-www-form-urlencoded' };
-    }
-    fetch(item.url, opts)
-        .then(readJsonResponse)
-        .then(function(data) {
-            outboxFlushing = false;
-            if (data && data.success) {
-                writeOutbox(readOutbox().filter(function(x) { return x.id !== item.id; }));
-                flushOutbox();
-            }
-        })
-        .catch(function() {
-            outboxFlushing = false;
-        });
-}
-
-function sendOrQueue(opts) {
-    var card = document.getElementById('ticket-' + opts.uid);
-    function hideCard(saved) {
-        if (card) card.style.display = 'none';
-        showToast(saved ? 'Сохранено на телефоне. Отправится, когда будет сеть.' : (opts.okText || 'Готово'));
-    }
-    var fetchOpts = { method: opts.method || 'POST', credentials: 'same-origin' };
-    if (opts.body) {
-        fetchOpts.body = opts.body;
-        fetchOpts.headers = { 'Content-Type': opts.contentType || 'application/x-www-form-urlencoded' };
-    }
-    if (!navigator.onLine) {
-        queueAction(opts);
-        hideCard(true);
-        return;
-    }
-    fetch(opts.url, fetchOpts)
-        .then(readJsonResponse)
-        .then(function(data) {
-            if (!data || data.success === false) {
-                showToast((data && data.error) ? data.error : 'Не получилось', true);
-                return;
-            }
-            hideCard(false);
-        })
-        .catch(function() {
-            queueAction(opts);
-            hideCard(true);
-        });
-}
-
-function togglePanel(uid) {
-    var panel = document.getElementById('panel-' + uid);
-    var more = document.getElementById('more-' + uid);
-    if (more) more.hidden = true;
-    if (!panel) return;
-    panel.hidden = !panel.hidden;
-    if (!panel.hidden) {
-        var input = panel.querySelector('input, textarea');
-        if (input) input.focus();
-    }
-}
-
-function toggleMore(uid) {
-    var panel = document.getElementById('panel-' + uid);
-    var more = document.getElementById('more-' + uid);
-    if (panel) panel.hidden = true;
-    if (!more) return;
-    more.hidden = !more.hidden;
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    renderOutboxBar();
-    hideQueuedTickets();
-    flushOutbox();
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js').catch(function() {});
-    }
-});
-window.addEventListener('online', flushOutbox);
-setInterval(flushOutbox, 20000);
 
 // ============================================================
 // ФУНКЦИИ ДЛЯ ТРАНЗИТА (ЗАКРЫВАЕТ ВСЕ ЗАЯВКИ С ОДНИМ ГОСНОМЕРОМ)
@@ -356,14 +197,17 @@ function transitCloseTicket(form, action) {
     if (!confirm('Закрыть ВСЕ заявки на этот велосипед?')) {
         return false;
     }
-    var fd = new FormData(form);
-    sendOrQueue({
-        url: form.action,
-        method: 'POST',
-        body: formBody(fd),
-        uid: uid,
-        okText: 'Готово'
-    });
+    
+    var card = document.getElementById('ticket-' + uid);
+    if (card) {
+        card.style.transition = 'opacity 0.3s';
+        card.style.opacity = '0';
+        setTimeout(function() { card.remove(); }, 300);
+    }
+    
+    showToast('✅ Все заявки на велосипед закрыты');
+    var formData = new FormData(form);
+    fetch(form.action, { method: 'POST', body: formData });
     return false;
 }
 
@@ -387,15 +231,22 @@ function openTakenModal(name, darks, uid) {
             return false;
         }
         
-        var fd = new FormData();
-        fd.append('parts', count);
-        sendOrQueue({
-            url: '/master/' + name + '/darks/' + darks + '/taken_no_replace/' + uid,
+        var card = document.getElementById('ticket-' + uid);
+        if (card) {
+            card.style.transition = 'opacity 0.3s';
+            card.style.opacity = '0';
+            setTimeout(function() { card.remove(); }, 300);
+        }
+        
+        var formData = new FormData();
+        formData.append('parts', count);
+        
+        fetch('/master/' + name + '/darks/' + darks + '/taken_no_replace/' + uid, {
             method: 'POST',
-            body: formBody(fd),
-            uid: uid,
-            okText: 'Забрано ' + count + ' шт. без замены'
+            body: formData
         });
+        
+        showToast('📦 Забрано ' + count + ' шт. без замены');
         closeModal('takenModal');
         return false;
     };
@@ -414,15 +265,22 @@ function openReplaceNoModal(name, darks, uid) {
     form.onsubmit = function(e) {
         e.preventDefault();
         
-        var fd = new FormData();
-        fd.append('reason', textarea.value || 'Куратор не предоставил');
-        sendOrQueue({
-            url: '/master/' + name + '/darks/' + darks + '/replace_no/' + uid,
+        var card = document.getElementById('ticket-' + uid);
+        if (card) {
+            card.style.transition = 'opacity 0.3s';
+            card.style.opacity = '0';
+            setTimeout(function() { card.remove(); }, 300);
+        }
+        
+        var formData = new FormData();
+        formData.append('reason', textarea.value || 'Куратор не предоставил');
+        
+        fetch('/master/' + name + '/darks/' + darks + '/replace_no/' + uid, {
             method: 'POST',
-            body: formBody(fd),
-            uid: uid,
-            okText: 'Отмечено: куратор не предоставил'
+            body: formData
         });
+        
+        showToast('❌ Отмечено как "Куратор не предоставил"');
         closeModal('replaceNoModal');
         return false;
     };
@@ -444,35 +302,40 @@ function validateQuantity(form) {
 }
 
 function closeTicketInstant(name, darks, uid, action) {
-    if (!confirm('Велосипеда нет на месте? Заявка останется у руководителя, таймер начнётся заново.')) return;
-    sendOrQueue({
-        url: '/master/' + name + '/darks/' + darks + '/' + action + '/' + uid,
-        method: 'GET',
-        uid: uid,
-        okText: 'Заявка перенесена: вело не найдено'
-    });
+    if (!confirm('Велосипеда нет на месте? Заявка останется у руководителя и таймер начнётся заново.')) return;
+    var card = document.getElementById('ticket-' + uid);
+    fetch('/master/' + name + '/darks/' + darks + '/' + action + '/' + uid, { method: 'GET' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.success) {
+                showToast('❌ ' + (data.error || 'Не удалось отметить'), true);
+                return;
+            }
+            if (card) card.remove();
+            showToast('Заявка перенесена: вело не найдено');
+        })
+        .catch(function() {
+            showToast('❌ Нет сети. Заявка осталась в списке', true);
+        });
     return false;
 }
 
-function closeTicket(form) {
-    var parts = form.querySelector('[name="parts"]');
-    if (!parts || !String(parts.value).trim()) {
-        alert('Напишите, что сделали');
+function closeTicket(form, action) {
+    var parts = form.querySelector('input[name="parts"]');
+    if (!parts.value.trim()) {
+        alert('Укажите запчасти!');
         return false;
     }
-    if (parts.type === 'number' && parseInt(parts.value, 10) <= 0) {
-        alert('Укажите количество больше 0');
-        return false;
+    var uid = form.action.split('/').pop();
+    var card = document.getElementById('ticket-' + uid);
+    if (card) {
+        card.style.transition = 'opacity 0.3s';
+        card.style.opacity = '0';
+        setTimeout(function() { card.remove(); }, 300);
     }
-    var uid = form.action.split('/').filter(Boolean).pop();
-    var fd = new FormData(form);
-    sendOrQueue({
-        url: form.action,
-        method: 'POST',
-        body: formBody(fd),
-        uid: uid,
-        okText: 'Готово'
-    });
+    showToast('✅ Заявка закрыта');
+    var formData = new FormData(form);
+    fetch(form.action, { method: 'POST', body: formData });
     return false;
 }
 
@@ -493,15 +356,19 @@ function openModal(name, darks, uid, type, title) {
                 alert('Укажите причину эвакуации!');
                 return false;
             }
-            var fd = new FormData();
-            fd.append('reason', reason);
-            sendOrQueue({
-                url: '/master/' + name + '/darks/' + darks + '/evacuation/' + uid,
+            var card = document.getElementById('ticket-' + uid);
+            if (card) {
+                card.style.transition = 'opacity 0.3s';
+                card.style.opacity = '0';
+                setTimeout(function() { card.remove(); }, 300);
+            }
+            var formData = new FormData();
+            formData.append('reason', reason);
+            fetch('/master/' + name + '/darks/' + darks + '/evacuation/' + uid, {
                 method: 'POST',
-                body: formBody(fd),
-                uid: uid,
-                okText: 'Эвакуация отмечена'
+                body: formData
             });
+            showToast('🚚 Заявка отправлена на эвакуацию');
             closeModal('reasonModal');
             return false;
         };

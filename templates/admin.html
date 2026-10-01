@@ -80,11 +80,6 @@
         <div class="stat-card"><div class="num" id="unassignedCount">0</div><div class="label">Не назначены</div></div>
     </div>
     
-    <div class="queue-bar" id="queueBar">
-        <span id="queueText">Проверяем, всё ли записано в таблицу…</span>
-        <button type="button" class="btn btn-outline btn-sm" onclick="flushQueueNow()">Записать сейчас</button>
-    </div>
-
     <div class="sync-bar">
         <div class="info">👥 Мастера: <strong>{{ masters|join(', ') }}</strong></div>
         <div class="status" id="syncStatus">✅ Готово</div>

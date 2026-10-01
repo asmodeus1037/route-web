@@ -988,12 +988,6 @@ def logout():
 def static_files(filename):
     return send_from_directory('static', filename)
 
-@app.route('/sw.js')
-def service_worker():
-    response = send_from_directory('static', 'sw.js')
-    response.headers['Cache-Control'] = 'no-cache'
-    return response
-
 @app.route('/data/<path:filename>')
 def data_files(filename):
     return send_from_directory('/data', filename)
@@ -1038,27 +1032,6 @@ def api_sync():
         return jsonify({'success': True, 'tickets': tickets, 'count': len(tickets)})
     except Exception as e:
         logger.error(f"Ошибка синхронизации: {e}")
-        return jsonify({'success': False, 'error': str(e)})
-
-@app.route('/api/queue_status')
-@login_required
-def api_queue_status():
-    tasks = read_queue().get('tasks') or []
-    uids = []
-    for task in tasks:
-        uid = task.get('uid')
-        if uid and uid not in uids:
-            uids.append(uid)
-    return jsonify({'success': True, 'count': len(tasks), 'uids': uids})
-
-@app.route('/api/flush_now', methods=['POST'])
-@login_required
-def api_flush_now():
-    try:
-        flushed = flush_queue()
-        return jsonify({'success': True, 'flushed': flushed})
-    except Exception as e:
-        logger.error(f"Ошибка записи очереди: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/batch_update', methods=['POST'])
