@@ -292,7 +292,7 @@
                 </span>
                 <span class="status-badge status-{{ t.status if t.status != 'pending' else 'pending' }}">
                     {% if t.status == 'done' %}✅ Выполнено
-                    {% elif t.status == 'fail' %}🚫 Вело отсутствует
+                    {% elif t.status == 'processed' or t.status == 'fail' %}повтор
                     {% elif t.status == 'todo' and t.note and 'ЭВАКУАЦИЯ:' in t.note %}🔧 Эвакуация
                     {% elif t.status == 'todo' %}🔧 Доделать
                     {% else %}⏳ В работе{% endif %}
@@ -305,7 +305,7 @@
                 <span>🆔 {{ t.uid }}</span>
             </div>
             <div class="ticket-actions">
-                {% if t.status == 'pending' or t.status == 'todo' %}
+                {% if t.status == 'pending' or t.status == 'todo' or t.status == 'processed' or t.status == 'fail' %}
                     
                     {% if is_battery %}
                         <form action="/master/{{ name }}/darks/{{ darks_number }}/replace_yes/{{ t.uid }}" method="POST" style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;" onsubmit="return validateQuantity(this)">

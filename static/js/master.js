@@ -302,15 +302,21 @@ function validateQuantity(form) {
 }
 
 function closeTicketInstant(name, darks, uid, action) {
-    if (!confirm('Отметить заявку как "Вело отсутствует"?')) return;
+    if (!confirm('Велосипеда нет на месте? Заявка останется у руководителя и таймер начнётся заново.')) return;
     var card = document.getElementById('ticket-' + uid);
-    if (card) {
-        card.style.transition = 'opacity 0.3s';
-        card.style.opacity = '0';
-        setTimeout(function() { card.remove(); }, 300);
-    }
-    fetch('/master/' + name + '/darks/' + darks + '/' + action + '/' + uid, { method: 'GET' });
-    showToast('✅ Заявка отмечена как "Вело отсутствует"');
+    fetch('/master/' + name + '/darks/' + darks + '/' + action + '/' + uid, { method: 'GET' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.success) {
+                showToast('❌ ' + (data.error || 'Не удалось отметить'), true);
+                return;
+            }
+            if (card) card.remove();
+            showToast('Заявка перенесена: вело не найдено');
+        })
+        .catch(function() {
+            showToast('❌ Нет сети. Заявка осталась в списке', true);
+        });
     return false;
 }
 

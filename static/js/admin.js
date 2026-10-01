@@ -867,6 +867,7 @@ function renderTicketsGrouped(tickets, containerId) {
     var pending = 0;
     var evacuation = 0;
     var todo = 0;
+    var processed = 0;
     var unassigned = 0;
     
     for (var i = 0; i < active.length; i++) {
@@ -879,8 +880,8 @@ function renderTicketsGrouped(tickets, containerId) {
             pending++;
         } else if (t.status === 'todo') {
             todo++;
-        } else if (t.status === 'fail') {
-            todo++;
+        } else if (t.status === 'processed' || t.status === 'fail') {
+            processed++;
         }
         if (!t.master) unassigned++;
     }
@@ -890,6 +891,8 @@ function renderTicketsGrouped(tickets, containerId) {
     document.getElementById('pendingCount').textContent = pending;
     document.getElementById('evacuationCount').textContent = evacuation;
     document.getElementById('todoCount').textContent = todo;
+    var processedEl = document.getElementById('processedCount');
+    if (processedEl) processedEl.textContent = processed;
     document.getElementById('unassignedCount').textContent = unassigned;
     
     if (tickets.length === 0) { 
@@ -909,6 +912,14 @@ function renderTicketsGrouped(tickets, containerId) {
             darksGroups[key].contact = t.contact; 
         }
     }
+
+    Object.keys(darksGroups).forEach(function(key) {
+        darksGroups[key].tickets.sort(function(a, b) {
+            var ap = (a.status === 'processed' || a.status === 'fail') ? 1 : 0;
+            var bp = (b.status === 'processed' || b.status === 'fail') ? 1 : 0;
+            return ap - bp;
+        });
+    });
     
     var sortedKeys = Object.keys(darksGroups).sort(function(a, b) {
         var numA = parseInt(a) || 999999;
@@ -939,8 +950,8 @@ function renderTicketsGrouped(tickets, containerId) {
                 statusDisplay = '✅ Выполнено';
             } else if (t.status === 'todo') {
                 statusDisplay = '🔵 Доделать';
-            } else if (t.status === 'fail') {
-                statusDisplay = '🔵 Доделать';
+            } else if (t.status === 'processed' || t.status === 'fail') {
+                statusDisplay = '⏹️ Обработано';
             } else if (t.status === 'evacuation') {
                 statusDisplay = '🔧 Эвакуация';
             }
@@ -950,11 +961,13 @@ function renderTicketsGrouped(tickets, containerId) {
             var currentMaster = pendingChanges[uidKey] !== undefined ? pendingChanges[uidKey] : (t.master || '');
             var typeDisplay = t.bike_type || t.type || 'Не указан';
             
-            var hoursClass = '';
-            if (t.hours_since > 48) hoursClass = 'overdue';
-            else if (t.hours_since >= 32) hoursClass = 'warning';
+            var isProcessed = t.status === 'processed' || t.status === 'fail';
             
-            html += '<div class="ticket-row' + (isEvacuation ? ' evacuation-row' : '') + '" data-uid="' + t.uid + '">';
+            var hoursClass = '';
+            if (!isProcessed && t.hours_since > 48) hoursClass = 'overdue';
+            else if (!isProcessed && t.hours_since >= 32) hoursClass = 'warning';
+            
+            html += '<div class="ticket-row' + (isEvacuation ? ' evacuation-row' : '') + (isProcessed ? ' processed-row' : '') + '" data-uid="' + t.uid + '">';
             html += '<span class="id">' + (t.gos || '-') + '</span>';
             html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + (t.display_desc || t.desc || '-') + '</span>';
             html += '<span class="type-badge">' + typeDisplay + '</span>';
@@ -970,6 +983,7 @@ function renderTicketsGrouped(tickets, containerId) {
             html += '<option value="🟡 В работе"' + (statusDisplay === '🟡 В работе' ? ' selected' : '') + '>🟡 В работе</option>';
             html += '<option value="✅ Выполнено"' + (statusDisplay === '✅ Выполнено' ? ' selected' : '') + '>✅ Выполнено</option>';
             html += '<option value="🔵 Доделать"' + (statusDisplay === '🔵 Доделать' ? ' selected' : '') + '>🔵 Доделать</option>';
+            html += '<option value="⏹️ Обработано"' + (statusDisplay === '⏹️ Обработано' ? ' selected' : '') + '>⏹️ Обработано</option>';
             html += '<option value="🔧 Эвакуация"' + (statusDisplay === '🔧 Эвакуация' ? ' selected' : '') + '>🔧 Эвакуация</option>';
             html += '</select>';
             html += '</span>';
