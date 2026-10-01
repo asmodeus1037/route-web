@@ -282,11 +282,35 @@ def generate_ticket_id(date_str):
     except:
         return None
 
+def normalize_gos(value):
+    return re.sub(r'[^0-9A-Za-zА-Яа-я]', '', str(value or '')).upper()
+
+_bike_type_cache = {'ts': 0, 'by_gos': {}}
+
+def get_bike_type_by_gos_map():
+    now_ts = time.time()
+    if _bike_type_cache['by_gos'] and now_ts - _bike_type_cache['ts'] < 600:
+        return _bike_type_cache['by_gos']
+    mapping = {}
+    try:
+        rows = get_sheet_client().worksheet('База данных вело').get_all_values()
+        for row in rows[1:]:
+            gos = normalize_gos(row[1] if len(row) > 1 else '')
+            kind = row[5].strip() if len(row) > 5 else ''
+            if gos and kind:
+                mapping[gos] = kind
+        _bike_type_cache['by_gos'] = mapping
+        _bike_type_cache['ts'] = now_ts
+    except Exception as e:
+        logger.error(f"Ошибка чтения типов вело: {e}")
+    return _bike_type_cache['by_gos']
+
 def get_tickets_from_sheets():
     global darks_ref
     sheet_client = get_sheet_client()
     tickets = []
     darks_ref = load_darks_reference()
+    bike_types = get_bike_type_by_gos_map()
     
     try:
         worksheet = sheet_client.worksheet("Заявки")
@@ -321,10 +345,13 @@ def get_tickets_from_sheets():
                 hours_since = get_hours_since(timer_from or created_str)
                 bike_type = row[1].strip() if len(row) > 1 else ''
                 bike_subtype = row[8].strip() if len(row) > 8 else ''
-                if bike_type == 'Электровелосипед' and bike_subtype:
+                gos_value = row[3].strip() if len(row) > 3 else ''
+                if bike_type == 'Электровелосипед':
+                    display_type = bike_types.get(normalize_gos(gos_value)) or 'Неопределен тип вело, ошибка в гос номере'
+                elif bike_subtype:
                     display_type = bike_subtype
                 else:
-                    display_type = bike_type
+                    display_type = bike_type or 'Не указан'
                 uid = row[10].strip() if len(row) > 10 else ''
                 if not uid and created_str:
                     uid = generate_ticket_id(created_str)
@@ -359,7 +386,7 @@ def get_tickets_from_sheets():
                     'bike_type': display_type,
                     'bike_subtype': bike_subtype,
                     'desc': display_desc,
-                    'gos': row[3].strip() if len(row) > 3 else '',
+                    'gos': gos_value,
                     'contact': row[4].strip() if len(row) > 4 else '',
                     'created': created_str,
                     'timer_from': timer_from,
@@ -641,31 +668,41 @@ def get_queue_path():
 
 def read_queue():
     with queue_lock:
-        try:
-            path = get_queue_path()
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        except:
-            pass
-        return {'tasks': [], 'last_sync': None}
+        return _load_queue()
 
 def write_queue(queue_data):
     with queue_lock:
         try:
-            path = get_queue_path()
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(queue_data, f, ensure_ascii=False, indent=2)
+            _save_queue(queue_data)
             return True
         except:
             return False
 
+def _load_queue():
+    try:
+        path = get_queue_path()
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, dict) and isinstance(data.get('tasks'), list):
+                    return data
+    except:
+        pass
+    return {'tasks': [], 'last_sync': None}
+
+def _save_queue(queue_data):
+    path = get_queue_path()
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(queue_data, f, ensure_ascii=False, indent=2)
+
 def add_to_queue(task):
-    queue_data = read_queue()
-    uid = task.get('uid')
-    queue_data['tasks'] = [t for t in queue_data.get('tasks', []) if t.get('uid') != uid]
-    queue_data['tasks'].append(task)
-    write_queue(queue_data)
+    with queue_lock:
+        queue_data = _load_queue()
+        uid = task.get('uid')
+        task['qid'] = f"{time.time():.6f}-{uid}"
+        queue_data['tasks'] = [t for t in queue_data.get('tasks', []) if t.get('uid') != uid]
+        queue_data['tasks'].append(task)
+        _save_queue(queue_data)
     logger.info(f"✅ Задача добавлена в очередь: {uid}")
 
 def remove_ticket_from_master_cache(master_name, uid):
@@ -716,6 +753,9 @@ def mark_bike_missing(uid, actor_name):
             'master': actor_name,
             'note': note,
             'timer_from': timer_from,
+            'darks_number': (ticket or {}).get('darks', ''),
+            'gos': (ticket or {}).get('gos', ''),
+            'desc': (ticket or {}).get('desc', ''),
             'skip_report': False
         }
     })
@@ -761,25 +801,63 @@ def apply_queue_to_sheets(tasks):
     logger.info(f"✅ Очередь записана в Заявки: {len(updates)} ячеек")
     return len(updates)
 
+def append_master_history(master, action, data):
+    if not master:
+        return
+    raw = read_cache(f"history_{master}.json")
+    if isinstance(raw, dict):
+        items = raw.get('items') or raw.get('history') or []
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        items = []
+    items.append({
+        'timestamp': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
+        'action': {
+            'action': action,
+            'uid': (data or {}).get('uid', ''),
+            'parts': (data or {}).get('parts', ''),
+            'reason': (data or {}).get('reason') or (data or {}).get('note', ''),
+            'darks_number': (data or {}).get('darks_number', ''),
+        }
+    })
+    write_cache(f"history_{master}.json", {'items': items[-300:]})
+
 def flush_queue():
     if not flush_lock.acquire(blocking=False):
         return 0
     try:
-        tasks = list(read_queue().get('tasks') or [])
-        if not tasks:
-            return 0
-        apply_queue_to_sheets(tasks)
+        with queue_lock:
+            queue_data = _load_queue()
+            tasks = list(queue_data.get('tasks') or [])
+            if not tasks:
+                return 0
+            for i, task in enumerate(tasks):
+                if not task.get('qid'):
+                    task['qid'] = f"legacy-{i}-{task.get('uid')}"
+            _save_queue(queue_data)
+            taken = [dict(task) for task in tasks]
+            taken_ids = {task['qid'] for task in taken}
+        apply_queue_to_sheets(taken)
         report_tasks = []
-        for task in tasks:
+        for task in taken:
             data = task.get('data') or {}
             if data.get('skip_report') or task.get('type') == 'status_update':
                 continue
             report_tasks.append(task)
         if report_tasks:
             write_to_report(report_tasks)
-        clear_queue()
-        logger.info(f"✅ Очередь записана и очищена: {len(tasks)}")
-        return len(tasks)
+            for task in report_tasks:
+                data = dict(task.get('data') or {})
+                data['uid'] = task.get('uid')
+                append_master_history(data.get('master'), task.get('type'), data)
+        with queue_lock:
+            queue_data = _load_queue()
+            queue_data['tasks'] = [task for task in (queue_data.get('tasks') or []) if task.get('qid') not in taken_ids]
+            queue_data['last_sync'] = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
+            _save_queue(queue_data)
+        logger.info(f"✅ Очередь записана и очищена: {len(taken)}")
+        return len(taken)
     finally:
         flush_lock.release()
 
@@ -823,10 +901,10 @@ def write_to_report(tasks):
             ticket = None
             if uid in uid_index:
                 ticket = uid_index[uid]['ticket']
-            
             if not ticket:
-                logger.warning(f"❌ Заявка {uid} не найдена в кэше, пропускаем")
-                continue
+                ticket = find_cached_ticket(uid) or {}
+            if not ticket:
+                logger.warning(f"Заявка {uid} не найдена в кэше, в отчёт пишем то, что пришло от мастера")
             
             status_map = {
                 'done': '✅ Выполнено',
@@ -988,6 +1066,12 @@ def logout():
 def static_files(filename):
     return send_from_directory('static', filename)
 
+@app.route('/sw.js')
+def service_worker():
+    response = send_from_directory('static', 'sw.js')
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
+
 @app.route('/data/<path:filename>')
 def data_files(filename):
     return send_from_directory('/data', filename)
@@ -1032,6 +1116,27 @@ def api_sync():
         return jsonify({'success': True, 'tickets': tickets, 'count': len(tickets)})
     except Exception as e:
         logger.error(f"Ошибка синхронизации: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/queue_status')
+@login_required
+def api_queue_status():
+    tasks = read_queue().get('tasks') or []
+    uids = []
+    for task in tasks:
+        uid = task.get('uid')
+        if uid and uid not in uids:
+            uids.append(uid)
+    return jsonify({'success': True, 'count': len(tasks), 'uids': uids})
+
+@app.route('/api/flush_now', methods=['POST'])
+@login_required
+def api_flush_now():
+    try:
+        flushed = flush_queue()
+        return jsonify({'success': True, 'flushed': flushed})
+    except Exception as e:
+        logger.error(f"Ошибка записи очереди: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/batch_update', methods=['POST'])
@@ -1426,6 +1531,10 @@ def api_master_history(name):
     if session.get('master_name') != name and session.get('role') != 'admin':
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
     history = read_cache(f"history_{name}.json") or []
+    if isinstance(history, dict):
+        history = history.get('items') or history.get('history') or []
+    if not isinstance(history, list):
+        history = []
     return jsonify({'success': True, 'history': history})
 
 # ============================================================
