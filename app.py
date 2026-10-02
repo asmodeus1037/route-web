@@ -25,6 +25,36 @@ CREDENTIALS_FILE = "/data/credentials.json"
 SHEET_NAME = "Система ремонта ВВ"
 START_COORDS = "55.775267, 37.745690"
 MASTERS = ['Антон', 'Сергей', 'Руслан', 'Сергей Транзит', 'Алексей']
+PARTS = [
+    ('Покрышка', 1200),
+    ('Камера', 300),
+    ('Обод', 1200),
+    ('Ось', 180),
+    ('Крыло', 400),
+    ('Ручка тормоза с бачком', 550),
+    ('Ручка тормоза', 140),
+    ('Колодки', 200),
+    ('Концевик', 220),
+    ('Суппорт', 550),
+    ('Подшипник', 50),
+    ('Вилка', 2500),
+    ('Зеркала для электровелосипеда (2 шт.)', 500),
+    ('Хомут для зеркал комплект', 200),
+    ('Подножка', 850),
+    ('Пружина', 50),
+    ('Багажник задний для Monster', 1000),
+    ('Багажник передний 39х32см для электровелосипедов', 800),
+    ('Сиденье', 700),
+    ('Подседельный штырь', 450),
+    ('Сигналка', 350),
+    ('Ручка газа', 1000),
+    ('Блок переключения скоростей /фар/сигнал/поворотники', 450),
+    ('Треугольник', 300),
+    ('Стойка под руль', 550),
+    ('Руль', 550),
+    ('Фара', 750),
+]
+PARTS_PRICE = {name: price for name, price in PARTS}
 CACHE_TTL = 300
 CACHE_DIR = "/data/cache"
 BOT_API_URL = "https://route-bot-dzufear.waw0.amvera.tech"
@@ -312,101 +342,105 @@ def get_tickets_from_sheets():
     darks_ref = load_darks_reference()
     bike_types = get_bike_type_by_gos_map()
     
-    try:
-        worksheet = sheet_client.worksheet("Заявки")
-        rows = worksheet.get_all_values()
-        if len(rows) > 1:
-            for idx, row in enumerate(rows[1:], start=2):
-                if len(row) < 6 or not row[0].strip():
-                    continue
-                darks_num = row[0].strip()
-                status_raw = row[7].strip() if len(row) > 7 else ''
-                note = row[9].strip() if len(row) > 9 else ''
+    for sheet_name in ('Заявки', 'Заявки бот'):
+        try:
+            worksheet = sheet_client.worksheet(sheet_name)
+            rows = worksheet.get_all_values()
+            if len(rows) > 1:
+                for idx, row in enumerate(rows[1:], start=2):
+                    if len(row) < 6 or not row[0].strip():
+                        continue
+                    if row[0].strip() in ('Номер дарка', 'Номер_дарка'):
+                        continue
+                    darks_num = row[0].strip()
+                    status_raw = row[7].strip() if len(row) > 7 else ''
+                    note = row[9].strip() if len(row) > 9 else ''
                 
-                if status_raw in ['Выполнено', '✅ Выполнено', 'done']:
-                    status = 'done'
-                elif status_raw in ['🔵 Доделать', 'Доделать']:
-                    status = 'todo'
-                elif status_raw in ['⏹️ Обработано', 'Обработано', 'Вело отсутствует']:
-                    status = 'processed'
-                elif status_raw in ['🔧 Эвакуация', 'Эвакуация']:
-                    status = 'todo'
-                    if note:
-                        note = f'ЭВАКУАЦИЯ: {note}'
+                    if status_raw in ['Выполнено', '✅ Выполнено', 'done']:
+                        status = 'done'
+                    elif status_raw in ['🔵 Доделать', 'Доделать']:
+                        status = 'todo'
+                    elif status_raw in ['⏹️ Обработано', 'Обработано', 'Вело отсутствует']:
+                        status = 'processed'
+                    elif status_raw in ['🔧 Эвакуация', 'Эвакуация']:
+                        status = 'todo'
+                        if note:
+                            note = f'ЭВАКУАЦИЯ: {note}'
+                        else:
+                            desc = row[2].strip() if len(row) > 2 else ''
+                            note = f'ЭВАКУАЦИЯ: {desc}'
                     else:
-                        desc = row[2].strip() if len(row) > 2 else ''
-                        note = f'ЭВАКУАЦИЯ: {desc}'
-                else:
-                    status = 'pending'
+                        status = 'pending'
                 
-                is_done = status == 'done'
-                created_str = row[5].strip() if len(row) > 5 else ''
-                timer_from = row[14].strip() if len(row) > 14 else ''
-                hours_since = get_hours_since(timer_from or created_str)
-                bike_type = row[1].strip() if len(row) > 1 else ''
-                bike_subtype = row[8].strip() if len(row) > 8 else ''
-                gos_value = row[3].strip() if len(row) > 3 else ''
-                if bike_type == 'Электровелосипед':
-                    display_type = bike_types.get(normalize_gos(gos_value)) or 'Неопределен тип вело, ошибка в гос номере'
-                elif bike_subtype:
-                    display_type = bike_subtype
-                else:
-                    display_type = bike_type or 'Не указан'
-                uid = row[10].strip() if len(row) > 10 else ''
-                if not uid and created_str:
-                    uid = generate_ticket_id(created_str)
-                    if uid:
+                    is_done = status == 'done'
+                    created_str = row[5].strip() if len(row) > 5 else ''
+                    timer_from = row[14].strip() if len(row) > 14 else ''
+                    hours_since = get_hours_since(timer_from or created_str)
+                    bike_type = row[1].strip() if len(row) > 1 else ''
+                    bike_subtype = row[8].strip() if len(row) > 8 else ''
+                    gos_value = row[3].strip() if len(row) > 3 else ''
+                    if bike_type == 'Электровелосипед':
+                        display_type = bike_types.get(normalize_gos(gos_value)) or 'Неопределен тип вело, ошибка в гос номере'
+                    elif bike_subtype:
+                        display_type = bike_subtype
+                    else:
+                        display_type = bike_type or 'Не указан'
+                    uid = row[10].strip() if len(row) > 10 else ''
+                    if not uid and created_str:
+                        uid = generate_ticket_id(created_str)
+                        if uid:
+                            try:
+                                worksheet.update_cell(idx, 11, uid)
+                            except:
+                                pass
+                    if not row[7].strip():
                         try:
-                            worksheet.update_cell(idx, 11, uid)
+                            worksheet.update_cell(idx, 8, '🟡 В работе')
+                            status = 'pending'
                         except:
                             pass
-                if not row[7].strip():
-                    try:
-                        worksheet.update_cell(idx, 8, '🟡 В работе')
-                        status = 'pending'
-                    except:
-                        pass
-                direction = row[11].strip() if len(row) > 11 else ''
-                if not direction and darks_num in darks_ref:
-                    direction = darks_ref[darks_num].get('direction', '')
-                display_desc = row[2].strip() if len(row) > 2 else ''
-                if status == 'todo' and note and 'ЗАБРАЛИ:' in note:
-                    match = re.search(r'ЗАБРАЛИ:\s*(\d+)', note)
-                    if match:
-                        count = match.group(1)
-                        display_desc = f'Вернуть {count} АКБ (забирали на ремонт)'
+                    direction = row[11].strip() if len(row) > 11 else ''
+                    if not direction and darks_num in darks_ref:
+                        direction = darks_ref[darks_num].get('direction', '')
+                    display_desc = row[2].strip() if len(row) > 2 else ''
+                    if status == 'todo' and note and 'ЗАБРАЛИ:' in note:
+                        match = re.search(r'ЗАБРАЛИ:\s*(\d+)', note)
+                        if match:
+                            count = match.group(1)
+                            display_desc = f'Вернуть {count} АКБ (забирали на ремонт)'
                 
-                if status == 'todo' and note and note.startswith('ЭВАКУАЦИЯ:'):
-                    display_desc = note.replace('ЭВАКУАЦИЯ: ', '')
+                    if status == 'todo' and note and note.startswith('ЭВАКУАЦИЯ:'):
+                        display_desc = note.replace('ЭВАКУАЦИЯ: ', '')
                 
-                tickets.append({
-                    'source': 'Заявки',
-                    'darks': darks_num,
-                    'type': bike_type,
-                    'bike_type': display_type,
-                    'bike_subtype': bike_subtype,
-                    'desc': display_desc,
-                    'gos': gos_value,
-                    'contact': row[4].strip() if len(row) > 4 else '',
-                    'created': created_str,
-                    'timer_from': timer_from,
-                    'hours_since': hours_since,
-                    'master': row[6].strip() if len(row) > 6 else '',
-                    'status': status,
-                    'note': note,
-                    'uid': uid,
-                    'row_index': idx,
-                    'address': darks_ref.get(darks_num, {}).get('address', ''),
-                    'direction': direction,
-                    'coords': darks_ref.get(darks_num, {}).get('coords', ''),
-                    'sent_date': '',
-                    'is_done': is_done,
-                    'is_active': not is_done,
-                    'parts': row[9].strip() if len(row) > 9 else '',
-                    'display_desc': display_desc
-                })
-    except Exception as e:
-        logger.error(f"Ошибка чтения 'Заявки': {e}")
+                    tickets.append({
+                        'source': sheet_name,
+                        'darks': darks_num,
+                        'type': bike_type,
+                        'bike_type': display_type,
+                        'bike_subtype': bike_subtype,
+                        'desc': display_desc,
+                        'gos': gos_value,
+                        'contact': row[4].strip() if len(row) > 4 else '',
+                        'created': created_str,
+                        'timer_from': timer_from,
+                        'hours_since': hours_since,
+                        'master': row[6].strip() if len(row) > 6 else '',
+                        'status': status,
+                        'note': note,
+                        'uid': uid,
+                        'row_index': idx,
+                        'address': darks_ref.get(darks_num, {}).get('address', ''),
+                        'direction': direction,
+                        'coords': darks_ref.get(darks_num, {}).get('coords', ''),
+                        'sent_date': '',
+                        'is_done': is_done,
+                        'is_active': not is_done,
+                        'parts': row[9].strip() if len(row) > 9 else '',
+                        'display_desc': display_desc
+                    })
+        except Exception as e:
+            logger.error(f"Ошибка чтения '{sheet_name}': {e}")
+
     
     try:
         worksheet = sheet_client.worksheet("Импорт М4")
@@ -529,15 +563,17 @@ def batch_update_masters(changes):
             row_idx = get_ticket_row_by_uid(uid)
             if not row_idx:
                 continue
-            if source == 'Заявки':
-                updates_zayavki.append({'range': f'G{row_idx}', 'values': [[master]]})
+            if source in ('Заявки', 'Заявки бот'):
+                updates_zayavki.append((source, {'range': f'G{row_idx}', 'values': [[master]]}))
                 updated_count += 1
             elif source == 'Импорт М4':
                 updates_import.append({'range': f'N{row_idx}', 'values': [[master]]})
                 updated_count += 1
-        if updates_zayavki:
-            worksheet = sheet_client.worksheet("Заявки")
-            worksheet.batch_update(updates_zayavki)
+        grouped = {}
+        for source, update in updates_zayavki:
+            grouped.setdefault(source, []).append(update)
+        for source, updates in grouped.items():
+            sheet_client.worksheet(source).batch_update(updates)
         if updates_import:
             worksheet = sheet_client.worksheet("Импорт М4")
             worksheet.batch_update(updates_import)
@@ -553,22 +589,30 @@ def clear_all_masters():
     try:
         sheet_client = get_sheet_client()
         cleared = 0
-        updates_zayavki = []
         updates_import = []
+        sheet_client = get_sheet_client()
         
-        worksheet = sheet_client.worksheet("Заявки")
-        all_rows = worksheet.get_all_values()
-        for idx, row in enumerate(all_rows, start=1):
-            if idx == 1:
+        for sheet_name in ('Заявки', 'Заявки бот'):
+            try:
+                worksheet = sheet_client.worksheet(sheet_name)
+            except Exception:
                 continue
-            if len(row) > 7:
-                status = row[7].strip() if len(row) > 7 else ''
-                if status in ['🟡 В работе', '🔵 Доделать', 'В работе', 'Доделать', 'pending', 'todo']:
-                    current_master = row[6].strip() if len(row) > 6 else ''
-                    if current_master:
-                        updates_zayavki.append({'range': f'G{idx}', 'values': [['']]})
-                        cleared += 1
-        
+            all_rows = worksheet.get_all_values()
+            updates_zayavki = []
+            for idx, row in enumerate(all_rows, start=1):
+                if idx == 1:
+                    continue
+                if len(row) > 7:
+                    status = row[7].strip() if len(row) > 7 else ''
+                    if status in ['🟡 В работе', '🔵 Доделать', 'В работе', 'Доделать', 'pending', 'todo']:
+                        current_master = row[6].strip() if len(row) > 6 else ''
+                        if current_master:
+                            updates_zayavki.append({'range': f'G{idx}', 'values': [['']]})
+                            cleared += 1
+            if updates_zayavki:
+                worksheet.batch_update(updates_zayavki)
+                logger.info(f"✅ Снято {len(updates_zayavki)} мастеров в '{sheet_name}'")
+
         try:
             worksheet_import = sheet_client.worksheet("Импорт М4")
             import_rows = worksheet_import.get_all_values()
@@ -582,16 +626,11 @@ def clear_all_masters():
                         if current_master:
                             updates_import.append({'range': f'N{idx}', 'values': [['']]})
                             cleared += 1
-        except:
+            if updates_import:
+                worksheet_import.batch_update(updates_import)
+                logger.info(f"✅ Снято {len(updates_import)} мастеров в 'Импорт М4'")
+        except Exception:
             pass
-        
-        if updates_zayavki:
-            worksheet.batch_update(updates_zayavki)
-            logger.info(f"✅ Снято {len(updates_zayavki)} мастеров в 'Заявки'")
-        
-        if updates_import:
-            worksheet_import.batch_update(updates_import)
-            logger.info(f"✅ Снято {len(updates_import)} мастеров в 'Импорт М4'")
         
         tickets = get_tickets_from_sheets()
         uid_index = build_uid_index(tickets)
@@ -615,12 +654,12 @@ def update_status_in_google_sheets(uid, status, note=''):
         row_idx = found['row_index']
         source = found['source']
         
-        if source == 'Заявки':
-            worksheet = sheet_client.worksheet("Заявки")
+        if source in ('Заявки', 'Заявки бот'):
+            worksheet = sheet_client.worksheet(source)
             worksheet.update_cell(row_idx, 8, status)
             if note:
                 worksheet.update_cell(row_idx, 10, note)
-            logger.info(f"✅ Обновлён статус заявки {uid} в 'Заявки': {status}")
+            logger.info(f"✅ Обновлён статус заявки {uid} в '{source}': {status}")
             
         elif source == 'Импорт М4':
             worksheet = sheet_client.worksheet("Импорт М4")
@@ -645,10 +684,14 @@ def find_uid_in_sheets(uid):
     try:
         sheet_client = get_sheet_client()
         
-        worksheet = sheet_client.worksheet("Заявки")
-        cell = worksheet.find(uid)
-        if cell:
-            return {'source': 'Заявки', 'row_index': cell.row}
+        for sheet_name in ('Заявки', 'Заявки бот'):
+            try:
+                worksheet = sheet_client.worksheet(sheet_name)
+            except Exception:
+                continue
+            cell = worksheet.find(uid)
+            if cell:
+                return {'source': sheet_name, 'row_index': cell.row}
         
         worksheet = sheet_client.worksheet("Импорт М4")
         cell = worksheet.find(uid)
@@ -724,6 +767,15 @@ def find_cached_ticket(uid):
         return uid_index[uid].get('ticket')
     return None
 
+def source_of(uid):
+    ticket = find_cached_ticket(uid) or {}
+    source = ticket.get('source')
+    if source in ('Заявки', 'Заявки бот', 'Импорт М4'):
+        return source
+    if uid in uid_index:
+        return uid_index[uid].get('source') or 'Заявки'
+    return 'Заявки'
+
 def mark_bike_missing(uid, actor_name):
     now = get_msk_now()
     timer_from = now.strftime('%Y-%m-%d %H:%M:%S')
@@ -747,7 +799,7 @@ def mark_bike_missing(uid, actor_name):
         remove_ticket_from_master_cache(actor_name, uid)
     add_to_queue({
         'uid': uid,
-        'source': 'Заявки',
+        'source': source_of(uid),
         'type': 'fail',
         'data': {
             'master': actor_name,
@@ -762,15 +814,17 @@ def mark_bike_missing(uid, actor_name):
     return note
 
 def apply_queue_to_sheets(tasks):
-    updates = []
+    buckets = {'Заявки': [], 'Заявки бот': []}
     for task in tasks:
-        if task.get('source') != 'Заявки':
+        source = task.get('source')
+        if source not in buckets:
             continue
+        updates = buckets[source]
         uid = task.get('uid')
         row_idx = get_ticket_row_by_uid(uid)
         if not row_idx:
             found = find_uid_in_sheets(uid)
-            if not found or found.get('source') != 'Заявки':
+            if not found or found.get('source') != source:
                 continue
             row_idx = found['row_index']
         data = task.get('data') or {}
@@ -821,10 +875,13 @@ def apply_queue_to_sheets(tasks):
         if data.get('note'):
             import_updates.append({'range': f'M{row_idx}', 'values': [[data.get('note')]]})
     written = 0
-    if updates:
-        get_sheet_client().worksheet('Заявки').batch_update(updates)
-        written += len(updates)
-        logger.info(f"✅ Очередь записана в Заявки: {len(updates)} ячеек")
+    sheet_client = get_sheet_client()
+    for sheet_name, sheet_updates in buckets.items():
+        if not sheet_updates:
+            continue
+        sheet_client.worksheet(sheet_name).batch_update(sheet_updates)
+        written += len(sheet_updates)
+        logger.info(f"✅ Очередь записана в {sheet_name}: {len(sheet_updates)} ячеек")
     if import_updates:
         get_sheet_client().worksheet('Импорт М4').batch_update(import_updates)
         written += len(import_updates)
@@ -852,6 +909,138 @@ def append_master_history(master, action, data):
         }
     })
     write_cache(f"history_{master}.json", {'items': items[-300:]})
+
+TRUNK_FILE = os.path.join(CACHE_DIR, "trunks.json")
+PARTS_QUEUE_FILE = os.path.join(CACHE_DIR, "parts_queue.json")
+_trunk_lock = threading.Lock()
+
+def _read_json(path, fallback):
+    try:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data
+    except Exception:
+        pass
+    return fallback
+
+def _write_json(path, data):
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def load_trunks():
+    data = _read_json(TRUNK_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+def save_trunks(data):
+    _write_json(TRUNK_FILE, data)
+
+def trunk_rows(master):
+    bag = load_trunks().get(master) or {}
+    rows = []
+    total_qty = 0
+    total_sum = 0
+    for name, price in PARTS:
+        qty = int(bag.get(name) or 0)
+        rows.append({'name': name, 'price': price, 'qty': qty, 'sum': qty * price})
+        total_qty += qty
+        total_sum += qty * price
+    return rows, total_qty, total_sum
+
+def trunk_qty(master, name):
+    return int((load_trunks().get(master) or {}).get(name) or 0)
+
+def change_trunk(master, name, delta):
+    if name not in PARTS_PRICE:
+        return False, 0
+    with _trunk_lock:
+        data = load_trunks()
+        bag = data.get(master) or {}
+        current = int(bag.get(name) or 0)
+        new_qty = current + int(delta)
+        if new_qty < 0:
+            return False, current
+        bag[name] = new_qty
+        data[master] = bag
+        save_trunks(data)
+    return True, new_qty
+
+def queue_part_move(master, action, name, qty, uid='', gos='', darks=''):
+    price = PARTS_PRICE.get(name, 0)
+    move = {
+        'time': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
+        'master': master,
+        'action': action,
+        'name': name,
+        'qty': int(qty),
+        'price': price,
+        'sum': price * int(qty),
+        'uid': uid or '',
+        'gos': gos or '',
+        'darks': str(darks or ''),
+    }
+    with _trunk_lock:
+        data = _read_json(PARTS_QUEUE_FILE, {'moves': []})
+        if not isinstance(data, dict):
+            data = {'moves': []}
+        data.setdefault('moves', []).append(move)
+        data['log'] = (data.get('log') or [])[-1000:]
+        data['log'].append(move)
+        _write_json(PARTS_QUEUE_FILE, data)
+
+def parts_log():
+    data = _read_json(PARTS_QUEUE_FILE, {})
+    log = data.get('log') if isinstance(data, dict) else []
+    return log if isinstance(log, list) else []
+
+def flush_parts_queue():
+    with _trunk_lock:
+        data = _read_json(PARTS_QUEUE_FILE, {'moves': [], 'log': []})
+        moves = list(data.get('moves') or []) if isinstance(data, dict) else []
+    if not moves:
+        return 0
+    sheet = get_sheet_client()
+    try:
+        ws = sheet.worksheet('Движение запчастей')
+    except Exception:
+        ws = sheet.add_worksheet('Движение запчастей', 500, 10)
+        ws.update('A1:J1', [['Дата', 'Мастер', 'Действие', 'Запчасть', 'Количество', 'Цена', 'Сумма', 'Заявка', 'Госномер', 'Даркстор']], value_input_option='RAW')
+    values = [[m['time'], m['master'], m['action'], m['name'], m['qty'], m['price'], m['sum'], m['uid'], m['gos'], m['darks']] for m in moves]
+    ws.append_rows(values, value_input_option='RAW')
+    with _trunk_lock:
+        data = _read_json(PARTS_QUEUE_FILE, {'moves': [], 'log': []})
+        left = data.get('moves') or []
+        data['moves'] = left[len(moves):] if len(left) >= len(moves) else []
+        _write_json(PARTS_QUEUE_FILE, data)
+    logger.info(f"✅ Движение запчастей записано: {len(moves)}")
+    return len(moves)
+
+def spend_parts(master, items, uid='', gos='', darks=''):
+    clean = []
+    for item in items:
+        name = (item.get('name') or '').strip()
+        qty = int(item.get('qty') or 0)
+        if qty <= 0 or name not in PARTS_PRICE:
+            continue
+        clean.append((name, qty))
+    if not clean:
+        return True, ''
+    with _trunk_lock:
+        data = load_trunks()
+        bag = dict(data.get(master) or {})
+        for name, qty in clean:
+            if int(bag.get(name) or 0) < qty:
+                have = int(bag.get(name) or 0)
+                return False, f'В багажнике «{name}» только {have} шт.'
+        for name, qty in clean:
+            bag[name] = int(bag.get(name) or 0) - qty
+        data[master] = bag
+        save_trunks(data)
+    lines = []
+    for name, qty in clean:
+        queue_part_move(master, 'Поставил', name, qty, uid, gos, darks)
+        lines.append(f'{name} x{qty}')
+    return True, ', '.join(lines)
 
 def flush_queue():
     if not flush_lock.acquire(blocking=False):
@@ -889,6 +1078,10 @@ def flush_queue():
         logger.info(f"✅ Очередь записана и очищена: {len(taken)}")
         return len(taken)
     finally:
+        try:
+            flush_parts_queue()
+        except Exception as e:
+            logger.error(f"Ошибка записи запчастей: {e}")
         flush_lock.release()
 
 
@@ -1506,6 +1699,74 @@ def api_master_history(name):
         history = []
     return jsonify({'success': True, 'history': history})
 
+@app.route('/api/master/<name>/trunk')
+@login_required
+def api_master_trunk(name):
+    if session.get('master_name') != name and session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Доступ запрещён'})
+    rows, total_qty, total_sum = trunk_rows(name)
+    return jsonify({'success': True, 'parts': rows, 'total_qty': total_qty, 'total_sum': total_sum})
+
+@app.route('/master/<name>/trunk', methods=['GET', 'POST'])
+@login_required
+def master_trunk(name):
+    if session.get('master_name') != name:
+        return redirect(url_for('login_page'))
+    error = ''
+    if request.method == 'POST':
+        part = (request.form.get('part') or '').strip()
+        action = request.form.get('action') or 'take'
+        try:
+            qty = int(request.form.get('qty') or 0)
+        except Exception:
+            qty = 0
+        if part not in PARTS_PRICE or qty <= 0:
+            error = 'Выберите запчасть и количество'
+        elif action == 'return':
+            ok, have = change_trunk(name, part, -qty)
+            if not ok:
+                error = f'В багажнике «{part}» только {have} шт.'
+            else:
+                queue_part_move(name, 'Вернул', part, qty)
+        else:
+            change_trunk(name, part, qty)
+            queue_part_move(name, 'Взял', part, qty)
+        try:
+            flush_parts_queue()
+        except Exception as e:
+            logger.error(f"Багажник не записался в таблицу: {e}")
+    rows, total_qty, total_sum = trunk_rows(name)
+    return render_template(
+        'trunk.html',
+        name=name,
+        parts=rows,
+        total_qty=total_qty,
+        total_sum=total_sum,
+        error=error,
+        now=get_msk_now().strftime('%H:%M:%S'),
+    )
+
+@app.route('/admin/trunks')
+@login_required
+def admin_trunks():
+    if session.get('role') != 'admin':
+        return redirect(url_for('login_page'))
+    masters = []
+    for master in MASTERS:
+        rows, total_qty, total_sum = trunk_rows(master)
+        stock = [row for row in rows if row['qty'] > 0]
+        masters.append({'name': master, 'rows': stock, 'total_qty': total_qty, 'total_sum': total_sum})
+    spent = {}
+    for move in parts_log():
+        if move.get('action') != 'Поставил':
+            continue
+        key = move.get('name') or ''
+        bucket = spent.setdefault(key, {'name': key, 'qty': 0, 'sum': 0})
+        bucket['qty'] += int(move.get('qty') or 0)
+        bucket['sum'] += int(move.get('sum') or 0)
+    spent_rows = sorted(spent.values(), key=lambda item: item['sum'], reverse=True)
+    return render_template('admin_trunks.html', masters=masters, spent=spent_rows, now=get_msk_now().strftime('%H:%M:%S'))
+
 # ============================================================
 # API ДЛЯ МАСТЕРОВ
 # ============================================================
@@ -1516,10 +1777,31 @@ def master_done(name, darks_number, uid):
     if session.get('master_name') != name:
         logger.warning(f"❌ Сессия не совпадает: {session.get('master_name')} != {name}")
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
-    parts = request.form.get('parts', '').strip()
-    if not parts:
-        return jsonify({'success': False, 'error': 'Укажите запчасти'})
+    parts_raw = request.form.get('parts_json', '').strip()
+    comment = request.form.get('comment', '').strip()
+    legacy = request.form.get('parts', '').strip()
+    selected = []
+    if parts_raw:
+        try:
+            selected = json.loads(parts_raw)
+        except Exception:
+            return jsonify({'success': False, 'error': 'Не понял список запчастей'})
+        if not isinstance(selected, list):
+            selected = []
     ticket = find_cached_ticket(uid) or {}
+    ok, parts_text = spend_parts(
+        name,
+        selected,
+        uid,
+        ticket.get('gos', ''),
+        darks_number,
+    )
+    if not ok:
+        return jsonify({'success': False, 'error': parts_text})
+    text_parts = [piece for piece in (parts_text, comment, legacy) if piece]
+    if not text_parts:
+        return jsonify({'success': False, 'error': 'Выберите запчасть или напишите, что сделали'})
+    parts = '. '.join(text_parts)
     previous = (ticket.get('note') or '').strip()
     comment = parts
     if previous:
@@ -1533,7 +1815,7 @@ def master_done(name, darks_number, uid):
     
     add_to_queue({
         'uid': uid,
-        'source': 'Заявки',
+        'source': source_of(uid),
         'type': 'done',
         'data': {'parts': comment, 'master': name, 'darks_number': darks_number}
     })
@@ -1562,7 +1844,7 @@ def master_evacuation(name, darks_number, uid):
         save_master_cache(name, tickets, '')
     add_to_queue({
         'uid': uid,
-        'source': 'Заявки',
+        'source': source_of(uid),
         'type': 'evacuation',
         'data': {'reason': reason, 'master': name, 'darks_number': darks_number}
     })
@@ -1583,7 +1865,7 @@ def master_taken_no_replace(name, darks_number, uid):
         save_master_cache(name, tickets, '')
     add_to_queue({
         'uid': uid,
-        'source': 'Заявки',
+        'source': source_of(uid),
         'type': 'taken_no_replace',
         'data': {'parts': parts, 'master': name, 'darks_number': darks_number}
     })
@@ -1611,7 +1893,7 @@ def master_replace_yes(name, darks_number, uid):
         save_master_cache(name, tickets, '')
     add_to_queue({
         'uid': uid,
-        'source': 'Заявки',
+        'source': source_of(uid),
         'type': 'replace_yes',
         'data': {'parts': parts, 'master': name, 'darks_number': darks_number}
     })
@@ -1629,7 +1911,7 @@ def master_replace_no(name, darks_number, uid):
         save_master_cache(name, tickets, '')
     add_to_queue({
         'uid': uid,
-        'source': 'Заявки',
+        'source': source_of(uid),
         'type': 'replace_no',
         'data': {'master': name, 'darks_number': darks_number}
     })
@@ -1684,7 +1966,7 @@ def transit_replace():
         write_transit_replacement(uid, master_name, darks_number, address, old_data, new_data)
         add_to_queue({
             'uid': uid,
-            'source': 'Заявки',
+            'source': source_of(uid),
             'type': 'transit_replace',
             'data': {'master': master_name, 'darks_number': darks_number}
         })
@@ -1813,7 +2095,7 @@ def master_evacuation_replace():
         
         add_to_queue({
             'uid': uid,
-            'source': 'Заявки',
+            'source': source_of(uid),
             'type': 'evacuation_and_replace',
             'data': {
                 'master': master_name,
@@ -1871,7 +2153,7 @@ def close_all_transit_tickets(uid, master_name, gos_number, parts=''):
             
             add_to_queue({
                 'uid': ticket_uid,
-                'source': 'Заявки',
+                'source': t.get('source') or 'Заявки',
                 'type': 'transit_bulk_close',
                 'data': {
                     'master': master_name,

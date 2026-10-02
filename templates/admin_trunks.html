@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Багажники</title>
+    <link rel="stylesheet" href="/static/css/admin.css">
+    <style>
+        .card { background: #fff; border-radius: 14px; padding: 14px; margin: 12px 0; }
+        .row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid #f1f5f9; }
+        .sum { font-weight: 800; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Багажники</h1>
+    <p><a href="/admin">← В админку</a> · журнал в листе «Движение запчастей»</p>
+    {% for master in masters %}
+    <div class="card">
+        <div class="row"><b>{{ master.name }}</b><span class="sum">{{ master.total_sum }} ₽ · {{ master.total_qty }} шт</span></div>
+        {% for row in master.rows %}
+        <div class="row"><span>{{ row.name }}</span><span>{{ row.qty }} · {{ row.sum }} ₽</span></div>
+        {% else %}
+        <p>Пусто</p>
+        {% endfor %}
+    </div>
+    {% endfor %}
+    <div class="card">
+        <b>Поставлено на велосипеды</b>
+        {% for row in spent %}
+        <div class="row"><span>{{ row.name }}</span><span>{{ row.qty }} · {{ row.sum }} ₽</span></div>
+        {% else %}
+        <p>Пока никто ничего не списал.</p>
+        {% endfor %}
+    </div>
+</div>
+</body>
+</html>

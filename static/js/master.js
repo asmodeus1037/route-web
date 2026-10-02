@@ -317,7 +317,8 @@ function togglePanel(uid) {
     if (!panel) return;
     panel.hidden = !panel.hidden;
     if (!panel.hidden) {
-        var input = panel.querySelector('input, textarea');
+        renderPartList(panel);
+        var input = panel.querySelector('input[name="comment"], input[name="parts"], textarea');
         if (input) input.focus();
     }
 }
@@ -455,13 +456,67 @@ function closeTicketInstant(name, darks, uid, action) {
     return false;
 }
 
+var trunkCache = null;
+var trunkName = '';
+
+function renderPartList(panel) {
+    var box = panel.querySelector('.part-list');
+    if (!box || box.dataset.ready === '1') return;
+    var name = panel.dataset.master || '';
+    var paint = function(parts) {
+        var stock = (parts || []).filter(function(item) { return item.qty > 0; });
+        if (!stock.length) {
+            box.innerHTML = '<a class="trunk-link" href="/master/' + encodeURIComponent(name) + '/trunk">Багажник пуст. Загрузить запчасти</a>';
+        } else {
+            box.innerHTML = stock.map(function(item) {
+                var safe = String(item.name).replace(/"/g, '');
+                return '<label class="part-row"><input type="checkbox" data-name="' + safe + '"><span>' + safe + '</span><b>' + item.qty + ' шт</b><input type="number" min="1" max="' + item.qty + '" value="1"></label>';
+            }).join('');
+        }
+        box.dataset.ready = '1';
+    };
+    if (trunkCache && trunkName === name) {
+        paint(trunkCache);
+        return;
+    }
+    fetch('/api/master/' + encodeURIComponent(name) + '/trunk')
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
+            trunkCache = data.parts || [];
+            trunkName = name;
+            paint(trunkCache);
+        })
+        .catch(function() {
+            box.textContent = 'Багажник не загрузился. Можно закрыть комментарием.';
+            box.dataset.ready = '1';
+        });
+}
+
 function closeTicket(form) {
+    var hidden = form.querySelector('[name="parts_json"]');
+    var comment = form.querySelector('[name="comment"]');
     var parts = form.querySelector('[name="parts"]');
-    if (!parts || !String(parts.value).trim()) {
+    if (hidden) {
+        var chosen = [];
+        form.querySelectorAll('.part-row input[type="checkbox"]').forEach(function(box) {
+            if (!box.checked) return;
+            var row = box.closest('.part-row');
+            var qtyInput = row.querySelector('input[type="number"]');
+            var qty = parseInt(qtyInput.value, 10) || 1;
+            var max = parseInt(qtyInput.max, 10) || qty;
+            if (qty > max) qty = max;
+            if (qty < 1) qty = 1;
+            chosen.push({name: box.getAttribute('data-name'), qty: qty});
+        });
+        if (!chosen.length && !(comment && comment.value.trim())) {
+            alert('Выберите запчасть из багажника или напишите, что сделали');
+            return false;
+        }
+        hidden.value = JSON.stringify(chosen);
+    } else if (!parts || !String(parts.value).trim()) {
         alert('Напишите, что сделали');
         return false;
-    }
-    if (parts.type === 'number' && parseInt(parts.value, 10) <= 0) {
+    } else if (parts.type === 'number' && parseInt(parts.value, 10) <= 0) {
         alert('Укажите количество больше 0');
         return false;
     }

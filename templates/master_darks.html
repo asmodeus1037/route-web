@@ -151,6 +151,7 @@
     <div class="sub-title">
         <span>#{{ darks_number }} · {{ tickets|length }} заявок</span>
         <span>
+            <a href="/master/{{ name }}/trunk" class="back-link">Багажник</a>
             <a href="/master/{{ name }}" class="back-link">← Назад к маршруту</a>
         </span>
         <span>🕒 {{ now }}</span>
@@ -321,8 +322,10 @@
                     <button type="button" class="fast-side" onclick="openReplaceNoModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">Куратор не дал</button>
                 </div>
                 {% else %}
-                <form class="fast-panel" id="panel-{{ t.uid }}" hidden action="/master/{{ name }}/darks/{{ darks_number }}/done/{{ t.uid }}" method="POST" onsubmit="return closeTicket(this)">
-                    <input type="text" name="parts" placeholder="Что заменил" required>
+                <form class="fast-panel" id="panel-{{ t.uid }}" hidden data-master="{{ name }}" action="/master/{{ name }}/darks/{{ darks_number }}/done/{{ t.uid }}" method="POST" onsubmit="return closeTicket(this)">
+                    <div class="part-list">Загрузка багажника...</div>
+                    <input type="hidden" name="parts_json" value="[]">
+                    <input type="text" name="comment" placeholder="Что сделал, если без запчасти">
                     <button type="submit" class="fast-ok">Отправить</button>
                 </form>
                 <div class="fast-more-panel" id="more-{{ t.uid }}" hidden>
