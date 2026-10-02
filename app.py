@@ -26,35 +26,35 @@ SHEET_NAME = "Система ремонта ВВ"
 START_COORDS = "55.775267, 37.745690"
 MASTERS = ['Антон', 'Сергей', 'Руслан', 'Сергей Транзит', 'Алексей']
 PARTS = [
-    ('Покрышка', 1200),
-    ('Камера', 300),
-    ('Обод', 1200),
-    ('Ось', 180),
-    ('Крыло', 400),
-    ('Ручка тормоза с бачком', 550),
-    ('Ручка тормоза', 140),
-    ('Колодки', 200),
-    ('Концевик', 220),
-    ('Суппорт', 550),
-    ('Подшипник', 50),
-    ('Вилка', 2500),
-    ('Зеркала для электровелосипеда (2 шт.)', 500),
-    ('Хомут для зеркал комплект', 200),
-    ('Подножка', 850),
-    ('Пружина', 50),
-    ('Багажник задний для Monster', 1000),
-    ('Багажник передний 39х32см для электровелосипедов', 800),
-    ('Сиденье', 700),
-    ('Подседельный штырь', 450),
-    ('Сигналка', 350),
-    ('Ручка газа', 1000),
-    ('Блок переключения скоростей /фар/сигнал/поворотники', 450),
-    ('Треугольник', 300),
-    ('Стойка под руль', 550),
-    ('Руль', 550),
-    ('Фара', 750),
+    'Покрышка',
+    'Камера',
+    'Обод',
+    'Ось',
+    'Крыло',
+    'Ручка тормоза с бачком',
+    'Ручка тормоза',
+    'Колодки',
+    'Концевик',
+    'Суппорт',
+    'Подшипник',
+    'Вилка',
+    'Зеркала для электровелосипеда (2 шт.)',
+    'Хомут для зеркал комплект',
+    'Подножка',
+    'Пружина',
+    'Багажник задний для Monster',
+    'Багажник передний 39х32см для электровелосипедов',
+    'Сиденье',
+    'Подседельный штырь',
+    'Сигналка',
+    'Ручка газа',
+    'Блок переключения скоростей /фар/сигнал/поворотники',
+    'Треугольник',
+    'Стойка под руль',
+    'Руль',
+    'Фара',
 ]
-PARTS_PRICE = {name: price for name, price in PARTS}
+PARTS_SET = set(PARTS)
 CACHE_TTL = 300
 CACHE_DIR = "/data/cache"
 BOT_API_URL = "https://route-bot-dzufear.waw0.amvera.tech"
@@ -939,19 +939,17 @@ def trunk_rows(master):
     bag = load_trunks().get(master) or {}
     rows = []
     total_qty = 0
-    total_sum = 0
-    for name, price in PARTS:
+    for name in PARTS:
         qty = int(bag.get(name) or 0)
-        rows.append({'name': name, 'price': price, 'qty': qty, 'sum': qty * price})
+        rows.append({'name': name, 'qty': qty})
         total_qty += qty
-        total_sum += qty * price
-    return rows, total_qty, total_sum
+    return rows, total_qty
 
 def trunk_qty(master, name):
     return int((load_trunks().get(master) or {}).get(name) or 0)
 
 def change_trunk(master, name, delta):
-    if name not in PARTS_PRICE:
+    if name not in PARTS_SET:
         return False, 0
     with _trunk_lock:
         data = load_trunks()
@@ -966,15 +964,12 @@ def change_trunk(master, name, delta):
     return True, new_qty
 
 def queue_part_move(master, action, name, qty, uid='', gos='', darks=''):
-    price = PARTS_PRICE.get(name, 0)
     move = {
         'time': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
         'master': master,
         'action': action,
         'name': name,
         'qty': int(qty),
-        'price': price,
-        'sum': price * int(qty),
         'uid': uid or '',
         'gos': gos or '',
         'darks': str(darks or ''),
@@ -1004,8 +999,8 @@ def flush_parts_queue():
         ws = sheet.worksheet('Движение запчастей')
     except Exception:
         ws = sheet.add_worksheet('Движение запчастей', 500, 10)
-        ws.update('A1:J1', [['Дата', 'Мастер', 'Действие', 'Запчасть', 'Количество', 'Цена', 'Сумма', 'Заявка', 'Госномер', 'Даркстор']], value_input_option='RAW')
-    values = [[m['time'], m['master'], m['action'], m['name'], m['qty'], m['price'], m['sum'], m['uid'], m['gos'], m['darks']] for m in moves]
+        ws.update('A1:H1', [['Дата', 'Мастер', 'Действие', 'Запчасть', 'Количество', 'Заявка', 'Госномер', 'Даркстор']], value_input_option='RAW')
+    values = [[m['time'], m['master'], m['action'], m['name'], m['qty'], m.get('uid', ''), m.get('gos', ''), m.get('darks', '')] for m in moves]
     ws.append_rows(values, value_input_option='RAW')
     with _trunk_lock:
         data = _read_json(PARTS_QUEUE_FILE, {'moves': [], 'log': []})
@@ -1020,7 +1015,7 @@ def spend_parts(master, items, uid='', gos='', darks=''):
     for item in items:
         name = (item.get('name') or '').strip()
         qty = int(item.get('qty') or 0)
-        if qty <= 0 or name not in PARTS_PRICE:
+        if qty <= 0 or name not in PARTS_SET:
             continue
         clean.append((name, qty))
     if not clean:
@@ -1704,45 +1699,47 @@ def api_master_history(name):
 def api_master_trunk(name):
     if session.get('master_name') != name and session.get('role') != 'admin':
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
-    rows, total_qty, total_sum = trunk_rows(name)
-    return jsonify({'success': True, 'parts': rows, 'total_qty': total_qty, 'total_sum': total_sum})
+    rows, total_qty = trunk_rows(name)
+    return jsonify({'success': True, 'parts': rows, 'total_qty': total_qty})
 
 @app.route('/master/<name>/trunk', methods=['GET', 'POST'])
 @login_required
 def master_trunk(name):
     if session.get('master_name') != name:
         return redirect(url_for('login_page'))
+    notice = ''
     error = ''
     if request.method == 'POST':
-        part = (request.form.get('part') or '').strip()
-        action = request.form.get('action') or 'take'
-        try:
-            qty = int(request.form.get('qty') or 0)
-        except Exception:
-            qty = 0
-        if part not in PARTS_PRICE or qty <= 0:
-            error = 'Выберите запчасть и количество'
-        elif action == 'return':
-            ok, have = change_trunk(name, part, -qty)
-            if not ok:
-                error = f'В багажнике «{part}» только {have} шт.'
-            else:
-                queue_part_move(name, 'Вернул', part, qty)
+        names = request.form.getlist('part')
+        qtys = request.form.getlist('qty')
+        chosen = set(request.form.getlist('take'))
+        loaded = []
+        for part_name, qty_raw in zip(names, qtys):
+            if part_name not in chosen or part_name not in PARTS_SET:
+                continue
+            try:
+                qty = int(qty_raw or 0)
+            except Exception:
+                qty = 0
+            if qty <= 0:
+                continue
+            change_trunk(name, part_name, qty)
+            queue_part_move(name, 'Взял', part_name, qty)
+            loaded.append(f'{part_name} × {qty}')
+        if not loaded:
+            error = 'Отметьте запчасти и укажите количество'
         else:
-            change_trunk(name, part, qty)
-            queue_part_move(name, 'Взял', part, qty)
-        try:
-            flush_parts_queue()
-        except Exception as e:
-            logger.error(f"Багажник не записался в таблицу: {e}")
-    rows, total_qty, total_sum = trunk_rows(name)
+            notice = 'Загружено: ' + ', '.join(loaded)
+    rows, total_qty = trunk_rows(name)
+    stock = [row for row in rows if row['qty'] > 0]
     return render_template(
         'trunk.html',
         name=name,
         parts=rows,
+        stock=stock,
         total_qty=total_qty,
-        total_sum=total_sum,
         error=error,
+        notice=notice,
         now=get_msk_now().strftime('%H:%M:%S'),
     )
 
@@ -1753,18 +1750,17 @@ def admin_trunks():
         return redirect(url_for('login_page'))
     masters = []
     for master in MASTERS:
-        rows, total_qty, total_sum = trunk_rows(master)
+        rows, total_qty = trunk_rows(master)
         stock = [row for row in rows if row['qty'] > 0]
-        masters.append({'name': master, 'rows': stock, 'total_qty': total_qty, 'total_sum': total_sum})
+        masters.append({'name': master, 'rows': stock, 'total_qty': total_qty})
     spent = {}
     for move in parts_log():
         if move.get('action') != 'Поставил':
             continue
         key = move.get('name') or ''
-        bucket = spent.setdefault(key, {'name': key, 'qty': 0, 'sum': 0})
+        bucket = spent.setdefault(key, {'name': key, 'qty': 0})
         bucket['qty'] += int(move.get('qty') or 0)
-        bucket['sum'] += int(move.get('sum') or 0)
-    spent_rows = sorted(spent.values(), key=lambda item: item['sum'], reverse=True)
+    spent_rows = sorted(spent.values(), key=lambda item: item['qty'], reverse=True)
     return render_template('admin_trunks.html', masters=masters, spent=spent_rows, now=get_msk_now().strftime('%H:%M:%S'))
 
 # ============================================================

@@ -803,7 +803,16 @@ h1 {
 }
 .part-row b { color: #57534e; font-size: 12px; }
 .part-row input[type="number"] { height: 36px; padding: 0 6px; }
-.trunk-link { color: #b45309; font-weight: 700; }
+.trunk-btn {
+    display: inline-block;
+    margin-right: 8px;
+    background: #15803d;
+    color: #fff;
+    text-decoration: none;
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-weight: 800;
+}
 .fast-panel[hidden], .fast-more-panel[hidden] { display: none !important; }
 .age.hot { color: #c2413a; font-weight: 800; }
 @media (max-width: 640px) {

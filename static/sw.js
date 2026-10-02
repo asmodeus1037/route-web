@@ -1,4 +1,4 @@
-var CACHE = 'route-master-v4';
+var CACHE = 'route-master-v5';
 
 self.addEventListener('install', function() {
     self.skipWaiting();
