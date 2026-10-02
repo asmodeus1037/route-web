@@ -701,10 +701,104 @@ h1 {
 }
 .fast-top {
     display: flex;
+    flex-direction: column;
     gap: 8px;
-    align-items: flex-start;
-    padding: 10px 10px 8px 12px;
+    align-items: stretch;
+    padding: 12px;
 }
+.fast-btns {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+}
+.fast-btns .fast-ok {
+    flex: 1;
+    min-height: 48px;
+}
+.fast-btns .fast-more {
+    width: 56px;
+    min-height: 48px;
+    flex: 0 0 56px;
+}
+.darks-grid { grid-template-columns: 1fr; }
+.part-query, .trunk-card input[type="text"], .evacuation-form input {
+    font-size: 16px;
+}
+.part-suggest { display: flex; flex-direction: column; gap: 6px; }
+.part-hit, .part-miss {
+    width: 100%;
+    text-align: left;
+    border: 1px solid #e7e5e4;
+    background: #fff;
+    border-radius: 10px;
+    min-height: 44px;
+    padding: 8px 12px;
+    font: inherit;
+    font-size: 16px;
+}
+.part-miss { color: #b45309; }
+.part-chip {
+    display: grid;
+    grid-template-columns: 1fr 72px auto;
+    gap: 8px;
+    align-items: center;
+    padding: 6px 0;
+}
+.part-chip input { height: 40px; text-align: center; font-size: 16px; }
+.part-chip button {
+    border: 0;
+    background: transparent;
+    color: #b45309;
+    font: inherit;
+    min-height: 44px;
+}
+.dock {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    background: #fff;
+    border-top: 1px solid #e7e5e4;
+    padding-bottom: env(safe-area-inset-bottom);
+}
+.dock a {
+    text-align: center;
+    text-decoration: none;
+    color: #57534e;
+    font-weight: 800;
+    font-size: 14px;
+    padding: 14px 4px 16px;
+}
+.dock a.on { color: #c0392b; }
+.home-links { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.home-links a, .darks-card { text-decoration: none; color: inherit; }
+.home-links a {
+    display: block;
+    background: #fff;
+    border-radius: 12px;
+    padding: 12px;
+    font-weight: 700;
+    text-align: center;
+}
+.home-trunk {
+    display: block;
+    margin: 12px 0;
+    background: #15803d;
+    color: #fff;
+    text-align: center;
+    text-decoration: none;
+    border-radius: 14px;
+    min-height: 52px;
+    line-height: 52px;
+    font-weight: 800;
+    font-size: 18px;
+}
+body { padding-bottom: 96px; }
+.evacuation-form .ticket-header { align-items: stretch; }
+.evacuation-form .ticket-header .fast-more { width: 100%; margin-top: 8px; }
 .fast-main { flex: 1; min-width: 0; }
 .fast-gos {
     font-weight: 800;
@@ -816,5 +910,5 @@ h1 {
 .fast-panel[hidden], .fast-more-panel[hidden] { display: none !important; }
 .age.hot { color: #c2413a; font-weight: 800; }
 @media (max-width: 640px) {
-    body { padding: 8px; padding-bottom: 24px; }
+    body { padding: 8px; padding-bottom: 96px; }
 }

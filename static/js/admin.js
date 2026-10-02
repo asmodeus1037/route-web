@@ -161,6 +161,30 @@ function sendNotification() {
 // ============================================================
 // ОБНОВЛЕНИЕ СТАТУСА В АДМИНКЕ (ОДНА ЗАЯВКА)
 // ============================================================
+function askStatusNote(status) {
+    if (status === '🔵 Доделать') {
+        var text = window.prompt('Комментарий: что нужно доделать?');
+        if (text === null) return null;
+        text = text.trim();
+        if (!text) {
+            alert('Без комментария статус «Доделать» не ставлю');
+            return null;
+        }
+        return text;
+    }
+    if (status === '🔧 Эвакуация') {
+        var reason = window.prompt('Причина замены велосипеда');
+        if (reason === null) return null;
+        reason = reason.trim();
+        if (!reason) {
+            alert('Без причины эвакуацию не ставлю');
+            return null;
+        }
+        return reason;
+    }
+    return '';
+}
+
 function updateStatus(select) {
     var uid = select.dataset.uid;
     var status = select.value;
@@ -177,13 +201,10 @@ function updateStatus(select) {
         }
         if (ticket) break;
     }
-    var note = '';
-    if (status === '🔧 Эвакуация') {
-        note = (ticket && ticket.desc) || 'Эвакуация';
-        if (!confirm('Отправить заявку на замену велосипеда?\n' + note)) {
-            select.value = oldStatus;
-            return;
-        }
+    var note = askStatusNote(status);
+    if (note === null) {
+        select.value = oldStatus;
+        return;
     }
     applyStatusToTicket(ticket, status, note);
     if (select) select.dataset.oldStatus = status;
@@ -220,8 +241,11 @@ function applyStatusToTicket(ticket, status, note) {
     ticket.is_done = ticket.status === 'done';
     ticket.is_active = ticket.status !== 'done';
     if (status === '🔧 Эвакуация') {
-        ticket.note = 'ЭВАКУАЦИЯ: ' + (note || ticket.desc || 'Эвакуация');
-        ticket.display_desc = note || ticket.desc;
+        ticket.note = ((ticket.note || '') + '\nЭВАКУАЦИЯ: ' + (note || 'Эвакуация')).trim();
+        ticket.display_desc = ticket.desc;
+    }
+    if (status === '🔵 Доделать' && note) {
+        ticket.note = ((ticket.note || '') + '\n' + note).trim();
     }
     if (status === '⏹️ Обработано') {
         ticket.master = '';
@@ -441,6 +465,8 @@ async function applyBulkStatus() {
         return;
     }
     
+    var note = askStatusNote(status);
+    if (note === null) return;
     if (!confirm('Изменить статус на "' + status + '" для ' + selectedRequests.size + ' заявок?')) {
         return;
     }
@@ -449,7 +475,6 @@ async function applyBulkStatus() {
     var all = getAllTickets();
     for (var i = 0; i < all.length; i++) {
         if (uids.indexOf(all[i].uid) !== -1) {
-            var note = status === '🔧 Эвакуация' ? (all[i].desc || 'Эвакуация') : '';
             applyStatusToTicket(all[i], status, note);
         }
     }
@@ -461,7 +486,7 @@ async function applyBulkStatus() {
     fetch('/api/bulk_update_status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uids: uids, status: status, comment: '', skip_report: true })
+        body: JSON.stringify({ uids: uids, status: status, comment: note, skip_report: true })
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
@@ -960,7 +985,8 @@ function renderTicketsGrouped(tickets, containerId) {
         for (var mi2 = 0; mi2 < masters.length; mi2++) {
             html += '<option value="' + masters[mi2] + '">' + masters[mi2] + '</option>';
         }
-        html += '</select><button class="btn btn-success" onclick="assignAllDarks(\'' + group.darks + '\')">✅ Назначить</button></div>';
+        html += '</select><button type="button" class="btn btn-success" onclick="assignAllDarks(\'' + String(group.darks).replace(/'/g, '') + '\')">Назначить</button>';
+        html += '<button type="button" class="btn btn-success" data-darks="' + group.darks + '" onclick="saveDarksChanges(this)">Сохранить</button></div>';
         html += '</div>';
     }
     container.innerHTML = html;
@@ -1005,7 +1031,7 @@ function updateChangesInfo() {
         document.getElementById('syncStatus').textContent = '📝 Есть изменения';
         document.getElementById('syncStatus').style.color = '#f59e0b';
     } else {
-        el.textContent = '💡 Изменения сохраняются по кнопке';
+        el.textContent = 'Назначения уходят в таблицу кнопкой «Сохранить» у даркстора';
         document.getElementById('syncStatus').textContent = '✅ Готово';
         document.getElementById('syncStatus').style.color = '#22c55e';
     }
@@ -1014,6 +1040,55 @@ function updateChangesInfo() {
 // ============================================================
 // СОХРАНЕНИЕ И СИНХРОНИЗАЦИЯ
 // ============================================================
+function saveDarksChanges(button) {
+    var darks = String(button.getAttribute('data-darks') || '');
+    var allTickets = getAllTickets();
+    var byUid = {};
+    for (var i = 0; i < allTickets.length; i++) {
+        byUid[allTickets[i].uid] = allTickets[i];
+    }
+    var changeList = [];
+    var drop = [];
+    for (var key in pendingChanges) {
+        var uid = key.split('|')[0];
+        var ticket = byUid[uid];
+        if (!ticket || String(ticket.darks) !== darks) continue;
+        var parts = key.split('|');
+        changeList.push({ uid: parts[0], source: parts[1], master: pendingChanges[key] });
+        drop.push(key);
+    }
+    if (!changeList.length) {
+        alert('На этом дарксторе нет новых назначений');
+        return;
+    }
+    button.disabled = true;
+    fetch('/api/batch_update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ changes: changeList })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        button.disabled = false;
+        if (!data.success) {
+            alert('Не сохранилось: ' + (data.error || ''));
+            return;
+        }
+        for (var i = 0; i < changeList.length; i++) {
+            var ticket = byUid[changeList[i].uid];
+            if (ticket && ticket.source === changeList[i].source) ticket.master = changeList[i].master;
+        }
+        for (var j = 0; j < drop.length; j++) delete pendingChanges[drop[j]];
+        updateChangesInfo();
+        renderCurrentTab();
+        showToastModern('Даркстор ' + darks + ' сохранён', 'success');
+    })
+    .catch(function() {
+        button.disabled = false;
+        alert('Нет сети. Назначения остались на экране, таблица их ещё не получила.');
+    });
+}
+
 function saveAllChanges() {
     var keys = Object.keys(pendingChanges);
     if (keys.length === 0) { alert('Нет изменений'); return; }

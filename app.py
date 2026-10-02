@@ -26,35 +26,36 @@ SHEET_NAME = "Система ремонта ВВ"
 START_COORDS = "55.775267, 37.745690"
 MASTERS = ['Антон', 'Сергей', 'Руслан', 'Сергей Транзит', 'Алексей']
 PARTS = [
-    'Покрышка',
-    'Камера',
-    'Обод',
-    'Ось',
-    'Крыло',
-    'Ручка тормоза с бачком',
-    'Ручка тормоза',
-    'Колодки',
-    'Концевик',
-    'Суппорт',
-    'Подшипник',
-    'Вилка',
-    'Зеркала для электровелосипеда (2 шт.)',
-    'Хомут для зеркал комплект',
-    'Подножка',
-    'Пружина',
-    'Багажник задний для Monster',
-    'Багажник передний 39х32см для электровелосипедов',
-    'Сиденье',
-    'Подседельный штырь',
-    'Сигналка',
-    'Ручка газа',
-    'Блок переключения скоростей /фар/сигнал/поворотники',
-    'Треугольник',
-    'Стойка под руль',
-    'Руль',
-    'Фара',
+    ('Покрышка', 1200),
+    ('Камера', 300),
+    ('Обод', 1200),
+    ('Ось', 180),
+    ('Крыло', 400),
+    ('Ручка тормоза с бачком', 550),
+    ('Ручка тормоза', 140),
+    ('Колодки', 200),
+    ('Концевик', 220),
+    ('Суппорт', 550),
+    ('Подшипник', 50),
+    ('Вилка', 2500),
+    ('Зеркала для электровелосипеда (2 шт.)', 500),
+    ('Хомут для зеркал комплект', 200),
+    ('Подножка', 850),
+    ('Пружина', 50),
+    ('Багажник задний для Monster', 1000),
+    ('Багажник передний 39х32см для электровелосипедов', 800),
+    ('Сиденье', 700),
+    ('Подседельный штырь', 450),
+    ('Сигналка', 350),
+    ('Ручка газа', 1000),
+    ('Блок переключения скоростей /фар/сигнал/поворотники', 450),
+    ('Треугольник', 300),
+    ('Стойка под руль', 550),
+    ('Руль', 550),
+    ('Фара', 750),
 ]
-PARTS_SET = set(PARTS)
+PARTS_PRICE = {name: price for name, price in PARTS}
+PARTS_SET = set(PARTS_PRICE)
 CACHE_TTL = 300
 CACHE_DIR = "/data/cache"
 BOT_API_URL = "https://route-bot-dzufear.waw0.amvera.tech"
@@ -804,6 +805,8 @@ def mark_bike_missing(uid, actor_name):
         'data': {
             'master': actor_name,
             'note': note,
+            'detail': line,
+            'parts': line,
             'timer_from': timer_from,
             'darks_number': (ticket or {}).get('darks', ''),
             'gos': (ticket or {}).get('gos', ''),
@@ -836,7 +839,7 @@ def apply_queue_to_sheets(tasks):
             updates.append({'range': f'O{row_idx}', 'values': [[data.get('timer_from', '')]]})
         elif task_type in ('done', 'replace_yes', 'transit_replace'):
             updates.append({'range': f'H{row_idx}', 'values': [['✅ Выполнено']]})
-            parts = data.get('parts') or data.get('extra') or ''
+            parts = data.get('note') or data.get('parts') or data.get('extra') or ''
             if parts:
                 updates.append({'range': f'J{row_idx}', 'values': [[parts]]})
         elif task_type == 'evacuation':
@@ -891,6 +894,16 @@ def apply_queue_to_sheets(tasks):
 def append_master_history(master, action, data):
     if not master:
         return
+    labels = {
+        'done': 'Выполнено',
+        'fail': 'Велосипеда не было',
+        'evacuation': 'Эвакуация',
+        'evacuation_and_replace': 'Замена велосипеда',
+        'transit_replace': 'Замена велосипеда',
+        'replace_yes': 'Замена',
+        'replace_no': 'Куратор не дал',
+        'taken_no_replace': 'Забрали без замены',
+    }
     raw = read_cache(f"history_{master}.json")
     if isinstance(raw, dict):
         items = raw.get('items') or raw.get('history') or []
@@ -898,14 +911,18 @@ def append_master_history(master, action, data):
         items = raw
     else:
         items = []
+    data = data or {}
+    detail = data.get('detail') or data.get('parts') or data.get('reason') or ''
+    if detail == 'Отказ от эвакуации':
+        labels['done'] = 'Отказ от эвакуации'
     items.append({
         'timestamp': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
         'action': {
             'action': action,
-            'uid': (data or {}).get('uid', ''),
-            'parts': (data or {}).get('parts', ''),
-            'reason': (data or {}).get('reason') or (data or {}).get('note', ''),
-            'darks_number': (data or {}).get('darks_number', ''),
+            'label': 'Отказ от эвакуации' if detail == 'Отказ от эвакуации' else labels.get(action, 'Отметка'),
+            'parts': '' if detail == 'Отказ от эвакуации' else detail,
+            'detail': detail,
+            'darks_number': data.get('darks_number', ''),
         }
     })
     write_cache(f"history_{master}.json", {'items': items[-300:]})
@@ -939,7 +956,7 @@ def trunk_rows(master):
     bag = load_trunks().get(master) or {}
     rows = []
     total_qty = 0
-    for name in PARTS:
+    for name, price in PARTS:
         qty = int(bag.get(name) or 0)
         rows.append({'name': name, 'qty': qty})
         total_qty += qty
@@ -964,12 +981,15 @@ def change_trunk(master, name, delta):
     return True, new_qty
 
 def queue_part_move(master, action, name, qty, uid='', gos='', darks=''):
+    price = PARTS_PRICE.get(name, 0)
     move = {
         'time': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
         'master': master,
         'action': action,
         'name': name,
         'qty': int(qty),
+        'price': price,
+        'sum': price * int(qty),
         'uid': uid or '',
         'gos': gos or '',
         'darks': str(darks or ''),
@@ -996,12 +1016,13 @@ def flush_parts_queue():
         return 0
     sheet = get_sheet_client()
     try:
-        ws = sheet.worksheet('Движение запчастей')
+        ws = sheet.worksheet('Движение запчастей 2')
     except Exception:
-        ws = sheet.add_worksheet('Движение запчастей', 500, 10)
-        ws.update('A1:H1', [['Дата', 'Мастер', 'Действие', 'Запчасть', 'Количество', 'Заявка', 'Госномер', 'Даркстор']], value_input_option='RAW')
-    values = [[m['time'], m['master'], m['action'], m['name'], m['qty'], m.get('uid', ''), m.get('gos', ''), m.get('darks', '')] for m in moves]
+        ws = sheet.add_worksheet('Движение запчастей 2', 2000, 10)
+        ws.update('A1:J1', [['Дата', 'Мастер', 'Действие', 'Запчасть', 'Количество', 'Цена', 'Сумма', 'Заявка', 'Госномер', 'Даркстор']], value_input_option='RAW')
+    values = [[m['time'], m['master'], m['action'], m['name'], m['qty'], m.get('price', 0), m.get('sum', 0), m.get('uid', ''), m.get('gos', ''), m.get('darks', '')] for m in moves]
     ws.append_rows(values, value_input_option='RAW')
+    write_trunk_sheet(sheet)
     with _trunk_lock:
         data = _read_json(PARTS_QUEUE_FILE, {'moves': [], 'log': []})
         left = data.get('moves') or []
@@ -1009,6 +1030,23 @@ def flush_parts_queue():
         _write_json(PARTS_QUEUE_FILE, data)
     logger.info(f"✅ Движение запчастей записано: {len(moves)}")
     return len(moves)
+
+def write_trunk_sheet(sheet):
+    try:
+        ws = sheet.worksheet('Багажник')
+    except Exception:
+        ws = sheet.add_worksheet('Багажник', 400, 5)
+    rows = [['Мастер', 'Запчасть', 'Количество', 'Цена', 'Сумма']]
+    stored = load_trunks()
+    for master in MASTERS:
+        bag = stored.get(master) or {}
+        for name, price in PARTS:
+            qty = int(bag.get(name) or 0)
+            if qty <= 0:
+                continue
+            rows.append([master, name, qty, price, qty * price])
+    ws.clear()
+    ws.update('A1', rows, value_input_option='RAW')
 
 def spend_parts(master, items, uid='', gos='', darks=''):
     clean = []
@@ -1410,15 +1448,25 @@ def refresh_master_caches_from_admin():
         save_master_cache(master, master_tickets, '')
 
 def queue_admin_status(uid, status_display, note='', skip_report=True, actor='Админ'):
+    now = get_msk_now().strftime('%d.%m %H:%M')
+    actor = actor or 'Админ'
     if status_display == '⏹️ Обработано':
         mark_bike_missing(uid, actor)
         return
+    ticket = find_cached_ticket(uid) or {}
+    previous = (ticket.get('note') or '').strip()
     if status_display == '🔧 Эвакуация':
         new_status = 'todo'
-        ticket = find_cached_ticket(uid) or {}
-        plain = (note or ticket.get('desc') or 'Эвакуация').replace('ЭВАКУАЦИЯ: ', '').strip() or 'Эвакуация'
-        cache_note = 'ЭВАКУАЦИЯ: ' + plain
-        sheet_note = plain
+        plain = (note or 'Эвакуация').replace('ЭВАКУАЦИЯ: ', '').strip() or 'Эвакуация'
+        line = 'ЭВАКУАЦИЯ: ' + plain
+        sheet_note = f'{previous}\n{line}'.strip() if previous else line
+        cache_note = sheet_note
+    elif status_display == '🔵 Доделать':
+        new_status = 'todo'
+        text = (note or '').strip() or 'Доделать'
+        line = f'{now}, {actor}. Доделать: {text}'
+        sheet_note = f'{previous}\n{line}'.strip() if previous else line
+        cache_note = sheet_note
     else:
         status_map = {
             '🟡 В работе': 'pending',
@@ -1431,7 +1479,7 @@ def queue_admin_status(uid, status_display, note='', skip_report=True, actor='А
     source = 'Заявки'
     if uid in uid_index:
         source = (uid_index[uid].get('ticket') or {}).get('source') or 'Заявки'
-    update_ticket_in_admin_cache(uid, new_status, cache_note, status_display)
+    update_ticket_in_admin_cache(uid, new_status, cache_note)
     add_to_queue({
         'uid': uid,
         'source': source,
@@ -1455,7 +1503,7 @@ def api_update_status():
     if not uid or not status_display:
         return jsonify({'success': False, 'error': 'Недостаточно данных'})
     try:
-        queue_admin_status(uid, status_display, note, skip_report, session.get('master_name') or 'Админ')
+        queue_admin_status(uid, status_display, note, skip_report, 'Админ' if session.get('role') == 'admin' else (session.get('master_name') or 'Админ'))
         refresh_master_caches_from_admin()
         return jsonify({'success': True})
     except Exception as e:
@@ -1473,7 +1521,7 @@ def api_bulk_update_status():
         skip_report = data.get('skip_report', True)
         if not uids or not status_display:
             return jsonify({'success': False, 'error': 'Не указаны UID или статус'}), 400
-        actor = session.get('master_name') or 'Админ'
+        actor = 'Админ' if session.get('role') == 'admin' else (session.get('master_name') or 'Админ')
         for uid in uids:
             queue_admin_status(uid, status_display, comment, skip_report, actor)
         refresh_master_caches_from_admin()
@@ -1579,34 +1627,33 @@ def master_overview(name):
         master_tickets = [t for t in tickets if t.get('master') == name and is_active_status(t.get('status'))]
         save_master_cache(name, master_tickets, '')
     if not master_tickets:
-        return render_template('master_empty.html', name=name)
-    for t in master_tickets:
-        t['hours_since'] = ticket_hours(t)
-        t['is_today_done'] = t.get('status') == 'done'
-    groups_dict = {}
-    for t in master_tickets:
-        darks_num = t.get('darks') or 'без номера'
-        if darks_num not in groups_dict:
-            groups_dict[darks_num] = {
-                'darks_number': darks_num,
-                'address': t.get('address', 'Адрес не указан'),
-                'contact': t.get('contact', ''),
-                'tickets': [],
-                'pending': 0,
-                'done': 0
-            }
-        groups_dict[darks_num]['tickets'].append(t)
-        if t.get('status') in ['pending', 'todo', 'processed']:
-            groups_dict[darks_num]['pending'] += 1
-        else:
-            groups_dict[darks_num]['done'] += 1
-    groups = []
-    for darks_num in sorted(groups_dict.keys(), key=lambda x: int(x) if x.isdigit() else 999999):
-        groups.append(groups_dict[darks_num])
-    
+        groups = []
+    else:
+        for t in master_tickets:
+            t['hours_since'] = ticket_hours(t)
+            t['is_today_done'] = t.get('status') == 'done'
+        groups_dict = {}
+        for t in master_tickets:
+            darks_num = t.get('darks') or 'без номера'
+            if darks_num not in groups_dict:
+                groups_dict[darks_num] = {
+                    'darks_number': darks_num,
+                    'address': t.get('address', 'Адрес не указан'),
+                    'contact': t.get('contact', ''),
+                    'tickets': [],
+                    'pending': 0,
+                    'done': 0
+                }
+            groups_dict[darks_num]['tickets'].append(t)
+            if t.get('status') in ['pending', 'todo', 'processed', 'fail']:
+                groups_dict[darks_num]['pending'] += 1
+            else:
+                groups_dict[darks_num]['done'] += 1
+        groups = []
+        for darks_num in sorted(groups_dict.keys(), key=lambda x: int(x) if str(x).isdigit() else 999999):
+            groups.append(groups_dict[darks_num])
     route_url = f'/api/build_route_for_master?master={name}'
-    
-    return render_template('master_main.html',
+    return render_template('master_home.html',
                           name=name,
                           groups=groups,
                           total_tickets=len(master_tickets),
@@ -1666,7 +1713,7 @@ def master_text_plan(name):
         master_tickets = [t for t in tickets if t.get('master') == name and is_active_status(t.get('status'))]
     for t in master_tickets:
         t['hours_since'] = ticket_hours(t)
-    pending_count = len([t for t in master_tickets if t.get('status') == 'pending'])
+    pending_count = len([t for t in master_tickets if t.get('status') in ('pending', 'processed', 'fail')])
     todo_count = len([t for t in master_tickets if t.get('status') == 'todo'])
     return render_template('text_plan.html',
                           name=name,
@@ -1798,10 +1845,12 @@ def master_done(name, darks_number, uid):
     if not text_parts:
         return jsonify({'success': False, 'error': 'Выберите запчасть или напишите, что сделали'})
     parts = '. '.join(text_parts)
+    if parts == 'Отказ от эвакуации':
+        event = 'Отказ от эвакуации'
+    else:
+        event = f"{get_msk_now().strftime('%d.%m %H:%M')}, {name}. {parts}"
     previous = (ticket.get('note') or '').strip()
-    comment = parts
-    if previous:
-        comment = previous + '\n' + parts
+    full_note = f'{previous}\n{event}'.strip() if previous else event
     
     cache_data = get_master_cache(name)
     if cache_data:
@@ -1813,7 +1862,7 @@ def master_done(name, darks_number, uid):
         'uid': uid,
         'source': source_of(uid),
         'type': 'done',
-        'data': {'parts': comment, 'master': name, 'darks_number': darks_number}
+        'data': {'parts': event, 'detail': event, 'note': full_note, 'master': name, 'darks_number': darks_number}
     })
     return jsonify({'success': True})
 

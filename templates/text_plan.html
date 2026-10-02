@@ -32,18 +32,17 @@
                     {% endif %}
                 </span>
                 <span class="status status-{{ t.status }}">
-                    {% if t.status == 'pending' %}⏳ В работе
-                    {% elif t.status == 'todo' %}🔧 Доделать
-                    {% elif t.status == 'done' %}✅ Выполнено
-                    {% elif t.status == 'processed' or t.status == 'fail' %}Повторная заявка
+                    {% if t.status == 'todo' %}Доделать
+                    {% elif t.status == 'done' %}Выполнено
+                    {% else %}В работе
                     {% endif %}
+                    {% if t.status in ['processed', 'fail'] %}<span class="retry">Повторная заявка</span>{% endif %}
                 </span>
             </div>
             <div class="desc">{{ t.desc }}</div>
             <div class="meta">
                 <span>{{ t.bike_type }}</span>
-                <span>⏱️ {{ t.hours_since }} ч</span>
-                <span>🆔 {{ t.uid }}</span>
+                <span>{{ (t.hours_since or 0)|round(0)|int }} ч</span>
             </div>
         </div>
         {% else %}
@@ -52,5 +51,17 @@
     </div>
     
     <div class="footer">Обновлено: {{ now }}</div>
+    <nav class="dock">
+        <a href="/master/{{ name }}">Маршрут</a>
+        <a href="/master/{{ name }}/trunk">Багажник</a>
+        <a href="/master/{{ name }}/text_plan" class="on">План</a>
+    </nav>
+    <style>
+        body { padding-bottom: 96px; }
+        .retry { margin-left: 6px; font-size: 11px; color: #57534e; }
+        .dock { position: fixed; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: 1fr 1fr 1fr; background: #fff; border-top: 1px solid #e7e5e4; }
+        .dock a { text-align: center; text-decoration: none; color: #57534e; font-weight: 800; padding: 14px 4px 16px; }
+        .dock a.on { color: #c0392b; }
+    </style>
 </body>
 </html>

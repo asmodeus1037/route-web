@@ -462,16 +462,18 @@ var trunkName = '';
 function renderPartList(panel) {
     var box = panel.querySelector('.part-list');
     if (!box || box.dataset.ready === '1') return;
-    var name = panel.dataset.master || '';
+    var name = panel.dataset.master || box.dataset.master || '';
     var paint = function(parts) {
         var stock = (parts || []).filter(function(item) { return item.qty > 0; });
+        box.dataset.stock = JSON.stringify(stock);
         if (!stock.length) {
-            box.innerHTML = '<a class="trunk-link" href="/master/' + encodeURIComponent(name) + '/trunk">Багажник пуст. Загрузить запчасти</a>';
+            box.innerHTML = '<a class="trunk-link" href="/master/' + encodeURIComponent(name) + '/trunk">Багажник пуст. Сначала загрузите запчасти</a>';
         } else {
-            box.innerHTML = stock.map(function(item) {
-                var safe = String(item.name).replace(/"/g, '');
-                return '<label class="part-row"><input type="checkbox" data-name="' + safe + '"><span>' + safe + '</span><b>' + item.qty + ' шт</b><input type="number" min="1" max="' + item.qty + '" value="1"></label>';
-            }).join('');
+            box.innerHTML = '<input class="part-query" type="text" placeholder="Запчасть, например камера" autocomplete="off">'
+                + '<div class="part-suggest"></div><div class="part-chosen"></div>';
+            box.querySelector('.part-query').addEventListener('input', function(event) {
+                showPartMatches(box, event.target.value);
+            });
         }
         box.dataset.ready = '1';
     };
@@ -492,21 +494,81 @@ function renderPartList(panel) {
         });
 }
 
+function partKey(value) {
+    return String(value || '').toLowerCase().replace(/ё/g, 'е');
+}
+
+function showPartMatches(box, query) {
+    var suggest = box.querySelector('.part-suggest');
+    if (!suggest) return;
+    var stock = [];
+    try { stock = JSON.parse(box.dataset.stock || '[]'); } catch (e) { stock = []; }
+    var q = partKey(query).trim();
+    if (q.length < 2) {
+        suggest.innerHTML = '';
+        return;
+    }
+    var hits = stock.filter(function(item) { return partKey(item.name).indexOf(q) !== -1; });
+    if (!hits.length) {
+        suggest.innerHTML = '<div class="part-miss">Такой запчасти нет в багажнике</div>';
+        return;
+    }
+    suggest.innerHTML = hits.slice(0, 8).map(function(item) {
+        return '<button type="button" class="part-hit" data-name="' + item.name.replace(/"/g, '') + '" data-max="' + item.qty + '">' + item.name + ' · ' + item.qty + ' шт</button>';
+    }).join('');
+    suggest.querySelectorAll('.part-hit').forEach(function(button) {
+        button.addEventListener('click', function() {
+            addPartChip(box, button.getAttribute('data-name'), parseInt(button.getAttribute('data-max'), 10) || 1);
+        });
+    });
+}
+
+function addPartChip(box, name, maxQty) {
+    var chosen = box.querySelector('.part-chosen');
+    if (!chosen || chosen.querySelector('[data-name="' + name.replace(/"/g, '') + '"]')) {
+        var query = box.querySelector('.part-query');
+        if (query) query.value = '';
+        var suggest = box.querySelector('.part-suggest');
+        if (suggest) suggest.innerHTML = '';
+        return;
+    }
+    var chip = document.createElement('div');
+    chip.className = 'part-chip';
+    chip.setAttribute('data-name', name);
+    chip.innerHTML = '<span></span><input type="number" min="1" value="1"><button type="button">убрать</button>';
+    chip.querySelector('span').textContent = name;
+    var qty = chip.querySelector('input');
+    qty.max = String(maxQty);
+    qty.addEventListener('change', function() {
+        var value = parseInt(qty.value, 10) || 1;
+        if (value > maxQty) value = maxQty;
+        if (value < 1) value = 1;
+        qty.value = String(value);
+    });
+    chip.querySelector('button').addEventListener('click', function() { chip.remove(); });
+    chosen.appendChild(chip);
+    var query = box.querySelector('.part-query');
+    if (query) {
+        query.value = '';
+        query.focus();
+    }
+    var suggest = box.querySelector('.part-suggest');
+    if (suggest) suggest.innerHTML = '';
+}
+
 function closeTicket(form) {
     var hidden = form.querySelector('[name="parts_json"]');
     var comment = form.querySelector('[name="comment"]');
     var parts = form.querySelector('[name="parts"]');
     if (hidden) {
         var chosen = [];
-        form.querySelectorAll('.part-row input[type="checkbox"]').forEach(function(box) {
-            if (!box.checked) return;
-            var row = box.closest('.part-row');
-            var qtyInput = row.querySelector('input[type="number"]');
+        form.querySelectorAll('.part-chip').forEach(function(chip) {
+            var qtyInput = chip.querySelector('input[type="number"]');
             var qty = parseInt(qtyInput.value, 10) || 1;
             var max = parseInt(qtyInput.max, 10) || qty;
             if (qty > max) qty = max;
             if (qty < 1) qty = 1;
-            chosen.push({name: box.getAttribute('data-name'), qty: qty});
+            chosen.push({name: chip.getAttribute('data-name'), qty: qty});
         });
         if (!chosen.length && !(comment && comment.value.trim())) {
             alert('Выберите запчасть из багажника или напишите, что сделали');
