@@ -272,7 +272,13 @@ def load_darks_reference():
                     address = row[1].strip()
                     direction = row[2].strip() if len(row) > 2 else ''
                     coords = row[3].strip() if len(row) > 3 else ''
-                    darks_ref[darks_num] = {'address': address, 'direction': direction, 'coords': coords}
+                    darks_ref[darks_num] = {
+                        'address': address,
+                        'direction': direction,
+                        'coords': coords,
+                        'master': row[7].strip() if len(row) > 7 else '',
+                        'master_tg': row[8].strip() if len(row) > 8 else '',
+                    }
     except Exception as e:
         logger.error(f"Ошибка загрузки Дарксторов: {e}")
     return darks_ref
@@ -1401,6 +1407,53 @@ def api_flush_now():
         logger.error(f"Ошибка записи очереди: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
+def notify_assigned_masters(changes):
+    if not darks_ref:
+        load_darks_reference()
+    groups = {}
+    for change in changes:
+        uid = str(change.get('uid') or '')
+        if not uid:
+            continue
+        ticket = {}
+        info = uid_index.get(uid) if uid_index else None
+        if info:
+            ticket = info.get('ticket') or {}
+        dark = str(ticket.get('darks') or '')
+        ref = darks_ref.get(dark) or {}
+        chat_id = ''.join(ch for ch in str(ref.get('master_tg') or '') if ch.isdigit())
+        if not chat_id:
+            logger.info(f'У даркстора {dark} нет ТГ ID мастера, уведомление пропущено')
+            continue
+        groups.setdefault(chat_id, []).append(ticket)
+    for chat_id, tickets in groups.items():
+        lines = [f'Вам назначили заявки: {len(tickets)}']
+        by_dark = {}
+        for ticket in tickets:
+            by_dark.setdefault(str(ticket.get('darks') or '—'), []).append(ticket)
+        for dark, group in by_dark.items():
+            address = (group[0].get('address') or '').strip()
+            lines.append('')
+            lines.append(f'{address} (даркстор {dark})'.strip())
+            for ticket in group[:15]:
+                gos = ticket.get('gos') or 'Без номера'
+                desc = (ticket.get('desc') or '').replace('\n', ' ').strip()
+                note = ticket.get('note') or ''
+                prefix = 'ЗАМЕНА. ' if note.startswith('ЭВАКУАЦИЯ') else ''
+                lines.append(f'• {gos} — {prefix}{desc[:90]}')
+            extra = len(group) - 15
+            if extra > 0:
+                lines.append(f'и ещё {extra}')
+        try:
+            response = requests.post(
+                f'{BOT_API_URL}/notify_master',
+                json={'chat_id': chat_id, 'text': '\n'.join(lines)},
+                timeout=8,
+            )
+            logger.info(f'Уведомление мастеру {chat_id}: {response.status_code}')
+        except Exception as e:
+            logger.warning(f'Не отправилось уведомление мастеру {chat_id}: {e}')
+
 @app.route('/api/batch_update', methods=['POST'])
 @login_required
 def api_batch_update():
@@ -1409,6 +1462,8 @@ def api_batch_update():
     if not changes:
         return jsonify({'success': False, 'error': 'Нет изменений'})
     updated = batch_update_masters(changes)
+    if updated:
+        notify_assigned_masters(changes)
     return jsonify({'success': True, 'updated': updated})
 
 @app.route('/api/send_route', methods=['POST'])
@@ -1976,12 +2031,12 @@ def master_replace_no(name, darks_number, uid):
 REPLACEMENT_BOOK_ID = "1s_hXPSWueMAo3W1pgLCG0eHhYKoW0uoIZ6CGWFf55VU"
 REPLACEMENT_GID = 1296698244
 
-def append_bike_swap(address, darks_number, old_data, new_data):
+def append_bike_swap(address, darks_number, old_data, new_data, master='', uid='', kind='Эвакуация'):
     try:
         book = get_gspread_client().open_by_key(REPLACEMENT_BOOK_ID)
     except Exception as e:
         text = str(e).lower()
-        if '403' in text or 'permission' in text or '403' in str(e):
+        if '403' in text or 'permission' in text:
             raise RuntimeError('Нет доступа к таблице замен. Откройте её для route-cache@telegramsenderbot.iam.gserviceaccount.com') from e
         raise
     sheet = None
@@ -1997,22 +2052,40 @@ def append_bike_swap(address, darks_number, old_data, new_data):
     if sheet is None:
         names = ', '.join(item.title for item in book.worksheets())
         raise RuntimeError(f'Лист «Замены вело» не найден. В файле есть: {names}')
-    sheet.append_row([
-        get_msk_now().strftime('%d.%m.%Y %H:%M:%S'),
-        address or '',
-        str(darks_number or ''),
-        (old_data or {}).get('serial', ''),
-        (old_data or {}).get('gos', ''),
-        (old_data or {}).get('iot', ''),
-        (new_data or {}).get('serial', ''),
-        (new_data or {}).get('gos', ''),
-        (new_data or {}).get('iot', ''),
-    ], value_input_option='USER_ENTERED')
-    logger.info(f"✅ Замена записана в лист «{sheet.title}», даркстор {darks_number}")
+    filled = sheet.get('A:I')
+    last = 1
+    for index, row in enumerate(filled, start=1):
+        if any(str(cell).strip() for cell in row):
+            last = index
+    target = last + 1
+    sheet.update(
+        f'A{target}:I{target}',
+        [[
+            get_msk_now().strftime('%d.%m.%Y %H:%M:%S'),
+            address or '',
+            str(darks_number or ''),
+            (old_data or {}).get('serial', ''),
+            (old_data or {}).get('gos', ''),
+            (old_data or {}).get('iot', ''),
+            (new_data or {}).get('serial', ''),
+            (new_data or {}).get('gos', ''),
+            (new_data or {}).get('iot', ''),
+        ]],
+        value_input_option='USER_ENTERED',
+    )
+    try:
+        if sheet.col_count < 20:
+            sheet.add_cols(20 - sheet.col_count)
+        if not (sheet.acell('R1').value or '').strip():
+            sheet.update('R1:T1', [['Мастер', 'ID заявки', 'Тип']], value_input_option='RAW')
+        sheet.update(f'R{target}:T{target}', [[master or '', uid or '', kind or 'Эвакуация']], value_input_option='USER_ENTERED')
+    except Exception as e:
+        logger.warning(f'Строка {target} записана, мастер и номер заявки в конец не встали: {e}')
+    logger.info(f"✅ Замена записана в «{sheet.title}», строка {target}, даркстор {darks_number}")
 
 def write_transit_replacement(uid, master_name, darks_number, address, old_data, new_data):
     try:
-        append_bike_swap(address, darks_number, old_data, new_data)
+        append_bike_swap(address, darks_number, old_data, new_data, master_name, uid, 'Замена')
         sheet_client = get_sheet_client()
         now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
         try:
@@ -2121,7 +2194,7 @@ def api_get_bike_data():
 
 def write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data):
     try:
-        append_bike_swap(address, darks_number, old_data, new_data)
+        append_bike_swap(address, darks_number, old_data, new_data, master_name, uid, 'Эвакуация')
         sheet_client = get_sheet_client()
         now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
         

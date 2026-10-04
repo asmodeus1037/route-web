@@ -340,14 +340,32 @@ function sendOrQueue(opts) {
 function togglePanel(uid) {
     var panel = document.getElementById('panel-' + uid);
     var more = document.getElementById('more-' + uid);
+    var card = document.getElementById('ticket-' + uid);
+    var button = card ? card.querySelector('.fast-btns .fast-ok') : null;
     if (more) more.hidden = true;
     if (!panel) return;
     panel.hidden = !panel.hidden;
+    if (button) button.classList.toggle('is-open', !panel.hidden);
     if (!panel.hidden) {
         renderPartList(panel);
-        var input = panel.querySelector('input[name="comment"], input[name="parts"], textarea');
-        if (input) input.focus();
+        var input = panel.querySelector('.part-query, input[name="parts"], textarea');
+        if (input) {
+            input.focus();
+            liftField(input);
+        }
     }
+}
+
+function liftField(input) {
+    var run = function() {
+        if (!input || input.hidden) return;
+        var view = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+        var rect = input.getBoundingClientRect();
+        var overflow = rect.bottom - (view - 20);
+        if (overflow > 0) window.scrollBy(0, overflow + 12);
+    };
+    setTimeout(run, 280);
+    setTimeout(run, 600);
 }
 
 function toggleMore(uid) {
@@ -507,13 +525,17 @@ function renderPartList(panel) {
     var paint = function(parts) {
         var stock = (parts || []).filter(function(item) { return item.qty > 0; });
         box.dataset.stock = JSON.stringify(stock);
-        box.innerHTML = '<input class="part-query" type="text" placeholder="Запчасть или слово нет" autocomplete="off">'
-            + '<div class="part-suggest"></div><div class="part-chosen"></div>';
+        box.innerHTML = '<div class="part-suggest"></div><div class="part-chosen"></div>'
+            + '<input class="part-query" type="text" placeholder="Запчасть или слово нет" autocomplete="off">';
         if (!stock.length) {
             box.innerHTML += '<a class="trunk-link" href="/master/' + encodeURIComponent(name) + '/trunk">В багажнике пусто. Если запчасти не нужны, напишите «нет».</a>';
         }
         box.querySelector('.part-query').addEventListener('input', function(event) {
             showPartMatches(box, event.target.value);
+            liftField(event.target);
+        });
+        box.querySelector('.part-query').addEventListener('focus', function(event) {
+            liftField(event.target);
         });
         box.dataset.ready = '1';
     };
@@ -557,7 +579,7 @@ function showPartMatches(box, query) {
         suggest.innerHTML = '<div class="part-miss">Такой запчасти нет в багажнике</div>';
         return;
     }
-    suggest.innerHTML = hits.slice(0, 8).map(function(item) {
+    suggest.innerHTML = hits.slice(0, 4).map(function(item) {
         return '<button type="button" class="part-hit" data-name="' + item.name.replace(/"/g, '') + '" data-max="' + item.qty + '">' + item.name + ' · ' + item.qty + ' шт</button>';
     }).join('');
     suggest.querySelectorAll('.part-hit').forEach(function(button) {
