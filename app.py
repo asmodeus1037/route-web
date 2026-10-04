@@ -1838,23 +1838,25 @@ def master_done(name, darks_number, uid):
         if not isinstance(selected, list):
             selected = []
     ticket = find_cached_ticket(uid) or {}
-    ok, parts_text = spend_parts(
-        name,
-        selected,
-        uid,
-        ticket.get('gos', ''),
-        darks_number,
-    )
-    if not ok:
-        return jsonify({'success': False, 'error': parts_text})
-    text_parts = [piece for piece in (parts_text, comment, legacy) if piece]
-    if not text_parts:
-        return jsonify({'success': False, 'error': 'Выберите запчасть или напишите, что сделали'})
-    parts = '. '.join(text_parts)
-    if parts == 'Отказ от эвакуации':
-        event = 'Отказ от эвакуации'
+    raw = (legacy or comment or '').strip()
+    if raw.lower() == 'нет' and not selected:
+        parts = 'нет'
+    elif raw == 'Отказ от эвакуации' and not selected:
+        parts = raw
     else:
-        event = f"{get_msk_now().strftime('%d.%m %H:%M')}, {name}. {parts}"
+        ok, parts_text = spend_parts(
+            name,
+            selected,
+            uid,
+            ticket.get('gos', ''),
+            darks_number,
+        )
+        if not ok:
+            return jsonify({'success': False, 'error': parts_text})
+        if not parts_text:
+            return jsonify({'success': False, 'error': 'Выберите запчасть или напишите «нет»'})
+        parts = parts_text
+    event = parts
     previous = (ticket.get('note') or '').strip()
     full_note = f'{previous}\n{event}'.strip() if previous else event
     
@@ -1975,14 +1977,26 @@ REPLACEMENT_BOOK_ID = "1s_hXPSWueMAo3W1pgLCG0eHhYKoW0uoIZ6CGWFf55VU"
 REPLACEMENT_GID = 1296698244
 
 def append_bike_swap(address, darks_number, old_data, new_data):
-    book = get_gspread_client().open_by_key(REPLACEMENT_BOOK_ID)
+    try:
+        book = get_gspread_client().open_by_key(REPLACEMENT_BOOK_ID)
+    except Exception as e:
+        text = str(e).lower()
+        if '403' in text or 'permission' in text or '403' in str(e):
+            raise RuntimeError('Нет доступа к таблице замен. Откройте её для route-cache@telegramsenderbot.iam.gserviceaccount.com') from e
+        raise
     sheet = None
     for item in book.worksheets():
-        if item.id == REPLACEMENT_GID:
+        title = (item.title or '').strip().lower()
+        try:
+            gid = int(item.id)
+        except Exception:
+            gid = item.id
+        if title == 'замены вело' or gid == REPLACEMENT_GID:
             sheet = item
             break
     if sheet is None:
-        raise RuntimeError('Лист замены велосипеда не найден')
+        names = ', '.join(item.title for item in book.worksheets())
+        raise RuntimeError(f'Лист «Замены вело» не найден. В файле есть: {names}')
     sheet.append_row([
         get_msk_now().strftime('%d.%m.%Y %H:%M:%S'),
         address or '',
@@ -1994,7 +2008,7 @@ def append_bike_swap(address, darks_number, old_data, new_data):
         (new_data or {}).get('gos', ''),
         (new_data or {}).get('iot', ''),
     ], value_input_option='USER_ENTERED')
-    logger.info(f"✅ Замена велосипеда записана в общий лист, даркстор {darks_number}")
+    logger.info(f"✅ Замена записана в лист «{sheet.title}», даркстор {darks_number}")
 
 def write_transit_replacement(uid, master_name, darks_number, address, old_data, new_data):
     try:
@@ -2140,10 +2154,10 @@ def write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data,
         ]
         report_sheet.batch_update(updates)
         logger.info(f"✅ Записана эвакуация для заявки {uid}")
-        return True
+        return True, ''
     except Exception as e:
         logger.error(f"Ошибка записи эвакуации: {e}")
-        return False
+        return False, str(e)
 
 @app.route('/master/evacuation/replace', methods=['POST'])
 @login_required
@@ -2166,8 +2180,9 @@ def master_evacuation_replace():
         if not new_data.get('serial') or not new_data.get('gos') or not new_data.get('iot'):
             return jsonify({'success': False, 'error': 'Заполните все поля НОВОГО велосипеда'}), 400
         
-        if not write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data):
-            return jsonify({'success': False, 'error': 'Не удалось записать замену в таблицу'})
+        saved, err = write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data)
+        if not saved:
+            return jsonify({'success': False, 'error': err or 'Не удалось записать замену в таблицу'})
         
         update_ticket_in_admin_cache(uid, 'done', 'Заменен при эвакуации', '✅ Выполнено')
         update_status_in_google_sheets(uid, '✅ Выполнено', 'Заменен при эвакуации')

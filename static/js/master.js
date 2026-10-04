@@ -507,15 +507,14 @@ function renderPartList(panel) {
     var paint = function(parts) {
         var stock = (parts || []).filter(function(item) { return item.qty > 0; });
         box.dataset.stock = JSON.stringify(stock);
+        box.innerHTML = '<input class="part-query" type="text" placeholder="Запчасть или слово нет" autocomplete="off">'
+            + '<div class="part-suggest"></div><div class="part-chosen"></div>';
         if (!stock.length) {
-            box.innerHTML = '<a class="trunk-link" href="/master/' + encodeURIComponent(name) + '/trunk">Багажник пуст. Сначала загрузите запчасти</a>';
-        } else {
-            box.innerHTML = '<input class="part-query" type="text" placeholder="Запчасть, например камера" autocomplete="off">'
-                + '<div class="part-suggest"></div><div class="part-chosen"></div>';
-            box.querySelector('.part-query').addEventListener('input', function(event) {
-                showPartMatches(box, event.target.value);
-            });
+            box.innerHTML += '<a class="trunk-link" href="/master/' + encodeURIComponent(name) + '/trunk">В багажнике пусто. Если запчасти не нужны, напишите «нет».</a>';
         }
+        box.querySelector('.part-query').addEventListener('input', function(event) {
+            showPartMatches(box, event.target.value);
+        });
         box.dataset.ready = '1';
     };
     if (trunkCache && trunkName === name) {
@@ -545,6 +544,10 @@ function showPartMatches(box, query) {
     var stock = [];
     try { stock = JSON.parse(box.dataset.stock || '[]'); } catch (e) { stock = []; }
     var q = partKey(query).trim();
+    if (q === 'нет') {
+        suggest.innerHTML = '<div class="part-miss">Запчасти не использовал. Нажмите «Отправить».</div>';
+        return;
+    }
     if (q.length < 2) {
         suggest.innerHTML = '';
         return;
@@ -612,8 +615,13 @@ function closeTicket(form) {
             chosen.push({name: chip.getAttribute('data-name'), qty: qty});
         });
         if (!chosen.length) {
-            alert('Выберите запчасть из багажника');
-            return false;
+            var typed = '';
+            var query = form.querySelector('.part-query');
+            if (query) typed = query.value.trim().toLowerCase();
+            if (typed !== 'нет') {
+                alert('Выберите запчасть или напишите «нет»');
+                return false;
+            }
         }
         hidden.value = JSON.stringify(chosen);
     } else if (!parts || !String(parts.value).trim()) {
@@ -625,6 +633,12 @@ function closeTicket(form) {
     }
     var uid = form.action.split('/').filter(Boolean).pop();
     var fd = new FormData(form);
+    if (hidden && hidden.value === '[]') {
+        var typedNo = '';
+        var queryNo = form.querySelector('.part-query');
+        if (queryNo) typedNo = queryNo.value.trim().toLowerCase();
+        if (typedNo === 'нет') fd.set('parts', 'нет');
+    }
     sendOrQueue({
         url: form.action,
         method: 'POST',
