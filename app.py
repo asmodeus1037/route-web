@@ -1176,7 +1176,7 @@ def write_to_report(tasks):
             if ticket.get('type') in ['Аккумуляторная батарея', 'Зарядное устройство']:
                 quantity = parts or extra or '1'
             else:
-                quantity = '1'
+                quantity = '-'
             
             row_idx = start_row + idx
             
@@ -1314,6 +1314,12 @@ def auto_login(login):
 def logout():
     session.clear()
     return redirect(url_for('login_page'))
+
+@app.after_request
+def no_store_master_pages(response):
+    if request.path.startswith('/master'):
+        response.headers['Cache-Control'] = 'no-store'
+    return response
 
 # ============================================================
 # СТАТИКА
@@ -1965,13 +1971,39 @@ def master_replace_no(name, darks_number, uid):
 # ============================================================
 # ТРАНЗИТ - ЗАМЕНА ВЕЛОСИПЕДА
 # ============================================================
+REPLACEMENT_BOOK_ID = "1s_hXPSWueMAo3W1pgLCG0eHhYKoW0uoIZ6CGWFf55VU"
+REPLACEMENT_GID = 1296698244
+
+def append_bike_swap(address, darks_number, old_data, new_data):
+    book = get_gspread_client().open_by_key(REPLACEMENT_BOOK_ID)
+    sheet = None
+    for item in book.worksheets():
+        if item.id == REPLACEMENT_GID:
+            sheet = item
+            break
+    if sheet is None:
+        raise RuntimeError('Лист замены велосипеда не найден')
+    sheet.append_row([
+        get_msk_now().strftime('%d.%m.%Y %H:%M:%S'),
+        address or '',
+        str(darks_number or ''),
+        (old_data or {}).get('serial', ''),
+        (old_data or {}).get('gos', ''),
+        (old_data or {}).get('iot', ''),
+        (new_data or {}).get('serial', ''),
+        (new_data or {}).get('gos', ''),
+        (new_data or {}).get('iot', ''),
+    ], value_input_option='USER_ENTERED')
+    logger.info(f"✅ Замена велосипеда записана в общий лист, даркстор {darks_number}")
+
 def write_transit_replacement(uid, master_name, darks_number, address, old_data, new_data):
     try:
+        append_bike_swap(address, darks_number, old_data, new_data)
         sheet_client = get_sheet_client()
         now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
         try:
             report_sheet = sheet_client.worksheet("Эвакуация Транзит")
-        except:
+        except Exception:
             report_sheet = sheet_client.add_worksheet("Эвакуация Транзит", 100, 20)
             headers = ['Отметка времени', 'Адрес даркстора', 'Номер даркстора',
                       'ЗАБРАЛ - Серийный номер', 'ЗАБРАЛ - Гос номер', 'ЗАБРАЛ - Номер айот',
@@ -2075,6 +2107,7 @@ def api_get_bike_data():
 
 def write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data):
     try:
+        append_bike_swap(address, darks_number, old_data, new_data)
         sheet_client = get_sheet_client()
         now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
         
@@ -2133,7 +2166,8 @@ def master_evacuation_replace():
         if not new_data.get('serial') or not new_data.get('gos') or not new_data.get('iot'):
             return jsonify({'success': False, 'error': 'Заполните все поля НОВОГО велосипеда'}), 400
         
-        write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data)
+        if not write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data):
+            return jsonify({'success': False, 'error': 'Не удалось записать замену в таблицу'})
         
         update_ticket_in_admin_cache(uid, 'done', 'Заменен при эвакуации', '✅ Выполнено')
         update_status_in_google_sheets(uid, '✅ Выполнено', 'Заменен при эвакуации')

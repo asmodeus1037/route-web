@@ -18,8 +18,10 @@
     <div id="list">Загрузка...</div>
     <nav class="dock">
         <a href="/master/{{ name }}">Маршрут</a>
+        <a href="/api/build_route_for_master?master={{ name }}">Карта</a>
         <a href="/master/{{ name }}/trunk">Багажник</a>
         <a href="/master/{{ name }}/text_plan">План</a>
+        <a class="on" href="/master/{{ name }}/history">История</a>
     </nav>
     <script>
         var labels = {

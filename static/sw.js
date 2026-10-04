@@ -1,4 +1,4 @@
-var CACHE = 'route-master-v6';
+var CACHE = 'route-master-v7';
 
 self.addEventListener('install', function() {
     self.skipWaiting();
@@ -15,8 +15,7 @@ self.addEventListener('fetch', function(event) {
     if (url.origin !== self.location.origin) return;
     if (url.pathname.indexOf('/api/') === 0) return;
 
-    var canCache = url.pathname.indexOf('/master') === 0
-        || url.pathname.indexOf('/static/') === 0
+    var canCache = url.pathname.indexOf('/static/') === 0
         || url.pathname === '/login'
         || url.pathname === '/manifest.json'
         || url.pathname.indexOf('/data/') === 0;

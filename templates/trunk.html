@@ -38,8 +38,10 @@
     </form>
     <nav class="dock">
         <a href="/master/{{ name }}">Маршрут</a>
+        <a href="/api/build_route_for_master?master={{ name }}">Карта</a>
         <a class="on" href="/master/{{ name }}/trunk">Багажник</a>
         <a href="/master/{{ name }}/text_plan">План</a>
+        <a href="/master/{{ name }}/history">История</a>
     </nav>
     <script>
         var catalog = {{ parts|map(attribute='name')|list|tojson }};

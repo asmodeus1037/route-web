@@ -72,16 +72,27 @@
             border-color: #22c55e;
             background: #f0fdf4;
         }
-        .evacuation-form .field-group .btn-icon {
-            background: none;
-            border: none;
-            font-size: 18px;
-            cursor: pointer;
-            padding: 4px 8px;
-            border-radius: 4px;
-            transition: 0.2s;
-            min-width: 44px;
-            min-height: 44px;
+        .evacuation-form .tool-row {
+            display: flex;
+            gap: 8px;
+        }
+        .evacuation-form .tool-row .btn-icon {
+            flex: 1;
+            min-height: 48px;
+            border: 1px solid #e7e5e4;
+            border-radius: 12px;
+            background: #fff;
+            font-size: 16px;
+            font-weight: 800;
+        }
+        .evacuation-form .lock-note {
+            color: #92400e;
+            font-size: 13px;
+            margin-bottom: 8px;
+        }
+        .evacuation-form .field-group input:disabled {
+            background: #f5f5f4;
+            color: #a8a29e;
         }
         .evacuation-form .field-group .btn-icon:hover {
             background: #f1f5f9;
@@ -221,56 +232,56 @@
                 
                 <div class="field-group" id="oldGroup_{{ t.uid }}">
                     <div class="row">
-                        <label>Серийный номер:</label>
-                        <input type="text" class="old-serial" id="oldSerial_{{ t.uid }}" 
-                               value="{{ t.old_serial or '' }}" readonly placeholder="Загружается...">
-                        <button type="button" class="btn-icon" onclick="checkField('{{ t.uid }}', 'oldSerial')" title="Проверить">✅</button>
-                        <button type="button" class="btn-icon" onclick="editField('{{ t.uid }}', 'oldSerial')" title="Редактировать">✏️</button>
+                        <label>Серийный номер</label>
+                        <input type="text" class="old-serial" id="oldSerial_{{ t.uid }}" value="{{ t.old_serial or '' }}" readonly placeholder="Загружается...">
+                        <div class="tool-row">
+                            <button type="button" class="btn-icon" onclick="checkField('{{ t.uid }}', 'oldSerial')">Верно</button>
+                            <button type="button" class="btn-icon" onclick="editField('{{ t.uid }}', 'oldSerial')">Изменить</button>
+                        </div>
                     </div>
                     <div class="row">
-                        <label>Гос номер:</label>
-                        <input type="text" class="old-gos" id="oldGos_{{ t.uid }}" 
-                               value="{{ t.old_gos or '' }}" readonly placeholder="Загружается...">
-                        <button type="button" class="btn-icon" onclick="checkField('{{ t.uid }}', 'oldGos')" title="Проверить">✅</button>
-                        <button type="button" class="btn-icon" onclick="editField('{{ t.uid }}', 'oldGos')" title="Редактировать">✏️</button>
+                        <label>Гос номер</label>
+                        <input type="text" class="old-gos" id="oldGos_{{ t.uid }}" value="{{ t.old_gos or '' }}" readonly placeholder="Загружается...">
+                        <div class="tool-row">
+                            <button type="button" class="btn-icon" onclick="checkField('{{ t.uid }}', 'oldGos')">Верно</button>
+                            <button type="button" class="btn-icon" onclick="editField('{{ t.uid }}', 'oldGos')">Изменить</button>
+                        </div>
                     </div>
                     <div class="row">
-                        <label>Номер айот:</label>
-                        <input type="text" class="old-iot" id="oldIot_{{ t.uid }}" 
-                               value="{{ t.old_iot or '' }}" readonly placeholder="Загружается...">
-                        <button type="button" class="btn-icon" onclick="checkField('{{ t.uid }}', 'oldIot')" title="Проверить">✅</button>
-                        <button type="button" class="btn-icon" onclick="editField('{{ t.uid }}', 'oldIot')" title="Редактировать">✏️</button>
+                        <label>Номер айот</label>
+                        <input type="text" class="old-iot" id="oldIot_{{ t.uid }}" value="{{ t.old_iot or '' }}" readonly placeholder="Загружается...">
+                        <div class="tool-row">
+                            <button type="button" class="btn-icon" onclick="checkField('{{ t.uid }}', 'oldIot')">Верно</button>
+                            <button type="button" class="btn-icon" onclick="editField('{{ t.uid }}', 'oldIot')">Изменить</button>
+                        </div>
                     </div>
                 </div>
                 
-                <!-- НОВЫЙ ВЕЛОСИПЕД (ОТДАТЬ) -->
                 <div class="section-title">
-                    📌 ОТДАТЬ (новый велосипед)
+                    ОТДАТЬ (новый велосипед)
                     <span class="line"></span>
                 </div>
                 
-                <div class="field-group">
+                <div class="field-group" id="newGroup_{{ t.uid }}">
+                    <p class="lock-note">Сначала нажмите «Верно» на трёх полях старого велосипеда</p>
                     <div class="row">
-                        <label>Серийный номер:</label>
-                        <input type="text" class="new-serial" id="newSerial_{{ t.uid }}" 
-                               placeholder="Введите серийный номер" required>
+                        <label>Серийный номер</label>
+                        <input type="text" class="new-serial" id="newSerial_{{ t.uid }}" placeholder="Серийный номер" required disabled>
                     </div>
                     <div class="row">
-                        <label>Гос номер:</label>
-                        <input type="text" class="new-gos" id="newGos_{{ t.uid }}" 
-                               placeholder="Введите гос номер" required>
+                        <label>Гос номер</label>
+                        <input type="text" class="new-gos" id="newGos_{{ t.uid }}" placeholder="Гос номер" required disabled>
                     </div>
                     <div class="row">
-                        <label>Номер айот:</label>
-                        <input type="text" class="new-iot" id="newIot_{{ t.uid }}" 
-                               placeholder="Введите номер айот" required>
+                        <label>Номер айот</label>
+                        <input type="text" class="new-iot" id="newIot_{{ t.uid }}" placeholder="Номер айот" required disabled>
                     </div>
                 </div>
                 
                 {% if is_transit %}
-                <button type="submit" class="submit-btn">📤 Отправить замену</button>
+                <button type="submit" class="submit-btn" id="swapSend_{{ t.uid }}" disabled>Отправить замену</button>
                 {% else %}
-                <button type="submit" class="submit-btn">🚚 Отправить эвакуацию</button>
+                <button type="submit" class="submit-btn" id="swapSend_{{ t.uid }}" disabled>Отправить эвакуацию</button>
                 {% endif %}
             </form>
         </div>
@@ -316,12 +327,11 @@
                 <form class="fast-panel" id="panel-{{ t.uid }}" hidden data-master="{{ name }}" action="/master/{{ name }}/darks/{{ darks_number }}/done/{{ t.uid }}" method="POST" onsubmit="return closeTicket(this)">
                     <div class="part-list" data-master="{{ name }}">Напишите запчасть</div>
                     <input type="hidden" name="parts_json" value="[]">
-                    <input type="text" name="comment" placeholder="Что сделал, если без запчасти">
                     <button type="submit" class="fast-ok">Отправить</button>
                 </form>
                 <div class="fast-more-panel" id="more-{{ t.uid }}" hidden>
                     <button type="button" class="fast-side" onclick="openModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'evacuation', 'Причина эвакуации')">Эвакуация</button>
-                    <button type="button" class="fast-side" onclick="closeTicketInstant('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'fail')">Вело нет</button>
+                    <button type="button" class="fast-side" onclick="closeTicketInstant('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'fail')">Вело отсутствует на дарксторе</button>
                 </div>
                 {% endif %}
             {% endif %}
@@ -394,18 +404,9 @@
                                 var gosInput = document.getElementById('oldGos_' + uid);
                                 var iotInput = document.getElementById('oldIot_' + uid);
                                 
-                                if (serialInput) {
-                                    serialInput.value = bike.serial || '';
-                                    if (serialInput.value) serialInput.classList.add('valid');
-                                }
-                                if (gosInput) {
-                                    gosInput.value = bike.gos || gos;
-                                    if (gosInput.value) gosInput.classList.add('valid');
-                                }
-                                if (iotInput) {
-                                    iotInput.value = bike.iot || '';
-                                    if (iotInput.value) iotInput.classList.add('valid');
-                                }
+                                if (serialInput) serialInput.value = bike.serial || '';
+                                if (gosInput) gosInput.value = bike.gos || gos;
+                                if (iotInput) iotInput.value = bike.iot || '';
                             }
                         })
                         .catch(function(error) {
@@ -417,8 +418,10 @@
     </script>
     <nav class="dock">
         <a class="on" href="/master/{{ name }}">Маршрут</a>
+        <a href="/api/build_route_for_master?master={{ name }}">Карта</a>
         <a href="/master/{{ name }}/trunk">Багажник</a>
         <a href="/master/{{ name }}/text_plan">План</a>
+        <a href="/master/{{ name }}/history">История</a>
     </nav>
 </body>
 </html>

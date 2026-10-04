@@ -2,21 +2,15 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Маршрут {{ name }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>{{ name }}</title>
     <link rel="stylesheet" href="/static/css/master.css">
 </head>
 <body>
     <h1>{{ name }}</h1>
     <p class="sub-title">{{ total_tickets }} заявок</p>
-    <a class="home-trunk" href="/master/{{ name }}/trunk">Мой багажник</a>
-    <div class="home-links">
-        {% if groups %}
-        <a href="{{ route_url }}">Открыть маршрут на карте</a>
-        {% endif %}
-        <a href="/master/{{ name }}/text_plan">Текстовый план</a>
-        <a href="/master/{{ name }}/history">История</a>
-    </div>
     <div class="darks-grid">
         {% for g in groups %}
         <a class="darks-card" href="/master/{{ name }}/darks/{{ g.darks_number }}">
@@ -25,13 +19,16 @@
             <div class="stats"><span class="pending-count">{{ g.pending }} заявок</span></div>
         </a>
         {% else %}
-        <p>Сейчас заявок нет. Багажник доступен сверху.</p>
+        <p>Сейчас заявок нет.</p>
         {% endfor %}
     </div>
     <nav class="dock">
         <a class="on" href="/master/{{ name }}">Маршрут</a>
+        <a href="{{ route_url }}">Карта</a>
         <a href="/master/{{ name }}/trunk">Багажник</a>
         <a href="/master/{{ name }}/text_plan">План</a>
+        <a href="/master/{{ name }}/history">История</a>
     </nav>
+    <script src="/static/js/master.js"></script>
 </body>
 </html>

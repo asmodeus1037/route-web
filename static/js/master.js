@@ -71,20 +71,43 @@ function editField(uid, fieldId) {
     var input = document.getElementById(fieldId + '_' + uid);
     if (!input) return;
     input.readOnly = false;
+    input.dataset.ok = '';
     input.classList.remove('valid');
+    refreshNewBike(uid);
     input.focus();
 }
 
 function checkField(uid, fieldId) {
     var input = document.getElementById(fieldId + '_' + uid);
     if (!input) return;
-    if (input.value.trim()) {
-        input.classList.add('valid');
-        showToast('Поле заполнено');
-    } else {
+    if (!input.value.trim()) {
+        input.dataset.ok = '';
         input.classList.remove('valid');
         showToast('Поле пустое', true);
+        refreshNewBike(uid);
+        return;
     }
+    input.dataset.ok = '1';
+    input.readOnly = true;
+    input.classList.add('valid');
+    showToast('Цифры подтверждены');
+    refreshNewBike(uid);
+}
+
+function refreshNewBike(uid) {
+    var ready = ['oldSerial', 'oldGos', 'oldIot'].every(function(field) {
+        var input = document.getElementById(field + '_' + uid);
+        return input && input.dataset.ok === '1';
+    });
+    var group = document.getElementById('newGroup_' + uid);
+    if (!group) return;
+    group.querySelectorAll('input').forEach(function(input) {
+        input.disabled = !ready;
+    });
+    var note = group.querySelector('.lock-note');
+    if (note) note.hidden = ready;
+    var button = document.getElementById('swapSend_' + uid);
+    if (button) button.disabled = !ready;
 }
 
 function refuseEvacuation(name, darks, uid) {
@@ -113,8 +136,12 @@ function submitEvacuation(name, darksNumber, uid, gos) {
     var newIot = document.getElementById('newIot_' + uid);
     
     // Проверка заполнения
+    if (oldSerial.dataset.ok !== '1' || oldGos.dataset.ok !== '1' || oldIot.dataset.ok !== '1') {
+        showToast('Сначала нажмите «Верно» на трёх полях старого велосипеда', true);
+        return false;
+    }
     if (!oldSerial.value.trim() || !oldGos.value.trim() || !oldIot.value.trim()) {
-        showToast('❌ Заполните все поля СТАРОГО велосипеда!', true);
+        showToast('Заполните все поля старого велосипеда', true);
         return false;
     }
     
@@ -338,6 +365,20 @@ document.addEventListener('DOMContentLoaded', function() {
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('/sw.js').catch(function() {});
     }
+});
+window.addEventListener('pageshow', function(event) {
+    var nav = performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
+    var back = event.persisted || (nav && nav.type === 'back_forward');
+    if (!back) {
+        sessionStorage.removeItem('route_reload');
+        return;
+    }
+    if (sessionStorage.getItem('route_reload') === '1') {
+        sessionStorage.removeItem('route_reload');
+        return;
+    }
+    sessionStorage.setItem('route_reload', '1');
+    location.reload();
 });
 window.addEventListener('online', flushOutbox);
 setInterval(flushOutbox, 20000);
@@ -570,8 +611,8 @@ function closeTicket(form) {
             if (qty < 1) qty = 1;
             chosen.push({name: chip.getAttribute('data-name'), qty: qty});
         });
-        if (!chosen.length && !(comment && comment.value.trim())) {
-            alert('Выберите запчасть из багажника или напишите, что сделали');
+        if (!chosen.length) {
+            alert('Выберите запчасть из багажника');
             return false;
         }
         hidden.value = JSON.stringify(chosen);
