@@ -234,7 +234,7 @@
                 <div class="field-group" id="oldGroup_{{ t.uid }}">
                     <div class="row">
                         <label>Серийный номер</label>
-                        <input type="text" class="old-serial" id="oldSerial_{{ t.uid }}" value="{{ t.old_serial or '' }}" readonly placeholder="Загружается...">
+                        <input type="text" class="old-serial" id="oldSerial_{{ t.uid }}" value="{{ t.old_serial or '' }}" readonly placeholder="Нет в базе">
                         <div class="tool-row">
                             <button type="button" class="btn-icon" onclick="checkField('{{ t.uid }}', 'oldSerial')">Верно</button>
                             <button type="button" class="btn-icon" onclick="editField('{{ t.uid }}', 'oldSerial')">Изменить</button>
@@ -242,7 +242,7 @@
                     </div>
                     <div class="row">
                         <label>Гос номер</label>
-                        <input type="text" class="old-gos" id="oldGos_{{ t.uid }}" value="{{ t.old_gos or '' }}" readonly placeholder="Загружается...">
+                        <input type="text" class="old-gos" id="oldGos_{{ t.uid }}" value="{{ t.old_gos or '' }}" readonly placeholder="Нет в базе">
                         <div class="tool-row">
                             <button type="button" class="btn-icon" onclick="checkField('{{ t.uid }}', 'oldGos')">Верно</button>
                             <button type="button" class="btn-icon" onclick="editField('{{ t.uid }}', 'oldGos')">Изменить</button>
@@ -250,7 +250,7 @@
                     </div>
                     <div class="row">
                         <label>Номер айот</label>
-                        <input type="text" class="old-iot" id="oldIot_{{ t.uid }}" value="{{ t.old_iot or '' }}" readonly placeholder="Загружается...">
+                        <input type="text" class="old-iot" id="oldIot_{{ t.uid }}" value="{{ t.old_iot or '' }}" readonly placeholder="Нет в базе">
                         <div class="tool-row">
                             <button type="button" class="btn-icon" onclick="checkField('{{ t.uid }}', 'oldIot')">Верно</button>
                             <button type="button" class="btn-icon" onclick="editField('{{ t.uid }}', 'oldIot')">Изменить</button>
@@ -386,37 +386,6 @@
     <div class="footer">Обновлено: {{ now }}</div>
     
     <script src="/static/js/master.js"></script>
-    <script>
-        // Автоматическая загрузка данных велосипеда
-        document.addEventListener('DOMContentLoaded', function() {
-            var forms = document.querySelectorAll('.evacuation-form');
-            forms.forEach(function(form) {
-                var uid = form.dataset.uid;
-                var gos = form.dataset.gos;
-                var darks = '{{ darks_number }}';
-                
-                if (gos && gos.trim()) {
-                    fetch('/api/get_bike_data?gos=' + encodeURIComponent(gos) + '&darks=' + encodeURIComponent(darks))
-                        .then(function(response) { return response.json(); })
-                        .then(function(data) {
-                            if (data.success && data.data) {
-                                var bike = data.data;
-                                var serialInput = document.getElementById('oldSerial_' + uid);
-                                var gosInput = document.getElementById('oldGos_' + uid);
-                                var iotInput = document.getElementById('oldIot_' + uid);
-                                
-                                if (serialInput) serialInput.value = bike.serial || '';
-                                if (gosInput) gosInput.value = bike.gos || gos;
-                                if (iotInput) iotInput.value = bike.iot || '';
-                            }
-                        })
-                        .catch(function(error) {
-                            console.error('Ошибка загрузки данных:', error);
-                        });
-                }
-            });
-        });
-    </script>
     <nav class="dock">
         <a class="on" href="/master/{{ name }}">Маршрут</a>
         <a href="/api/build_route_for_master?master={{ name }}">Карта</a>

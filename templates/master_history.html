@@ -56,8 +56,10 @@
                         title = 'Отказ от эвакуации';
                         text = '';
                     }
+                    var gos = act.gos || '';
+                    var gosLine = gos ? '<p>' + esc(gos) + '</p>' : '';
                     var body = text ? '<p>' + esc(text).replace(/\n/g, '<br>') + '</p>' : '';
-                    return '<div class="hist"><b>' + esc(title) + '</b>' + body + '<div class="when">' + esc(item.timestamp || '') + '</div></div>';
+                    return '<div class="hist"><b>' + esc(title) + '</b>' + gosLine + body + '<div class="when">' + esc(item.timestamp || '') + '</div></div>';
                 }).join('');
             })
             .catch(function() {

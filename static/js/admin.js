@@ -581,7 +581,8 @@ function sendRoute() {
     .then(function(r) { return r.json(); })
     .then(function(data) {
         if (data.success) {
-            document.getElementById('syncStatus').textContent = '✅ Кэш мастера ' + selectedMaster + ' обновлен';
+            var note = data.notified ? ' Сообщение отправлено в Telegram.' : ' В столбце I нет Telegram ID этого мастера.';
+            document.getElementById('syncStatus').textContent = 'Кэш мастера ' + selectedMaster + ' обновлен.' + note;
             document.getElementById('syncStatus').style.color = '#22c55e';
             closeSendModal();
         } else {
