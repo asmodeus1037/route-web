@@ -322,7 +322,70 @@ def generate_ticket_id(date_str):
 def normalize_gos(value):
     return re.sub(r'[^0-9A-Za-zА-Яа-я]', '', str(value or '')).upper()
 
+_bike_lookup_cache = {'ts': 0, 'by_dark_gos': {}}
 _bike_type_cache = {'ts': 0, 'by_gos': {}}
+
+def bike_lookup():
+    now_ts = time.time()
+    if _bike_lookup_cache['by_dark_gos'] and now_ts - _bike_lookup_cache['ts'] < 600:
+        return _bike_lookup_cache['by_dark_gos']
+    mapping = {}
+    try:
+        rows = get_sheet_client().worksheet('База данных вело').get_all_values()
+        for row in rows[1:]:
+            gos = normalize_gos(row[1] if len(row) > 1 else '')
+            darks = row[4].strip() if len(row) > 4 else ''
+            if not gos or not darks:
+                continue
+            mapping[(darks, gos)] = {
+                'serial': row[0].strip() if row else '',
+                'gos': (row[1] if len(row) > 1 else '').strip(),
+                'iot': (row[2] if len(row) > 2 else '').strip(),
+            }
+        _bike_lookup_cache['by_dark_gos'] = mapping
+        _bike_lookup_cache['ts'] = now_ts
+    except Exception as e:
+        logger.error(f'Ошибка чтения базы вело: {e}')
+    return _bike_lookup_cache['by_dark_gos']
+
+def fill_old_bike(tickets):
+    mapping = bike_lookup()
+    for ticket in tickets or []:
+        bike = mapping.get((str(ticket.get('darks') or ''), normalize_gos(ticket.get('gos'))))
+        if not bike:
+            continue
+        ticket['old_serial'] = bike['serial']
+        ticket['old_gos'] = bike['gos']
+        ticket['old_iot'] = bike['iot']
+
+def ticket_label(ticket):
+    gos = ((ticket or {}).get('gos') or '').strip()
+    if gos:
+        return gos
+    return (ticket or {}).get('type') or 'Заявка'
+
+def evacuation_reason(ticket):
+    note = ((ticket or {}).get('note') or '').strip()
+    for line in reversed(note.splitlines()):
+        if 'ЭВАКУАЦИЯ' in line.upper():
+            text = line.split(':', 1)[-1].strip()
+            if text:
+                return text
+    return ((ticket or {}).get('desc') or '').strip()
+
+def notify_dark_event(darks, text):
+    if not darks or not text:
+        return
+    def run():
+        try:
+            requests.post(
+                f'{BOT_API_URL}/notify_event',
+                json={'darks': str(darks), 'text': text},
+                timeout=8,
+            )
+        except Exception as e:
+            logger.warning(f'Не ушло сообщение куратору {darks}: {e}')
+    threading.Thread(target=run, daemon=True).start()
 
 def get_bike_type_by_gos_map():
     now_ts = time.time()
@@ -820,6 +883,7 @@ def mark_bike_missing(uid, actor_name):
             'skip_report': False
         }
     })
+    notify_dark_event((ticket or {}).get('darks', ''), f'{ticket_label(ticket)} нет вело на дарксторе, заявка перенесена')
     return note
 
 def apply_queue_to_sheets(tasks):
@@ -929,6 +993,7 @@ def append_master_history(master, action, data):
             'parts': '' if detail == 'Отказ от эвакуации' else detail,
             'detail': detail,
             'darks_number': data.get('darks_number', ''),
+            'gos': data.get('gos') or ((data.get('old_data') or {}).get('gos') or ''),
         }
     })
     write_cache(f"history_{master}.json", {'items': items[-300:]})
@@ -1222,15 +1287,55 @@ def process_queue_background():
 # ============================================================
 # ОТПРАВКА УВЕДОМЛЕНИЙ
 # ============================================================
+def curator_notice_groups():
+    tickets = []
+    cache = get_admin_cache() or {}
+    for dir_data in cache.get('directions', {}).values():
+        tickets.extend(dir_data.get('tickets') or [])
+    if not tickets:
+        tickets = get_tickets_from_sheets()
+    groups = {}
+    for ticket in tickets:
+        if not ticket.get('master') or not is_active_status(ticket.get('status')):
+            continue
+        groups.setdefault(str(ticket.get('darks') or ''), []).append(ticket)
+    payload = []
+    for dark, items in groups.items():
+        if not dark:
+            continue
+        address = (items[0].get('address') or '').strip()
+        lines = [
+            'Привет, на связи Vanta Bikes!',
+            '',
+            f'{address} (даркстор {dark})'.strip(),
+            f'Заявки ({len(items)}):',
+        ]
+        for ticket in items:
+            if ticket.get('type') in ('Аккумуляторная батарея', 'Зарядное устройство'):
+                name = ticket.get('type')
+            else:
+                name = ticket.get('gos') or 'Без номера'
+            mark = ' — ЗАМЕНА' if 'ЭВАКУАЦИЯ' in (ticket.get('note') or '') else ''
+            lines.append(f'   {name} | {(ticket.get("desc") or "-")}{mark}')
+        lines.append('')
+        lines.append('Подготовьте, пожалуйста, технику к ремонту')
+        lines.append('Хорошего дня!')
+        payload.append({'darks': dark, 'text': '\n'.join(lines)})
+    return payload
+
 def notify_curators(message):
     try:
+        groups = curator_notice_groups()
+        if not groups:
+            return False
         response = requests.post(
             f"{BOT_API_URL}/send_notification",
-            json={"message": message, "type": "curator_notification"},
-            timeout=10
+            json={"groups": groups},
+            timeout=20,
         )
         return response.status_code == 200
-    except:
+    except Exception as e:
+        logger.warning(f'Не отправились сообщения кураторам: {e}')
         return False
 
 def generate_curator_message(tickets_data):
@@ -1407,52 +1512,62 @@ def api_flush_now():
         logger.error(f"Ошибка записи очереди: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
-def notify_assigned_masters(changes):
-    if not darks_ref:
-        load_darks_reference()
-    groups = {}
-    for change in changes:
-        uid = str(change.get('uid') or '')
-        if not uid:
+def master_chat_ids(master_name):
+    load_darks_reference()
+    wanted = (master_name or '').strip().lower()
+    found = []
+    for info in darks_ref.values():
+        if (info.get('master') or '').strip().lower() != wanted:
             continue
-        ticket = {}
-        info = uid_index.get(uid) if uid_index else None
-        if info:
-            ticket = info.get('ticket') or {}
-        dark = str(ticket.get('darks') or '')
-        ref = darks_ref.get(dark) or {}
-        chat_id = ''.join(ch for ch in str(ref.get('master_tg') or '') if ch.isdigit())
-        if not chat_id:
-            logger.info(f'У даркстора {dark} нет ТГ ID мастера, уведомление пропущено')
-            continue
-        groups.setdefault(chat_id, []).append(ticket)
-    for chat_id, tickets in groups.items():
-        lines = [f'Вам назначили заявки: {len(tickets)}']
-        by_dark = {}
-        for ticket in tickets:
-            by_dark.setdefault(str(ticket.get('darks') or '—'), []).append(ticket)
-        for dark, group in by_dark.items():
-            address = (group[0].get('address') or '').strip()
-            lines.append('')
-            lines.append(f'{address} (даркстор {dark})'.strip())
-            for ticket in group[:15]:
-                gos = ticket.get('gos') or 'Без номера'
-                desc = (ticket.get('desc') or '').replace('\n', ' ').strip()
-                note = ticket.get('note') or ''
-                prefix = 'ЗАМЕНА. ' if note.startswith('ЭВАКУАЦИЯ') else ''
-                lines.append(f'• {gos} — {prefix}{desc[:90]}')
-            extra = len(group) - 15
-            if extra > 0:
-                lines.append(f'и ещё {extra}')
+        digits = ''.join(ch for ch in str(info.get('master_tg') or '') if ch.isdigit())
+        if digits and digits not in found:
+            found.append(digits)
+    return found
+
+def master_route_text(master_name):
+    cache = get_master_cache(master_name) or {}
+    tickets = [t for t in cache.get('tickets') or [] if is_active_status(t.get('status'))]
+    lines = [f'Вам назначены заявки: {len(tickets)}']
+    if not tickets:
+        return 'На вас сейчас нет открытых заявок.'
+    by_dark = {}
+    for ticket in tickets:
+        by_dark.setdefault(str(ticket.get('darks') or '—'), []).append(ticket)
+    for dark, group in by_dark.items():
+        address = (group[0].get('address') or '').strip()
+        lines.append('')
+        lines.append(f'{address} (даркстор {dark})'.strip())
+        for ticket in group[:20]:
+            label = ticket_label(ticket)
+            desc = (ticket.get('desc') or '').replace('\n', ' ').strip()
+            prefix = 'ЗАМЕНА. ' if 'ЭВАКУАЦИЯ' in (ticket.get('note') or '') else ''
+            lines.append(f'• {label} — {prefix}{desc[:90]}')
+        extra = len(group) - 20
+        if extra > 0:
+            lines.append(f'и ещё {extra}')
+    return '\n'.join(lines)
+
+def notify_master_route(master_name):
+    chat_ids = master_chat_ids(master_name)
+    if not chat_ids:
+        logger.info(f'У мастера {master_name} нет ТГ ID в столбце I листа Дарксторы')
+        return 0
+    text = master_route_text(master_name)
+    sent = 0
+    for chat_id in chat_ids:
         try:
             response = requests.post(
                 f'{BOT_API_URL}/notify_master',
-                json={'chat_id': chat_id, 'text': '\n'.join(lines)},
+                json={'chat_id': chat_id, 'text': text},
                 timeout=8,
             )
-            logger.info(f'Уведомление мастеру {chat_id}: {response.status_code}')
+            if response.status_code == 200 and (response.json() or {}).get('success'):
+                sent += 1
+            else:
+                logger.warning(f'Бот не принял сообщение мастеру {master_name}: {response.text[:200]}')
         except Exception as e:
-            logger.warning(f'Не отправилось уведомление мастеру {chat_id}: {e}')
+            logger.warning(f'Не отправилось сообщение мастеру {master_name}: {e}')
+    return sent
 
 @app.route('/api/batch_update', methods=['POST'])
 @login_required
@@ -1463,7 +1578,14 @@ def api_batch_update():
         return jsonify({'success': False, 'error': 'Нет изменений'})
     updated = batch_update_masters(changes)
     if updated:
-        notify_assigned_masters(changes)
+        names = []
+        for change in changes:
+            master = (change.get('master') or '').strip()
+            if master and master not in names:
+                names.append(master)
+        for master in names:
+            refresh_master_cache(master)
+            notify_master_route(master)
     return jsonify({'success': True, 'updated': updated})
 
 @app.route('/api/send_route', methods=['POST'])
@@ -1474,13 +1596,15 @@ def api_send_route():
     if not master:
         return jsonify({'success': False, 'error': 'Не указан мастер'})
     refresh_master_cache(master)
-    return jsonify({'success': True, 'message': f'Кэш мастера {master} обновлен'})
+    sent = notify_master_route(master)
+    return jsonify({'success': True, 'message': f'Кэш мастера {master} обновлен', 'notified': sent})
 
 @app.route('/api/send_route_all', methods=['POST'])
 @login_required
 def api_send_route_all():
     for master in MASTERS:
-        threading.Thread(target=refresh_master_cache, args=(master,)).start()
+        refresh_master_cache(master)
+        notify_master_route(master)
     return jsonify({'success': True, 'message': 'Кэши всех мастеров обновляются'})
 
 @app.route('/api/clear_dates', methods=['POST'])
@@ -1737,6 +1861,7 @@ def master_darks(name, darks_number):
     
     for t in filtered:
         t['hours_since'] = ticket_hours(t)
+    fill_old_bike(filtered)
     
     if name == 'Сергей Транзит':
         gos_counts = {}
@@ -1925,8 +2050,13 @@ def master_done(name, darks_number, uid):
         'uid': uid,
         'source': source_of(uid),
         'type': 'done',
-        'data': {'parts': event, 'detail': event, 'note': full_note, 'master': name, 'darks_number': darks_number}
+        'data': {'parts': event, 'detail': event, 'note': full_note, 'master': name, 'darks_number': darks_number, 'gos': ticket.get('gos', '')}
     })
+    label = ticket_label(ticket)
+    if parts == 'Отказ от эвакуации':
+        notify_dark_event(darks_number, f'{label} отказ от эвакуации')
+    else:
+        notify_dark_event(darks_number, f'{label} заявка выполнена')
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/fail/<uid>')
@@ -1954,8 +2084,10 @@ def master_evacuation(name, darks_number, uid):
         'uid': uid,
         'source': source_of(uid),
         'type': 'evacuation',
-        'data': {'reason': reason, 'master': name, 'darks_number': darks_number}
+        'data': {'reason': reason, 'master': name, 'darks_number': darks_number, 'gos': (find_cached_ticket(uid) or {}).get('gos', '')}
     })
+    label = ticket_label(find_cached_ticket(uid) or {'gos': request.form.get('gos', '')})
+    notify_dark_event(darks_number, f'{label} нужно эвакуировать: {reason.strip()}')
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/taken_no_replace/<uid>', methods=['POST'])
@@ -2111,6 +2243,7 @@ def write_transit_replacement(uid, master_name, darks_number, address, old_data,
             {'range': f'I{new_row_idx}', 'values': [[new_data.get('iot', '')]]}
         ]
         report_sheet.batch_update(updates)
+        export_removal_reason(old_data, evacuation_reason(find_cached_ticket(uid) or {'desc': 'Замена'}))
         logger.info(f"✅ Записана замена велосипеда для заявки {uid}")
     except Exception as e:
         logger.error(f"Ошибка записи замены велосипеда: {e}")
@@ -2192,7 +2325,47 @@ def api_get_bike_data():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
-def write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data):
+def export_removal_reason(old_data, reason):
+    try:
+        book = get_gspread_client().open_by_key('1BoZ7GFmL2q56bjqt1CFVV_PeqnKVaeb3anTJkf0s6xA')
+        sheet = None
+        for item in book.worksheets():
+            title = (item.title or '').strip().lower()
+            try:
+                gid = int(item.id)
+            except Exception:
+                gid = item.id
+            if title == 'общее' or gid == 1658833390:
+                sheet = item
+                break
+        if sheet is None:
+            logger.warning('Лист «Общее» не найден')
+            return
+        rows = sheet.get('A:B')
+        iot = re.sub(r'\s+', '', str((old_data or {}).get('iot') or '')).lower()
+        serial = re.sub(r'\s+', '', str((old_data or {}).get('serial') or '')).lower()
+        iot_row = None
+        serial_row = None
+        for index, row in enumerate(rows, start=1):
+            if index == 1:
+                continue
+            frame = re.sub(r'\s+', '', str(row[0] if row else '')).lower()
+            module = re.sub(r'\s+', '', str(row[1] if len(row) > 1 else '')).lower()
+            if iot and module == iot:
+                iot_row = index
+                break
+            if serial and frame == serial and serial_row is None:
+                serial_row = index
+        target = iot_row or serial_row
+        if not target:
+            logger.warning(f'Велосипед не найден в «Общее»: IoT {iot or "-"}, рама {serial or "-"}')
+            return
+        sheet.update(f'J{target}', [[(reason or '').strip() or 'Замена']], value_input_option='USER_ENTERED')
+        logger.info(f'Причина вывоза записана в «Общее», строка {target}')
+    except Exception as e:
+        logger.error(f'Не записал причину вывоза: {e}')
+
+def write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data, reason=''):
     try:
         append_bike_swap(address, darks_number, old_data, new_data, master_name, uid, 'Эвакуация')
         sheet_client = get_sheet_client()
@@ -2226,6 +2399,7 @@ def write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data,
             {'range': f'L{new_row_idx}', 'values': [['Эвакуация']]}
         ]
         report_sheet.batch_update(updates)
+        export_removal_reason(old_data, reason)
         logger.info(f"✅ Записана эвакуация для заявки {uid}")
         return True, ''
     except Exception as e:
@@ -2253,12 +2427,15 @@ def master_evacuation_replace():
         if not new_data.get('serial') or not new_data.get('gos') or not new_data.get('iot'):
             return jsonify({'success': False, 'error': 'Заполните все поля НОВОГО велосипеда'}), 400
         
-        saved, err = write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data)
+        ticket = find_cached_ticket(uid) or {}
+        reason = evacuation_reason(ticket)
+        saved, err = write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data, reason)
         if not saved:
             return jsonify({'success': False, 'error': err or 'Не удалось записать замену в таблицу'})
         
         update_ticket_in_admin_cache(uid, 'done', 'Заменен при эвакуации', '✅ Выполнено')
         update_status_in_google_sheets(uid, '✅ Выполнено', 'Заменен при эвакуации')
+        notify_dark_event(darks_number, f'{old_data.get("gos") or ticket_label(ticket)} заменен и готов к эксплуатации')
         
         add_to_queue({
             'uid': uid,
