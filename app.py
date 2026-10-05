@@ -258,6 +258,16 @@ def get_iot_sheet_by_id(sheet_id, sheet_name=None):
         return spreadsheet.worksheet(sheet_name)
     return spreadsheet
 
+def clean_name(value):
+    return ' '.join(str(value or '').replace('\xa0', ' ').split()).lower()
+
+def column_index(header, needles, default):
+    for index, title in enumerate(header or []):
+        text = str(title or '').strip().lower().replace('\xa0', ' ')
+        if all(needle in text for needle in needles):
+            return index
+    return default
+
 def load_darks_reference():
     global darks_ref
     darks_ref = {}
@@ -266,22 +276,41 @@ def load_darks_reference():
         worksheet = sheet_client.worksheet("Дарксторы")
         rows = worksheet.get_all_values()
         if len(rows) > 1:
+            header = rows[0]
+            i_address = column_index(header, ['адрес'], 1)
+            i_direction = column_index(header, ['направ'], 2)
+            i_coords = column_index(header, ['коорд'], 3)
+            i_master = column_index(header, ['мастер'], 7)
+            i_tg = column_index(header, ['тг', 'id'], 8)
             for row in rows[1:]:
-                if len(row) >= 4:
-                    darks_num = row[0].strip()
-                    address = row[1].strip()
-                    direction = row[2].strip() if len(row) > 2 else ''
-                    coords = row[3].strip() if len(row) > 3 else ''
-                    darks_ref[darks_num] = {
-                        'address': address,
-                        'direction': direction,
-                        'coords': coords,
-                        'master': row[7].strip() if len(row) > 7 else '',
-                        'master_tg': row[8].strip() if len(row) > 8 else '',
-                    }
+                if not row or not str(row[0]).strip():
+                    continue
+                darks_num = str(row[0]).strip()
+                def cell(index):
+                    return row[index].strip() if len(row) > index and row[index] else ''
+                darks_ref[darks_num] = {
+                    'address': cell(i_address),
+                    'direction': cell(i_direction),
+                    'coords': cell(i_coords),
+                    'master': cell(i_master),
+                    'master_tg': cell(i_tg),
+                }
     except Exception as e:
         logger.error(f"Ошибка загрузки Дарксторов: {e}")
     return darks_ref
+
+def enrich_tickets(tickets):
+    if not darks_ref:
+        load_darks_reference()
+    for ticket in tickets or []:
+        info = darks_ref.get(str(ticket.get('darks') or '').strip()) or {}
+        if info.get('address'):
+            ticket['address'] = info['address']
+        if info.get('coords'):
+            ticket['coords'] = info['coords']
+        if info.get('direction') and not ticket.get('direction'):
+            ticket['direction'] = info['direction']
+    return tickets
 
 def parse_created_date(date_str):
     if not date_str:
@@ -596,11 +625,15 @@ def refresh_master_cache(master_name):
     try:
         flush_queue()
         tickets = get_tickets_from_sheets()
-        master_tickets = [t for t in tickets if t.get('master') == master_name and is_active_status(t.get('status'))]
+        wanted = clean_name(master_name)
+        master_tickets = [t for t in tickets if clean_name(t.get('master')) == wanted and is_active_status(t.get('status'))]
+        enrich_tickets(master_tickets)
         save_master_cache(master_name, master_tickets, '')
         logger.info(f"✅ Кэш для {master_name} обновлен: {len(master_tickets)} заявок")
+        return len(master_tickets)
     except Exception as e:
         logger.error(f"Ошибка обновления кэша {master_name}: {e}")
+        return 0
 
 def refresh_all_master_caches():
     try:
@@ -1514,19 +1547,21 @@ def api_flush_now():
 
 def master_chat_ids(master_name):
     load_darks_reference()
-    wanted = (master_name or '').strip().lower()
+    wanted = clean_name(master_name)
     found = []
     for info in darks_ref.values():
-        if (info.get('master') or '').strip().lower() != wanted:
+        if clean_name(info.get('master')) != wanted:
             continue
         digits = ''.join(ch for ch in str(info.get('master_tg') or '') if ch.isdigit())
         if digits and digits not in found:
             found.append(digits)
+    logger.info(f'ТГ мастера {master_name}: {found or "не найден"}')
     return found
 
 def master_route_text(master_name):
     cache = get_master_cache(master_name) or {}
     tickets = [t for t in cache.get('tickets') or [] if is_active_status(t.get('status'))]
+    enrich_tickets(tickets)
     lines = [f'Вам назначены заявки: {len(tickets)}']
     if not tickets:
         return 'На вас сейчас нет открытых заявок.'
@@ -1551,23 +1586,28 @@ def notify_master_route(master_name):
     chat_ids = master_chat_ids(master_name)
     if not chat_ids:
         logger.info(f'У мастера {master_name} нет ТГ ID в столбце I листа Дарксторы')
-        return 0
+        return {'sent': 0, 'reason': 'no_id'}
     text = master_route_text(master_name)
     sent = 0
+    last_error = ''
     for chat_id in chat_ids:
         try:
             response = requests.post(
                 f'{BOT_API_URL}/notify_master',
                 json={'chat_id': chat_id, 'text': text},
-                timeout=8,
+                timeout=25,
             )
             if response.status_code == 200 and (response.json() or {}).get('success'):
                 sent += 1
             else:
-                logger.warning(f'Бот не принял сообщение мастеру {master_name}: {response.text[:200]}')
+                last_error = response.text[:200]
+                logger.warning(f'Бот не принял сообщение мастеру {master_name}: {last_error}')
         except Exception as e:
+            last_error = str(e)
             logger.warning(f'Не отправилось сообщение мастеру {master_name}: {e}')
-    return sent
+    if sent:
+        return {'sent': sent, 'reason': 'ok'}
+    return {'sent': 0, 'reason': 'bot', 'error': last_error}
 
 @app.route('/api/batch_update', methods=['POST'])
 @login_required
@@ -1595,9 +1635,15 @@ def api_send_route():
     master = data.get('master')
     if not master:
         return jsonify({'success': False, 'error': 'Не указан мастер'})
-    refresh_master_cache(master)
-    sent = notify_master_route(master)
-    return jsonify({'success': True, 'message': f'Кэш мастера {master} обновлен', 'notified': sent})
+    count = refresh_master_cache(master)
+    info = notify_master_route(master)
+    return jsonify({
+        'success': True,
+        'message': f'Кэш мастера {master} обновлен',
+        'notified': info.get('sent', 0),
+        'notify_reason': info.get('reason', ''),
+        'tickets': count,
+    })
 
 @app.route('/api/send_route_all', methods=['POST'])
 @login_required
@@ -1799,31 +1845,25 @@ def api_build_route_for_master():
 # ============================================================
 # МАРШРУТЫ МАСТЕРОВ
 # ============================================================
-@app.route('/master/<name>')
-@login_required
-def master_overview(name):
-    if session.get('master_name') != name:
-        return redirect(url_for('login_page'))
-    cache_data = get_master_cache(name)
-    if cache_data:
-        master_tickets = cache_data.get('tickets', [])
-    else:
+def master_groups(name):
+    cache_data = get_master_cache(name) or {}
+    master_tickets = list(cache_data.get('tickets') or [])
+    if not master_tickets and not cache_data:
         tickets = get_tickets_from_sheets()
-        master_tickets = [t for t in tickets if t.get('master') == name and is_active_status(t.get('status'))]
+        master_tickets = [t for t in tickets if clean_name(t.get('master')) == clean_name(name) and is_active_status(t.get('status'))]
+        enrich_tickets(master_tickets)
         save_master_cache(name, master_tickets, '')
-    if not master_tickets:
-        groups = []
     else:
-        for t in master_tickets:
-            t['hours_since'] = ticket_hours(t)
-            t['is_today_done'] = t.get('status') == 'done'
+        enrich_tickets(master_tickets)
+    groups = []
+    if master_tickets:
         groups_dict = {}
         for t in master_tickets:
-            darks_num = t.get('darks') or 'без номера'
+            darks_num = str(t.get('darks') or 'без номера')
             if darks_num not in groups_dict:
                 groups_dict[darks_num] = {
                     'darks_number': darks_num,
-                    'address': t.get('address', 'Адрес не указан'),
+                    'address': t.get('address') or 'Адрес не указан',
                     'contact': t.get('contact', ''),
                     'tickets': [],
                     'pending': 0,
@@ -1834,16 +1874,52 @@ def master_overview(name):
                 groups_dict[darks_num]['pending'] += 1
             else:
                 groups_dict[darks_num]['done'] += 1
-        groups = []
         for darks_num in sorted(groups_dict.keys(), key=lambda x: int(x) if str(x).isdigit() else 999999):
-            groups.append(groups_dict[darks_num])
+            item = groups_dict[darks_num]
+            groups.append({
+                'darks_number': item['darks_number'],
+                'address': item['address'],
+                'contact': item['contact'],
+                'pending': item['pending'],
+                'done': item['done'],
+                'tickets': item['tickets'],
+            })
+    return groups, master_tickets, cache_data.get('updated_at', '')
+
+@app.route('/master/<name>')
+@login_required
+def master_overview(name):
+    if session.get('master_name') != name:
+        return redirect(url_for('login_page'))
+    groups, master_tickets, updated_at = master_groups(name)
+    for t in master_tickets:
+        t['hours_since'] = ticket_hours(t)
+        t['is_today_done'] = t.get('status') == 'done'
     route_url = f'/api/build_route_for_master?master={name}'
     return render_template('master_home.html',
                           name=name,
                           groups=groups,
                           total_tickets=len(master_tickets),
                           route_url=route_url,
+                          updated_at=updated_at,
                           now=get_msk_now().strftime('%H:%M:%S'))
+
+@app.route('/api/master/<name>/home')
+@login_required
+def api_master_home(name):
+    if session.get('master_name') != name and session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Доступ запрещён'}), 403
+    groups, master_tickets, updated_at = master_groups(name)
+    return jsonify({
+        'success': True,
+        'total': len(master_tickets),
+        'updated_at': updated_at,
+        'groups': [{
+            'darks_number': g['darks_number'],
+            'address': g['address'],
+            'pending': g['pending'],
+        } for g in groups],
+    })
 
 @app.route('/master/<name>/darks/<darks_number>')
 @login_required
@@ -1853,11 +1929,13 @@ def master_darks(name, darks_number):
     cache_data = get_master_cache(name)
     if cache_data:
         all_tickets = cache_data.get('tickets', [])
-        filtered = [t for t in all_tickets if t.get('darks') == darks_number]
+        filtered = [t for t in all_tickets if str(t.get('darks')) == str(darks_number)]
     else:
         tickets = get_tickets_from_sheets()
-        filtered = [t for t in tickets if t.get('master') == name and t.get('darks') == darks_number and is_active_status(t.get('status'))]
+        filtered = [t for t in tickets if clean_name(t.get('master')) == clean_name(name) and str(t.get('darks')) == str(darks_number) and is_active_status(t.get('status'))]
+        enrich_tickets(filtered)
         save_master_cache(name, filtered, '')
+    enrich_tickets(filtered)
     
     for t in filtered:
         t['hours_since'] = ticket_hours(t)

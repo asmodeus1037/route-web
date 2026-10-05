@@ -1,6 +1,35 @@
 // ============================================================
 // ОБЩИЕ ФУНКЦИИ
 // ============================================================
+function escapeHtml(value) {
+    var box = document.createElement('div');
+    box.textContent = value == null ? '' : String(value);
+    return box.innerHTML;
+}
+
+function refreshMasterHome() {
+    var grid = document.querySelector('.darks-grid');
+    var title = document.querySelector('h1');
+    if (!grid || !title || document.querySelector('.fast-ticket')) return;
+    var name = title.textContent.trim();
+    fetch('/api/master/' + encodeURIComponent(name) + '/home', {cache: 'no-store'})
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data || !data.success) return;
+            var sub = document.querySelector('.sub-title');
+            if (sub) sub.textContent = data.total + ' заявок';
+            var html = '';
+            (data.groups || []).forEach(function(g) {
+                html += '<a class="darks-card" href="/master/' + encodeURIComponent(name) + '/darks/' + encodeURIComponent(g.darks_number) + '">';
+                html += '<div class="address">' + escapeHtml(g.address || 'Адрес не указан') + '</div>';
+                html += '<div class="number">Даркстор ' + escapeHtml(g.darks_number) + '</div>';
+                html += '<div class="stats"><span class="pending-count">' + (g.pending || 0) + ' заявок</span></div></a>';
+            });
+            grid.innerHTML = html || '<p>Сейчас заявок нет.</p>';
+        })
+        .catch(function() {});
+}
+
 function showToast(message, isError) {
     var toast = document.getElementById('toast');
     if (!toast) return;
@@ -380,10 +409,15 @@ document.addEventListener('DOMContentLoaded', function() {
     renderOutboxBar();
     hideQueuedTickets();
     flushOutbox();
+    refreshMasterHome();
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('/sw.js').catch(function() {});
     }
 });
+document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) refreshMasterHome();
+});
+setInterval(refreshMasterHome, 20000);
 window.addEventListener('pageshow', function(event) {
     var nav = performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
     var back = event.persisted || (nav && nav.type === 'back_forward');

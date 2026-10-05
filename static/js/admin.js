@@ -581,7 +581,15 @@ function sendRoute() {
     .then(function(r) { return r.json(); })
     .then(function(data) {
         if (data.success) {
-            var note = data.notified ? ' Сообщение отправлено в Telegram.' : ' В столбце I нет Telegram ID этого мастера.';
+            var countText = typeof data.tickets === 'number' ? ' В таблице сейчас ' + data.tickets + ' открытых заявок.' : '';
+            var note = countText;
+            if (data.notify_reason === 'ok' || data.notified) {
+                note += ' Сообщение отправлено в Telegram.';
+            } else if (data.notify_reason === 'no_id') {
+                note += ' В столбце H напишите имя мастера, а в столбце I той же строки — его Telegram ID.';
+            } else {
+                note += ' ID найден, но бот ответил не сразу. Проверьте Telegram через минуту.';
+            }
             document.getElementById('syncStatus').textContent = 'Кэш мастера ' + selectedMaster + ' обновлен.' + note;
             document.getElementById('syncStatus').style.color = '#22c55e';
             closeSendModal();
