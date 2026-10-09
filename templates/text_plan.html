@@ -6,8 +6,9 @@
     <title>Текстовый план - {{ name }}</title>
     <link rel="icon" href="/data/vanta.png" type="image/png">
     <link rel="stylesheet" href="/static/css/text_plan.css">
+    <link rel="stylesheet" href="/static/css/master.css">
 </head>
-<body>
+<body data-master="{{ name }}" data-page="plan">
     <div style="background:#fff;margin:-16px -16px 16px;padding:14px 16px 12px;display:flex;justify-content:center;border-bottom:3px solid #e11d48;">
         <img src="/static/img/vanta.png" alt="Vanta" style="height:42px;width:auto;display:block;">
     </div>
@@ -56,19 +57,11 @@
     </div>
     
     <div class="footer">Обновлено: {{ now }}</div>
-    <nav class="dock">
-        <a href="/master/{{ name }}">Маршрут</a>
-        <a href="/api/build_route_for_master?master={{ name }}">Карта</a>
-        <a href="/master/{{ name }}/trunk">Багажник</a>
-        <a class="on" href="/master/{{ name }}/text_plan">План</a>
-        <a href="/master/{{ name }}/history">История</a>
-    </nav>
+    <nav class="dock"></nav>
+    <script src="/static/js/master.js"></script>
     <style>
         body { padding-bottom: 96px; }
         .retry { margin-left: 6px; font-size: 11px; color: #57534e; }
-        .dock { position: fixed; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(5, 1fr); background: #fff; border-top: 1px solid #e7e5e4; }
-        .dock a { text-align: center; text-decoration: none; color: #57534e; font-weight: 800; font-size: 11px; padding: 12px 2px 14px; }
-        .dock a.on { color: #c0392b; }
     </style>
 </body>
 </html>

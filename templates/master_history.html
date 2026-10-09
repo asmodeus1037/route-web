@@ -12,18 +12,13 @@
         .when { color: #78716c; font-size: 13px; }
     </style>
 </head>
-<body>
+<body data-master="{{ name }}" data-page="history">
     <div class="brand"><img src="/static/img/vanta.png" alt="Vanta"></div>
     <h1>История</h1>
     <p><a href="/master/{{ name }}">← К маршруту</a></p>
     <div id="list">Загрузка...</div>
-    <nav class="dock">
-        <a href="/master/{{ name }}">Маршрут</a>
-        <a href="/api/build_route_for_master?master={{ name }}">Карта</a>
-        <a href="/master/{{ name }}/trunk">Багажник</a>
-        <a href="/master/{{ name }}/text_plan">План</a>
-        <a class="on" href="/master/{{ name }}/history">История</a>
-    </nav>
+    <nav class="dock"></nav>
+    <script src="/static/js/master.js"></script>
     <script>
         var labels = {
             done: 'Выполнено',

@@ -151,7 +151,7 @@
         }
     </style>
 </head>
-<body>
+<body data-master="{{ name }}" data-page="route">
     <div class="brand"><img src="/static/img/vanta.png" alt="Vanta"></div>
     <div id="toast" class="toast">✅ Заявка закрыта</div>
     <h1>{{ address }}</h1>
@@ -192,11 +192,8 @@
                         🔧 Эвакуация
                     {% endif %}
                 </span>
-                <button type="button" class="fast-more" onclick="toggleMore('evac-{{ t.uid }}')">⋯</button>
             </div>
-            <div class="fast-more-panel" id="more-evac-{{ t.uid }}" hidden>
-                <button type="button" class="fast-side" onclick="refuseEvacuation('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">Отказ от эвакуации</button>
-            </div>
+            <button type="button" class="fast-side refuse-btn" onclick="refuseEvacuation('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">Отказ от эвакуации</button>
             
             <div class="ticket-desc">{{ t.desc }}</div>
             <div class="bike-kind {% if 'Неопределен' in (t.bike_type or '') %}kind-bad{% endif %}">{{ t.bike_type }}{% if t.supplier %} · {{ t.supplier }}{% endif %}</div>
@@ -294,7 +291,7 @@
         {% else %}
         {% set is_retry = t.status in ['processed', 'fail'] %}
         {% set is_hot = (t.hours_since or 0) > 48 and not is_retry %}
-        <div class="ticket fast-ticket {{ t.status }} {% if is_battery %}battery-ticket{% endif %}" id="ticket-{{ t.uid }}" data-uid="{{ t.uid }}">
+        <div class="ticket fast-ticket {{ t.status }} {% if is_battery %}battery-ticket{% endif %} {% if is_hot %}stripe-hot{% endif %}" id="ticket-{{ t.uid }}" data-uid="{{ t.uid }}">
             <div class="fast-top">
                 <div class="fast-main">
                     <div class="fast-line">
@@ -311,9 +308,15 @@
                     {% endif %}
                 </div>
                 {% if t.status in ['pending', 'todo', 'processed', 'fail'] %}
-                <div class="fast-btns">
+                <div class="fast-btns stacked">
                     <button type="button" class="fast-ok" onclick="togglePanel('{{ t.uid }}')">Готово</button>
-                    <button type="button" class="fast-more" onclick="toggleMore('{{ t.uid }}')">⋯</button>
+                    {% if is_battery %}
+                    <button type="button" class="fast-side" onclick="openTakenModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">Забираю без замены</button>
+                    <button type="button" class="fast-side" onclick="openReplaceNoModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">Куратор не дал</button>
+                    {% else %}
+                    <button type="button" class="fast-side" onclick="openModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'evacuation', 'Причина эвакуации')">Эвакуация</button>
+                    <button type="button" class="fast-side" onclick="closeTicketInstant('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'fail')">Вело отсутствует на дарксторе</button>
+                    {% endif %}
                 </div>
                 {% endif %}
             </div>
@@ -323,20 +326,12 @@
                     <input type="number" name="parts" min="1" placeholder="Сколько отдал" required>
                     <button type="submit" class="fast-ok">Отправить</button>
                 </form>
-                <div class="fast-more-panel" id="more-{{ t.uid }}" hidden>
-                    <button type="button" class="fast-side" onclick="openTakenModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">Забираю без замены</button>
-                    <button type="button" class="fast-side" onclick="openReplaceNoModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">Куратор не дал</button>
-                </div>
                 {% else %}
                 <form class="fast-panel" id="panel-{{ t.uid }}" hidden data-master="{{ name }}" action="/master/{{ name }}/darks/{{ darks_number }}/done/{{ t.uid }}" method="POST" onsubmit="return closeTicket(this)">
                     <div class="part-list" data-master="{{ name }}">Напишите запчасть</div>
                     <input type="hidden" name="parts_json" value="[]">
                     <button type="submit" class="fast-ok">Отправить</button>
                 </form>
-                <div class="fast-more-panel" id="more-{{ t.uid }}" hidden>
-                    <button type="button" class="fast-side" onclick="openModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'evacuation', 'Причина эвакуации')">Эвакуация</button>
-                    <button type="button" class="fast-side" onclick="closeTicketInstant('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'fail')">Вело отсутствует на дарксторе</button>
-                </div>
                 {% endif %}
             {% endif %}
         </div>
@@ -389,12 +384,6 @@
     <div class="footer">Обновлено: {{ now }}</div>
     
     <script src="/static/js/master.js"></script>
-    <nav class="dock">
-        <a class="on" href="/master/{{ name }}">Маршрут</a>
-        <a href="/api/build_route_for_master?master={{ name }}">Карта</a>
-        <a href="/master/{{ name }}/trunk">Багажник</a>
-        <a href="/master/{{ name }}/text_plan">План</a>
-        <a href="/master/{{ name }}/history">История</a>
-    </nav>
+    <nav class="dock"></nav>
 </body>
 </html>

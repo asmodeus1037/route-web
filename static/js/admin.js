@@ -1039,14 +1039,14 @@ function renderTicketsGrouped(tickets, containerId) {
             }
             html += '</span>';
             html += '<span class="type-badge">' + typeDisplay + '</span>';
-            html += '<span><select class="master-select" data-uid="' + t.uid + '" data-source="' + t.source + '" onchange="onMasterChange(this)"><option value="">—</option>';
+            html += '<span class="field"><span class="field-label">Мастер</span><select class="master-select" data-uid="' + t.uid + '" data-source="' + t.source + '" onchange="onMasterChange(this)"><option value="">—</option>';
             for (var mi = 0; mi < masters.length; mi++) {
                 var m = masters[mi];
                 html += '<option value="' + m + '"' + (currentMaster === m ? ' selected' : '') + '>' + m + '</option>';
             }
-            html += '</select></span>';
+            html += '</select></span></span>';
             
-            html += '<span style="min-width:80px;display:inline-block;">';
+            html += '<span class="field"><span class="field-label">Статус</span>';
             html += '<select class="status-select" data-uid="' + t.uid + '" data-old-status="' + statusDisplay + '" onchange="updateStatus(this)" style="padding:2px 6px;border-radius:4px;border:1px solid #d1d5db;font-size:10px;background:white;width:100%;max-width:100px;cursor:pointer;">';
             html += '<option value="🟡 В работе"' + (statusDisplay === '🟡 В работе' ? ' selected' : '') + '>🟡 В работе</option>';
             html += '<option value="✅ Выполнено"' + (statusDisplay === '✅ Выполнено' ? ' selected' : '') + '>✅ Выполнено</option>';
@@ -1056,7 +1056,7 @@ function renderTicketsGrouped(tickets, containerId) {
                 html += '<option value="🔧 Эвакуация"' + (statusDisplay === '🔧 Эвакуация' ? ' selected' : '') + '>🔧 Эвакуация</option>';
             }
             html += '</select>';
-            html += '</span>';
+            html += '</span></span>';
             
             html += '<span class="hours ' + hoursClass + '">⏱️ ' + hoursDisplay + ' ч</span>';
             html += '</div>';

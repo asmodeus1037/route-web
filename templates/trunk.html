@@ -14,7 +14,7 @@
         .ok { background: #dcfce7; color: #166534; padding: 10px; border-radius: 10px; }
     </style>
 </head>
-<body>
+<body data-master="{{ name }}" data-page="trunk">
     <div class="brand"><img src="/static/img/vanta.png" alt="Vanta"></div>
     <h1>Мой багажник</h1>
     <p class="muted">{{ name }} · сейчас {{ total_qty }} шт</p>
@@ -37,13 +37,8 @@
         <div id="chosen"></div>
         <button class="load-btn" type="submit">Загрузить багажник</button>
     </form>
-    <nav class="dock">
-        <a href="/master/{{ name }}">Маршрут</a>
-        <a href="/api/build_route_for_master?master={{ name }}">Карта</a>
-        <a class="on" href="/master/{{ name }}/trunk">Багажник</a>
-        <a href="/master/{{ name }}/text_plan">План</a>
-        <a href="/master/{{ name }}/history">История</a>
-    </nav>
+    <nav class="dock"></nav>
+    <script src="/static/js/master.js"></script>
     <script>
         var catalog = {{ parts|map(attribute='name')|list|tojson }};
         var picker = document.getElementById('picker');
@@ -54,20 +49,23 @@
         function key(value) { return String(value || '').toLowerCase().replace(/ё/g, 'е'); }
         input.addEventListener('input', function() {
             var q = key(input.value).trim();
-            if (q.length < 2) { suggest.innerHTML = ''; return; }
+            if (q.length < 2) { suggest.innerHTML = ''; floatSuggest(suggest); return; }
             var hits = catalog.filter(function(name) { return key(name).indexOf(q) !== -1; });
             if (!hits.length) {
                 suggest.innerHTML = '<div class="part-miss">Такой запчасти нет в списке</div>';
+                floatSuggest(suggest);
                 return;
             }
             suggest.innerHTML = hits.slice(0, 8).map(function(name) {
                 return '<button type="button" class="part-hit">' + name + '</button>';
             }).join('');
+            floatSuggest(suggest);
             suggest.querySelectorAll('button').forEach(function(button) {
                 button.addEventListener('click', function() {
                     if (chosen.querySelector('[data-name="' + button.textContent.replace(/"/g, '') + '"]')) {
                         input.value = '';
                         suggest.innerHTML = '';
+                        floatSuggest(suggest);
                         return;
                     }
                     var row = document.createElement('div');
@@ -79,6 +77,7 @@
                     chosen.appendChild(row);
                     input.value = '';
                     suggest.innerHTML = '';
+                    floatSuggest(suggest);
                     input.focus();
                 });
             });

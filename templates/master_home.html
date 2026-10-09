@@ -8,28 +8,24 @@
     <title>{{ name }}</title>
     <link rel="stylesheet" href="/static/css/master.css">
 </head>
-<body>
+<body data-master="{{ name }}" data-page="route">
     <div class="brand"><img src="/static/img/vanta.png" alt="Vanta"></div>
     <h1>{{ name }}</h1>
     <p class="sub-title">{{ total_tickets }} заявок</p>
     <div class="darks-grid">
         {% for g in groups %}
         <a class="darks-card" href="/master/{{ name }}/darks/{{ g.darks_number }}">
-            <div class="address">{{ g.address }}</div>
-            <div class="number">Даркстор {{ g.darks_number }}</div>
-            <div class="stats"><span class="pending-count">{{ g.pending }} заявок</span></div>
+            <div class="card-copy">
+                <div class="address">{{ g.address }}</div>
+                <div class="number">Даркстор {{ g.darks_number }}</div>
+            </div>
+            <span class="count-pill">{{ g.pending }}</span>
         </a>
         {% else %}
         <p>Сейчас заявок нет.</p>
         {% endfor %}
     </div>
-    <nav class="dock">
-        <a class="on" href="/master/{{ name }}">Маршрут</a>
-        <a href="{{ route_url }}">Карта</a>
-        <a href="/master/{{ name }}/trunk">Багажник</a>
-        <a href="/master/{{ name }}/text_plan">План</a>
-        <a href="/master/{{ name }}/history">История</a>
-    </nav>
+    <nav class="dock"></nav>
     <script src="/static/js/master.js"></script>
 </body>
 </html>

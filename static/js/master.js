@@ -21,9 +21,9 @@ function refreshMasterHome() {
             var html = '';
             (data.groups || []).forEach(function(g) {
                 html += '<a class="darks-card" href="/master/' + encodeURIComponent(name) + '/darks/' + encodeURIComponent(g.darks_number) + '">';
-                html += '<div class="address">' + escapeHtml(g.address || 'Адрес не указан') + '</div>';
-                html += '<div class="number">Даркстор ' + escapeHtml(g.darks_number) + '</div>';
-                html += '<div class="stats"><span class="pending-count">' + (g.pending || 0) + ' заявок</span></div></a>';
+                html += '<div class="card-copy"><div class="address">' + escapeHtml(g.address || 'Адрес не указан') + '</div>';
+                html += '<div class="number">Даркстор ' + escapeHtml(g.darks_number) + '</div></div>';
+                html += '<span class="count-pill">' + (g.pending || 0) + '</span></a>';
             });
             grid.innerHTML = html || '<p>Сейчас заявок нет.</p>';
         })
@@ -40,10 +40,61 @@ function showToast(message, isError) {
 }
 
 function logout(event) {
-    event.preventDefault();
+    if (event) event.preventDefault();
     localStorage.removeItem('master_login');
     localStorage.removeItem('master_name');
     window.location.href = '/logout';
+}
+
+function mountMasterChrome() {
+    var name = document.body.getAttribute('data-master');
+    if (!name) return;
+    var page = document.body.getAttribute('data-page') || '';
+    var brand = document.querySelector('.brand');
+    if (brand && !brand.querySelector('.brand-out')) {
+        var out = document.createElement('a');
+        out.className = 'brand-out';
+        out.href = '#';
+        out.textContent = 'Выйти';
+        out.addEventListener('click', logout);
+        brand.appendChild(out);
+    }
+    var dock = document.querySelector('nav.dock');
+    if (!dock || dock.dataset.ready === '1') return;
+    var base = '/master/' + encodeURIComponent(name);
+    var moreOn = page === 'plan' || page === 'history';
+    dock.innerHTML = ''
+        + '<a' + (page === 'route' ? ' class="on"' : '') + ' href="' + base + '">Маршрут</a>'
+        + '<a href="/api/build_route_for_master?master=' + encodeURIComponent(name) + '">Карта</a>'
+        + '<a' + (page === 'trunk' ? ' class="on"' : '') + ' href="' + base + '/trunk">Багаж</a>'
+        + '<button type="button" class="dock-more' + (moreOn ? ' on' : '') + '">Ещё</button>';
+    var sheet = document.createElement('div');
+    sheet.className = 'more-sheet';
+    sheet.hidden = true;
+    sheet.innerHTML = ''
+        + '<a href="' + base + '/text_plan">План</a>'
+        + '<a href="' + base + '/history">История</a>'
+        + '<button type="button" class="sheet-out">Выйти</button>';
+    document.body.appendChild(sheet);
+    dock.querySelector('.dock-more').addEventListener('click', function() {
+        sheet.hidden = !sheet.hidden;
+    });
+    sheet.querySelector('.sheet-out').addEventListener('click', logout);
+    dock.dataset.ready = '1';
+}
+
+function floatSuggest(suggest) {
+    if (!suggest) return;
+    if (!suggest.innerHTML) {
+        suggest.classList.remove('is-float');
+        suggest.style.bottom = '';
+        return;
+    }
+    suggest.classList.add('is-float');
+    var view = window.visualViewport;
+    var keyboard = 0;
+    if (view) keyboard = Math.max(0, window.innerHeight - view.height - view.offsetTop);
+    suggest.style.bottom = (keyboard + 8) + 'px';
 }
 
 // ============================================================
@@ -410,6 +461,7 @@ function toggleMore(uid) {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+    mountMasterChrome();
     renderOutboxBar();
     hideQueuedTickets();
     flushOutbox();
@@ -436,6 +488,11 @@ window.addEventListener('pageshow', function(event) {
     sessionStorage.setItem('route_reload', '1');
     location.reload();
 });
+if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', function() {
+        document.querySelectorAll('.part-suggest.is-float').forEach(floatSuggest);
+    });
+}
 window.addEventListener('online', flushOutbox);
 setInterval(flushOutbox, 20000);
 
@@ -606,18 +663,21 @@ function showPartMatches(box, query) {
     var q = partKey(query).trim();
     if (q === 'нет') {
         suggest.innerHTML = '<div class="part-miss">Запчасти не использовал. Нажмите «Отправить».</div>';
+        floatSuggest(suggest);
         return;
     }
     if (q.length < 2) {
         suggest.innerHTML = '';
+        floatSuggest(suggest);
         return;
     }
     var hits = stock.filter(function(item) { return partKey(item.name).indexOf(q) !== -1; });
     if (!hits.length) {
         suggest.innerHTML = '<div class="part-miss">Такой запчасти нет в багажнике</div>';
+        floatSuggest(suggest);
         return;
     }
-    suggest.innerHTML = hits.slice(0, 4).map(function(item) {
+    suggest.innerHTML = hits.slice(0, 6).map(function(item) {
         return '<button type="button" class="part-hit" data-name="' + item.name.replace(/"/g, '') + '" data-max="' + item.qty + '">' + item.name + ' · ' + item.qty + ' шт</button>';
     }).join('');
     suggest.querySelectorAll('.part-hit').forEach(function(button) {
@@ -625,6 +685,7 @@ function showPartMatches(box, query) {
             addPartChip(box, button.getAttribute('data-name'), parseInt(button.getAttribute('data-max'), 10) || 1);
         });
     });
+    floatSuggest(suggest);
 }
 
 function addPartChip(box, name, maxQty) {
@@ -633,7 +694,10 @@ function addPartChip(box, name, maxQty) {
         var query = box.querySelector('.part-query');
         if (query) query.value = '';
         var suggest = box.querySelector('.part-suggest');
-        if (suggest) suggest.innerHTML = '';
+        if (suggest) {
+            suggest.innerHTML = '';
+            floatSuggest(suggest);
+        }
         return;
     }
     var chip = document.createElement('div');
@@ -657,7 +721,10 @@ function addPartChip(box, name, maxQty) {
         query.focus();
     }
     var suggest = box.querySelector('.part-suggest');
-    if (suggest) suggest.innerHTML = '';
+    if (suggest) {
+        suggest.innerHTML = '';
+        floatSuggest(suggest);
+    }
 }
 
 function closeTicket(form) {

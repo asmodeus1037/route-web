@@ -930,3 +930,104 @@ body { padding-bottom: 96px; }
 @media (max-width: 640px) {
     body { padding: 8px; padding-bottom: 96px; }
 }
+
+.brand { position: relative; }
+.brand-out {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #475569;
+    font-size: 15px;
+    font-weight: 800;
+    text-decoration: none;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+}
+.darks-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+.darks-card .address { font-size: 17px; font-weight: 800; }
+.count-pill {
+    flex: 0 0 auto;
+    min-width: 40px;
+    height: 40px;
+    padding: 0 10px;
+    border-radius: 999px;
+    background: #e11d48;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 16px;
+}
+.fast-gos { font-size: 22px; }
+.ticket.fast-ticket { border-left: 5px solid #e11d48 !important; }
+.ticket.fast-ticket.todo { border-left-color: #2563eb !important; }
+.ticket.fast-ticket.processed,
+.ticket.fast-ticket.fail { border-left-color: #94a3b8 !important; }
+.ticket.fast-ticket.stripe-hot { border-left-color: #b91c1c !important; }
+.ticket.evacuation-form { border-left: 5px solid #ea580c !important; }
+.fast-btns.stacked { flex-direction: column; width: 100%; }
+.fast-btns.stacked .fast-ok,
+.fast-btns.stacked .fast-side {
+    width: 100%;
+    flex: none;
+    min-height: 48px;
+}
+.refuse-btn { margin: 0 0 12px; }
+.dock { grid-template-columns: repeat(4, 1fr) !important; }
+.dock a, .dock .dock-more {
+    font-size: 14px;
+    min-height: 52px;
+    border: 0;
+    background: transparent;
+    font-weight: 800;
+    color: #57534e;
+    padding: 10px 2px 12px;
+}
+.dock .dock-more.on, .dock a.on { color: #c0392b; }
+.more-sheet {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: calc(68px + env(safe-area-inset-bottom));
+    z-index: 50;
+    background: #fff;
+    border-radius: 16px;
+    box-shadow: 0 12px 40px rgba(15, 23, 42, 0.18);
+    overflow: hidden;
+}
+.more-sheet[hidden] { display: none !important; }
+.more-sheet a, .more-sheet button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: #fff;
+    border: 0;
+    border-bottom: 1px solid #f5f5f4;
+    padding: 16px 14px;
+    font: inherit;
+    font-size: 16px;
+    font-weight: 800;
+    color: #1e293b;
+    text-decoration: none;
+}
+.part-suggest.is-float {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    z-index: 70;
+    background: #fff;
+    border-radius: 14px;
+    box-shadow: 0 10px 32px rgba(15, 23, 42, 0.2);
+    padding: 8px;
+    max-height: 42vh;
+    overflow: auto;
+}
+
