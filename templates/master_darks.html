@@ -171,8 +171,8 @@
     <div id="tickets-container">
         {% for t in tickets %}
         {% set is_battery = t.type in ['Аккумуляторная батарея', 'Зарядное устройство'] %}
-        {% set is_evacuation = t.status == 'todo' and t.note and 'ЭВАКУАЦИЯ:' in t.note %}
-        {% set is_transit = name == 'Сергей Транзит' %}
+        {% set is_evacuation = (not is_battery) and t.status == 'evacuation' %}
+        {% set is_transit = name == 'Сергей Транзит' and not is_battery %}
         
         <!-- Если заявка на эвакуацию ИЛИ мастер Сергей Транзит - показываем форму замены -->
         {% if is_evacuation or is_transit %}
@@ -199,7 +199,7 @@
             </div>
             
             <div class="ticket-desc">{{ t.desc }}</div>
-            <div class="bike-kind {% if 'Неопределен' in (t.bike_type or '') %}kind-bad{% endif %}">{{ t.bike_type }}</div>
+            <div class="bike-kind {% if 'Неопределен' in (t.bike_type or '') %}kind-bad{% endif %}">{{ t.bike_type }}{% if t.supplier %} · {{ t.supplier }}{% endif %}</div>
             
             <div class="gos-display">
                 <span class="label">🚲 Велосипед:</span> {{ t.gos or 'Гос номер не указан' }}
@@ -209,6 +209,9 @@
             <div class="warning">
                 ⚠️ Этот велосипед нужно заменить!
             </div>
+            {% if t.evac_reason %}
+            <div class="ticket-desc">{{ t.evac_reason }}</div>
+            {% endif %}
             {% endif %}
             
             {% if is_transit and t.duplicate_count and t.duplicate_count > 1 %}
@@ -304,7 +307,7 @@
                     </div>
                     <div class="fast-desc">{{ t.desc }}</div>
                     {% if not is_battery %}
-                    <div class="bike-kind {% if 'Неопределен' in (t.bike_type or '') %}kind-bad{% endif %}">{{ t.bike_type }}</div>
+                    <div class="bike-kind {% if 'Неопределен' in (t.bike_type or '') %}kind-bad{% endif %}">{{ t.bike_type }}{% if t.supplier %} · {{ t.supplier }}{% endif %}</div>
                     {% endif %}
                 </div>
                 {% if t.status in ['pending', 'todo', 'processed', 'fail'] %}

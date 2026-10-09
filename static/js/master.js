@@ -358,6 +358,10 @@ function sendOrQueue(opts) {
                 showToast((data && data.error) ? data.error : 'Не получилось', true);
                 return;
             }
+            if (opts.reload) {
+                window.location.reload();
+                return;
+            }
             hideCard(false);
         })
         .catch(function() {
@@ -729,6 +733,7 @@ function openModal(name, darks, uid, type, title) {
                 method: 'POST',
                 body: formBody(fd),
                 uid: uid,
+                reload: true,
                 okText: 'Эвакуация отмечена'
             });
             closeModal('reasonModal');

@@ -91,6 +91,7 @@ MASTER_CREDENTIALS = {
 # ============================================================
 uid_index = {}
 darks_ref = {}
+_darks_loaded_at = 0
 queue_lock = threading.Lock()
 flush_lock = threading.Lock()
 
@@ -101,6 +102,12 @@ _iot_vehicles_memory = None
 # Глобальный gspread-клиент (переиспользование)
 _gspread_client = None
 _gspread_client_lock = threading.Lock()
+_workbook = None
+_tickets_mem = []
+_tickets_mem_at = 0
+_sheet_backoff_until = 0
+_sheet_read_lock = threading.Lock()
+_app_started_at = time.time()
 
 # ============================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -109,7 +116,17 @@ def get_msk_now():
     return datetime.now(MSK)
 
 def is_active_status(status):
-    return status in ['pending', 'todo', 'processed', 'fail']
+    return status in ['pending', 'todo', 'processed', 'fail', 'evacuation']
+
+def is_evacuation_ticket(ticket):
+    return (ticket or {}).get('status') == 'evacuation'
+
+def is_supply(ticket):
+    text = ' '.join([
+        str((ticket or {}).get('type') or ''),
+        str((ticket or {}).get('bike_type') or ''),
+    ]).lower()
+    return 'аккумулятор' in text or 'зарядн' in text
 
 def ticket_hours(ticket):
     if not ticket:
@@ -223,6 +240,21 @@ def update_ticket_in_admin_cache(uid, new_status, note='', display_desc='', extr
                     break
             if updated:
                 break
+        for ticket in _tickets_mem:
+            if ticket.get('uid') != uid:
+                continue
+            ticket['status'] = new_status
+            ticket['is_done'] = new_status == 'done'
+            ticket['is_active'] = is_active_status(new_status)
+            if note:
+                ticket['note'] = note
+            if display_desc:
+                ticket['display_desc'] = display_desc
+            if extra:
+                ticket.update(extra)
+            ticket['hours_since'] = ticket_hours(ticket)
+        if _tickets_mem:
+            store_ticket_memory(_tickets_mem, fresh=False)
         if updated:
             all_tickets = []
             for dir_name, dir_data in admin_cache.get('directions', {}).items():
@@ -248,8 +280,10 @@ def get_gspread_client():
         return _gspread_client
 
 def get_sheet_client():
-    client = get_gspread_client()
-    return client.open(SHEET_NAME)
+    global _workbook
+    if _workbook is None:
+        _workbook = get_gspread_client().open(SHEET_NAME)
+    return _workbook
 
 def get_iot_sheet_by_id(sheet_id, sheet_name=None):
     client = get_gspread_client()
@@ -268,13 +302,19 @@ def column_index(header, needles, default):
             return index
     return default
 
-def load_darks_reference():
-    global darks_ref
-    darks_ref = {}
+def is_quota_error(exc):
+    text = str(exc)
+    return '429' in text or 'Quota exceeded' in text or 'RATE_LIMIT' in text
+
+def load_darks_reference(force=False):
+    global darks_ref, _darks_loaded_at
+    if darks_ref and not force and time.time() - _darks_loaded_at < 90:
+        return darks_ref
     try:
         sheet_client = get_sheet_client()
         worksheet = sheet_client.worksheet("Дарксторы")
         rows = worksheet.get_all_values()
+        fresh = {}
         if len(rows) > 1:
             header = rows[0]
             i_address = column_index(header, ['адрес'], 1)
@@ -288,15 +328,20 @@ def load_darks_reference():
                 darks_num = str(row[0]).strip()
                 def cell(index):
                     return row[index].strip() if len(row) > index and row[index] else ''
-                darks_ref[darks_num] = {
+                fresh[darks_num] = {
                     'address': cell(i_address),
                     'direction': cell(i_direction),
                     'coords': cell(i_coords),
                     'master': cell(i_master),
                     'master_tg': cell(i_tg),
                 }
+        if fresh:
+            darks_ref = fresh
+            _darks_loaded_at = time.time()
     except Exception as e:
         logger.error(f"Ошибка загрузки Дарксторов: {e}")
+        if is_quota_error(e):
+            raise
     return darks_ref
 
 def enrich_tickets(tickets):
@@ -352,7 +397,24 @@ def normalize_gos(value):
     return re.sub(r'[^0-9A-Za-zА-Яа-я]', '', str(value or '')).upper()
 
 _bike_lookup_cache = {'ts': 0, 'by_dark_gos': {}}
-_bike_type_cache = {'ts': 0, 'by_gos': {}}
+_bike_type_cache = {'ts': 0, 'by_gos': {}, 'supplier': {}}
+_bike_rows_cache = {'ts': 0, 'rows': []}
+
+def sheet_col(header, titles, fallback):
+    wanted = {title.lower() for title in titles}
+    for index, cell in enumerate(header or []):
+        if str(cell).strip().lower() in wanted:
+            return index
+    return fallback
+
+def load_bike_rows():
+    now_ts = time.time()
+    if _bike_rows_cache['rows'] and now_ts - _bike_rows_cache['ts'] < 600:
+        return _bike_rows_cache['rows']
+    rows = get_sheet_client().worksheet('База данных вело').get_all_values()
+    _bike_rows_cache['rows'] = rows or []
+    _bike_rows_cache['ts'] = now_ts
+    return _bike_rows_cache['rows']
 
 def bike_lookup():
     now_ts = time.time()
@@ -360,7 +422,7 @@ def bike_lookup():
         return _bike_lookup_cache['by_dark_gos']
     mapping = {}
     try:
-        rows = get_sheet_client().worksheet('База данных вело').get_all_values()
+        rows = load_bike_rows()
         for row in rows[1:]:
             gos = normalize_gos(row[1] if len(row) > 1 else '')
             darks = row[4].strip() if len(row) > 4 else ''
@@ -375,6 +437,8 @@ def bike_lookup():
         _bike_lookup_cache['ts'] = now_ts
     except Exception as e:
         logger.error(f'Ошибка чтения базы вело: {e}')
+        if is_quota_error(e):
+            raise
     return _bike_lookup_cache['by_dark_gos']
 
 def fill_old_bike(tickets):
@@ -416,25 +480,39 @@ def notify_dark_event(darks, text):
             logger.warning(f'Не ушло сообщение куратору {darks}: {e}')
     threading.Thread(target=run, daemon=True).start()
 
+def supplier_of(gos_value):
+    return (_bike_type_cache.get('supplier') or {}).get(normalize_gos(gos_value), '')
+
 def get_bike_type_by_gos_map():
     now_ts = time.time()
     if _bike_type_cache['by_gos'] and now_ts - _bike_type_cache['ts'] < 600:
         return _bike_type_cache['by_gos']
     mapping = {}
+    suppliers = {}
     try:
-        rows = get_sheet_client().worksheet('База данных вело').get_all_values()
+        rows = load_bike_rows()
+        header = rows[0] if rows else []
+        gos_i = sheet_col(header, ['гос номер', 'госномер'], 1)
+        kind_i = sheet_col(header, ['тип вело'], 5)
+        company_i = sheet_col(header, ['компания', 'поставщик'], 8)
         for row in rows[1:]:
-            gos = normalize_gos(row[1] if len(row) > 1 else '')
-            kind = row[5].strip() if len(row) > 5 else ''
+            gos = normalize_gos(row[gos_i] if len(row) > gos_i else '')
+            kind = row[kind_i].strip() if len(row) > kind_i else ''
+            company = row[company_i].strip() if len(row) > company_i else ''
             if gos and kind:
                 mapping[gos] = kind
+            if gos and company:
+                suppliers[gos] = company
         _bike_type_cache['by_gos'] = mapping
+        _bike_type_cache['supplier'] = suppliers
         _bike_type_cache['ts'] = now_ts
     except Exception as e:
         logger.error(f"Ошибка чтения типов вело: {e}")
+        if is_quota_error(e):
+            raise
     return _bike_type_cache['by_gos']
 
-def get_tickets_from_sheets():
+def _read_tickets_from_google():
     global darks_ref
     sheet_client = get_sheet_client()
     tickets = []
@@ -462,12 +540,7 @@ def get_tickets_from_sheets():
                     elif status_raw in ['⏹️ Обработано', 'Обработано', 'Вело отсутствует']:
                         status = 'processed'
                     elif status_raw in ['🔧 Эвакуация', 'Эвакуация']:
-                        status = 'todo'
-                        if note:
-                            note = f'ЭВАКУАЦИЯ: {note}'
-                        else:
-                            desc = row[2].strip() if len(row) > 2 else ''
-                            note = f'ЭВАКУАЦИЯ: {desc}'
+                        status = 'evacuation'
                     else:
                         status = 'pending'
                 
@@ -484,6 +557,7 @@ def get_tickets_from_sheets():
                         display_type = bike_subtype
                     else:
                         display_type = bike_type or 'Не указан'
+                    supplier = supplier_of(gos_value)
                     uid = row[10].strip() if len(row) > 10 else ''
                     if not uid and created_str:
                         uid = generate_ticket_id(created_str)
@@ -492,12 +566,6 @@ def get_tickets_from_sheets():
                                 worksheet.update_cell(idx, 11, uid)
                             except:
                                 pass
-                    if not row[7].strip():
-                        try:
-                            worksheet.update_cell(idx, 8, '🟡 В работе')
-                            status = 'pending'
-                        except:
-                            pass
                     direction = row[11].strip() if len(row) > 11 else ''
                     if not direction and darks_num in darks_ref:
                         direction = darks_ref[darks_num].get('direction', '')
@@ -508,8 +576,11 @@ def get_tickets_from_sheets():
                             count = match.group(1)
                             display_desc = f'Вернуть {count} АКБ (забирали на ремонт)'
                 
-                    if status == 'todo' and note and note.startswith('ЭВАКУАЦИЯ:'):
-                        display_desc = note.replace('ЭВАКУАЦИЯ: ', '')
+                    evac_reason = ''
+                    if status == 'evacuation':
+                        if note and not note.startswith('ЭВАКУАЦИЯ:'):
+                            note = f'ЭВАКУАЦИЯ: {note}'
+                        evac_reason = evacuation_reason({'note': note, 'desc': display_desc})
                 
                     tickets.append({
                         'source': sheet_name,
@@ -517,6 +588,7 @@ def get_tickets_from_sheets():
                         'type': bike_type,
                         'bike_type': display_type,
                         'bike_subtype': bike_subtype,
+                        'supplier': supplier,
                         'desc': display_desc,
                         'gos': gos_value,
                         'contact': row[4].strip() if len(row) > 4 else '',
@@ -526,6 +598,7 @@ def get_tickets_from_sheets():
                         'master': row[6].strip() if len(row) > 6 else '',
                         'status': status,
                         'note': note,
+                        'evac_reason': evac_reason,
                         'uid': uid,
                         'row_index': idx,
                         'address': darks_ref.get(darks_num, {}).get('address', ''),
@@ -539,6 +612,8 @@ def get_tickets_from_sheets():
                     })
         except Exception as e:
             logger.error(f"Ошибка чтения '{sheet_name}': {e}")
+            if is_quota_error(e):
+                raise
 
     
     try:
@@ -571,14 +646,20 @@ def get_tickets_from_sheets():
                 status_l = row[11].strip() if len(row) > 11 else ''
                 note = row[12].strip() if len(row) > 12 else ''
                 
-                if status_raw == 'Решено' or status_l == 'Выполнено':
+                if status_raw == 'Решено' or status_l in ('Выполнено', '✅ Выполнено'):
                     status = 'done'
                     is_done = True
-                elif status_l == 'Эвакуация':
+                elif status_l in ('Эвакуация', '🔧 Эвакуация'):
+                    status = 'evacuation'
+                    is_done = False
+                    if note and not note.startswith('ЭВАКУАЦИЯ:'):
+                        note = f'ЭВАКУАЦИЯ: {note}'
+                elif status_l in ('Доделать', '🔵 Доделать'):
                     status = 'todo'
                     is_done = False
-                    if note:
-                        note = f'ЭВАКУАЦИЯ: {note}'
+                elif status_l in ('Обработано', '⏹️ Обработано', 'Вело отсутствует'):
+                    status = 'processed'
+                    is_done = False
                 else:
                     status = 'pending'
                     is_done = False
@@ -590,6 +671,7 @@ def get_tickets_from_sheets():
                     'darks': darks_num,
                     'type': bike_type,
                     'bike_type': bike_type,
+                    'supplier': supplier_of(gos),
                     'desc': row[7].strip() if len(row) > 7 else '',
                     'gos': gos,
                     'created': created_str,
@@ -609,8 +691,55 @@ def get_tickets_from_sheets():
                 })
     except Exception as e:
         logger.error(f"Ошибка чтения 'Импорт М4': {e}")
+        if is_quota_error(e):
+            raise
     
     return tickets
+
+def store_ticket_memory(tickets, fresh=False):
+    global _tickets_mem, _tickets_mem_at, uid_index
+    _tickets_mem = list(tickets or [])
+    uid_index = build_uid_index(_tickets_mem)
+    if fresh:
+        _tickets_mem_at = time.time()
+    return _tickets_mem
+
+def publish_caches(tickets):
+    enrich_tickets(tickets)
+    save_admin_cache(tickets)
+    for master in MASTERS:
+        master_tickets = [t for t in tickets if clean_name(t.get('master')) == clean_name(master) and is_active_status(t.get('status'))]
+        save_master_cache(master, master_tickets, '')
+
+def get_tickets_from_sheets(force=False):
+    global _sheet_backoff_until
+    now = time.time()
+    if _tickets_mem and not force and now - _tickets_mem_at < 120:
+        return _tickets_mem
+    if now < _sheet_backoff_until:
+        logger.info('Google ограничил чтение, берём прошлую копию')
+        return _tickets_mem
+    if not _sheet_read_lock.acquire(blocking=False):
+        return _tickets_mem
+    try:
+        now = time.time()
+        if _tickets_mem and not force and now - _tickets_mem_at < 120:
+            return _tickets_mem
+        if now < _sheet_backoff_until:
+            return _tickets_mem
+        tickets = _read_tickets_from_google()
+        store_ticket_memory(tickets, fresh=True)
+        logger.info(f'Таблица прочитана: {len(tickets)} заявок')
+        return _tickets_mem
+    except Exception as e:
+        if is_quota_error(e):
+            _sheet_backoff_until = time.time() + 75
+            logger.warning('Лимит Google. Пауза 75 секунд, работаем на прошлой копии.')
+        else:
+            logger.error(f'Ошибка чтения таблицы: {e}')
+        return _tickets_mem
+    finally:
+        _sheet_read_lock.release()
 
 def refresh_admin_cache():
     try:
@@ -623,7 +752,6 @@ def refresh_admin_cache():
 
 def refresh_master_cache(master_name):
     try:
-        flush_queue()
         tickets = get_tickets_from_sheets()
         wanted = clean_name(master_name)
         master_tickets = [t for t in tickets if clean_name(t.get('master')) == wanted and is_active_status(t.get('status'))]
@@ -637,12 +765,9 @@ def refresh_master_cache(master_name):
 
 def refresh_all_master_caches():
     try:
-        flush_queue()
         tickets = get_tickets_from_sheets()
-        for master in MASTERS:
-            master_tickets = [t for t in tickets if t.get('master') == master and is_active_status(t.get('status'))]
-            save_master_cache(master, master_tickets, '')
-        logger.info("✅ Кэши всех мастеров обновлены")
+        publish_caches(tickets)
+        logger.info("✅ Кэши всех мастеров обновлены из копии")
     except Exception as e:
         logger.error(f"Ошибка обновления кэшей мастеров: {e}")
 
@@ -680,69 +805,58 @@ def batch_update_masters(changes):
         if updates_import:
             worksheet = sheet_client.worksheet("Импорт М4")
             worksheet.batch_update(updates_import)
-        tickets = get_tickets_from_sheets()
-        uid_index = build_uid_index(tickets)
-        save_admin_cache(tickets)
+        for change in changes:
+            for ticket in _tickets_mem:
+                if ticket.get('uid') == change.get('uid'):
+                    ticket['master'] = change.get('master') or ''
+        store_ticket_memory(_tickets_mem, fresh=False)
+        publish_caches(_tickets_mem)
         return updated_count
     except Exception as e:
         logger.error(f"Ошибка batch_update_masters: {e}")
         return 0
 
+def clear_masters(master_name=None):
+    wanted = clean_name(master_name) if master_name else ''
+    tickets = list(_tickets_mem or get_tickets_from_sheets())
+    grouped = {}
+    cleared = 0
+    for ticket in tickets:
+        if not ticket.get('master') or not is_active_status(ticket.get('status')):
+            continue
+        if wanted and clean_name(ticket.get('master')) != wanted:
+            continue
+        row_idx = ticket.get('row_index')
+        source = ticket.get('source') or 'Заявки'
+        if not row_idx:
+            continue
+        column = 'N' if source == 'Импорт М4' else 'G'
+        grouped.setdefault(source, []).append({'range': f'{column}{row_idx}', 'values': [['']]})
+        ticket['master'] = ''
+        cleared += 1
+    if grouped:
+        book = get_sheet_client()
+        for source, updates in grouped.items():
+            book.worksheet(source).batch_update(updates)
+            logger.info(f"✅ Снято {len(updates)} мастеров в '{source}'")
+    store_ticket_memory(tickets, fresh=False)
+    publish_caches(tickets)
+    return cleared
+
 def clear_all_masters():
     try:
-        sheet_client = get_sheet_client()
-        cleared = 0
-        updates_import = []
-        sheet_client = get_sheet_client()
-        
-        for sheet_name in ('Заявки', 'Заявки бот'):
-            try:
-                worksheet = sheet_client.worksheet(sheet_name)
-            except Exception:
-                continue
-            all_rows = worksheet.get_all_values()
-            updates_zayavki = []
-            for idx, row in enumerate(all_rows, start=1):
-                if idx == 1:
-                    continue
-                if len(row) > 7:
-                    status = row[7].strip() if len(row) > 7 else ''
-                    if status in ['🟡 В работе', '🔵 Доделать', 'В работе', 'Доделать', 'pending', 'todo']:
-                        current_master = row[6].strip() if len(row) > 6 else ''
-                        if current_master:
-                            updates_zayavki.append({'range': f'G{idx}', 'values': [['']]})
-                            cleared += 1
-            if updates_zayavki:
-                worksheet.batch_update(updates_zayavki)
-                logger.info(f"✅ Снято {len(updates_zayavki)} мастеров в '{sheet_name}'")
-
-        try:
-            worksheet_import = sheet_client.worksheet("Импорт М4")
-            import_rows = worksheet_import.get_all_values()
-            for idx, row in enumerate(import_rows, start=1):
-                if idx == 1:
-                    continue
-                if len(row) > 14:
-                    status = row[11].strip() if len(row) > 11 else ''
-                    if status in ['В работе', 'Доделать', 'pending', 'todo']:
-                        current_master = row[13].strip() if len(row) > 13 else ''
-                        if current_master:
-                            updates_import.append({'range': f'N{idx}', 'values': [['']]})
-                            cleared += 1
-            if updates_import:
-                worksheet_import.batch_update(updates_import)
-                logger.info(f"✅ Снято {len(updates_import)} мастеров в 'Импорт М4'")
-        except Exception:
-            pass
-        
-        tickets = get_tickets_from_sheets()
-        uid_index = build_uid_index(tickets)
-        save_admin_cache(tickets)
-        refresh_all_master_caches()
-        
-        return cleared
+        return clear_masters()
     except Exception as e:
         logger.error(f"Ошибка снятия всех мастеров: {e}")
+        return 0
+
+def clear_one_master(master_name):
+    if not clean_name(master_name):
+        return 0
+    try:
+        return clear_masters(master_name)
+    except Exception as e:
+        logger.error(f"Ошибка снятия мастера {master_name}: {e}")
         return 0
 
 def update_status_in_google_sheets(uid, status, note=''):
@@ -784,27 +898,11 @@ def update_status_in_google_sheets(uid, status, note=''):
         return False
 
 def find_uid_in_sheets(uid):
-    try:
-        sheet_client = get_sheet_client()
-        
-        for sheet_name in ('Заявки', 'Заявки бот'):
-            try:
-                worksheet = sheet_client.worksheet(sheet_name)
-            except Exception:
-                continue
-            cell = worksheet.find(uid)
-            if cell:
-                return {'source': sheet_name, 'row_index': cell.row}
-        
-        worksheet = sheet_client.worksheet("Импорт М4")
-        cell = worksheet.find(uid)
-        if cell:
-            return {'source': 'Импорт М4', 'row_index': cell.row}
-        
+    item = uid_index.get(uid) if uid else None
+    if not item:
         return None
-    except Exception as e:
-        logger.error(f"Ошибка поиска UID {uid}: {e}")
-        return None
+    ticket = item.get('ticket') or {}
+    return {'source': ticket.get('source') or 'Заявки', 'row_index': item.get('row_index')}
 
 # ============================================================
 # ОЧЕРЕДЬ ЗАДАЧ
@@ -940,9 +1038,13 @@ def apply_queue_to_sheets(tasks):
             updates.append({'range': f'H{row_idx}', 'values': [['⏹️ Обработано']]})
             updates.append({'range': f'J{row_idx}', 'values': [[data.get('note', '')]]})
             updates.append({'range': f'O{row_idx}', 'values': [[data.get('timer_from', '')]]})
-        elif task_type in ('done', 'replace_yes', 'transit_replace'):
+        elif task_type in ('done', 'replace_yes', 'transit_replace', 'evacuation_and_replace', 'transit_bulk_close'):
             updates.append({'range': f'H{row_idx}', 'values': [['✅ Выполнено']]})
-            parts = data.get('note') or data.get('parts') or data.get('extra') or ''
+            parts = data.get('parts') or data.get('extra') or ''
+            if task_type == 'done':
+                parts = data.get('parts') or ''
+            elif task_type == 'evacuation_and_replace':
+                parts = 'Заменен'
             if parts:
                 updates.append({'range': f'J{row_idx}', 'values': [[parts]]})
         elif task_type == 'evacuation':
@@ -960,7 +1062,7 @@ def apply_queue_to_sheets(tasks):
                 updates.append({'range': f'J{row_idx}', 'values': [[data.get('note')]]})
     import_updates = []
     for task in tasks:
-        if task.get('source') != 'Импорт М4' or task.get('type') != 'status_update':
+        if task.get('source') != 'Импорт М4':
             continue
         uid = task.get('uid')
         row_idx = get_ticket_row_by_uid(uid)
@@ -970,6 +1072,7 @@ def apply_queue_to_sheets(tasks):
                 continue
             row_idx = found['row_index']
         data = task.get('data') or {}
+        task_type = task.get('type')
         status_map_import = {
             '🟡 В работе': 'В работе',
             '✅ Выполнено': 'Выполнено',
@@ -977,9 +1080,30 @@ def apply_queue_to_sheets(tasks):
             '⏹️ Обработано': 'Обработано',
             '🔧 Эвакуация': 'Эвакуация'
         }
-        import_updates.append({'range': f'L{row_idx}', 'values': [[status_map_import.get(data.get('status'), 'В работе')]]})
-        if data.get('note'):
-            import_updates.append({'range': f'M{row_idx}', 'values': [[data.get('note')]]})
+        clear_master = False
+        if task_type == 'fail':
+            sheet_status, sheet_note = 'Обработано', data.get('note') or ''
+            clear_master = True
+        elif task_type in ('done', 'replace_yes', 'transit_replace', 'evacuation_and_replace', 'transit_bulk_close'):
+            sheet_status = 'Выполнено'
+            sheet_note = 'Заменен' if task_type == 'evacuation_and_replace' else (data.get('parts') or data.get('extra') or '')
+        elif task_type == 'evacuation':
+            sheet_status, sheet_note = 'Эвакуация', data.get('reason') or 'Эвакуация'
+        elif task_type == 'taken_no_replace':
+            sheet_status, sheet_note = 'Доделать', f"ЗАБРАЛИ: {data.get('parts', '')} АКБ"
+        elif task_type == 'replace_no':
+            sheet_status, sheet_note = 'Доделать', data.get('reason') or 'Куратор не предоставил'
+        elif task_type == 'status_update':
+            sheet_status = status_map_import.get(data.get('status'), 'В работе')
+            sheet_note = data.get('note') or ''
+            clear_master = data.get('status') == '⏹️ Обработано'
+        else:
+            continue
+        import_updates.append({'range': f'L{row_idx}', 'values': [[sheet_status]]})
+        if sheet_note:
+            import_updates.append({'range': f'M{row_idx}', 'values': [[sheet_note]]})
+        if clear_master:
+            import_updates.append({'range': f'N{row_idx}', 'values': [['']]})
     written = 0
     sheet_client = get_sheet_client()
     for sheet_name, sheet_updates in buckets.items():
@@ -1314,6 +1438,13 @@ def process_queue_background():
         try:
             time.sleep(10)
             flush_queue()
+            quiet = time.time() < _sheet_backoff_until
+            stale = (not _tickets_mem_at) or (time.time() - _tickets_mem_at >= 120)
+            if stale and not quiet and time.time() - _app_started_at > 20:
+                tickets = get_tickets_from_sheets(force=True)
+                if tickets:
+                    publish_caches(tickets)
+                    logger.info(f'Фоновое обновление: {len(tickets)} заявок')
         except Exception as e:
             logger.error(f"❌ Ошибка в фоновом процессе: {e}")
 
@@ -1348,7 +1479,7 @@ def curator_notice_groups():
                 name = ticket.get('type')
             else:
                 name = ticket.get('gos') or 'Без номера'
-            mark = ' — ЗАМЕНА' if 'ЭВАКУАЦИЯ' in (ticket.get('note') or '') else ''
+            mark = ' — ЗАМЕНА' if is_evacuation_ticket(ticket) else ''
             lines.append(f'   {name} | {(ticket.get("desc") or "-")}{mark}')
         lines.append('')
         lines.append('Подготовьте, пожалуйста, технику к ремонту')
@@ -1406,6 +1537,8 @@ def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not session.get('authenticated'):
+            if request.path.startswith('/api/'):
+                return jsonify({'success': False, 'error': 'Сессия истекла. Обновите страницу и войдите снова.'}), 401
             return redirect(url_for('login_page'))
         return f(*args, **kwargs)
     return decorated_function
@@ -1511,15 +1644,27 @@ def admin_panel():
 def api_sync():
     global uid_index, darks_ref
     try:
+        age = time.time() - _tickets_mem_at if _tickets_mem_at else 999
+        if _tickets_mem and age < 90:
+            return jsonify({
+                'success': True,
+                'cached': True,
+                'count': len(_tickets_mem),
+                'message': 'Данные уже свежие, таблицу не открывал',
+            })
+        if time.time() < _sheet_backoff_until:
+            return jsonify({
+                'success': False,
+                'error': 'Google ограничил чтение. Подождите минуту, работаем на прошлой копии.',
+            })
         logger.info("🔄 Начинаем синхронизацию с Google Sheets...")
         flush_queue()
-        darks_ref = load_darks_reference()
-        tickets = get_tickets_from_sheets()
-        uid_index = build_uid_index(tickets)
-        save_admin_cache(tickets)
-        refresh_all_master_caches()
+        tickets = get_tickets_from_sheets(force=True)
+        if not _tickets_mem and time.time() < _sheet_backoff_until:
+            return jsonify({'success': False, 'error': 'Google ограничил чтение. Подождите минуту.'})
+        publish_caches(_tickets_mem or tickets)
         logger.info(f"✅ Синхронизация завершена: {len(tickets)} заявок")
-        return jsonify({'success': True, 'tickets': tickets, 'count': len(tickets)})
+        return jsonify({'success': True, 'cached': False, 'count': len(tickets)})
     except Exception as e:
         logger.error(f"Ошибка синхронизации: {e}")
         return jsonify({'success': False, 'error': str(e)})
@@ -1575,7 +1720,7 @@ def master_route_text(master_name):
         for ticket in group[:20]:
             label = ticket_label(ticket)
             desc = (ticket.get('desc') or '').replace('\n', ' ').strip()
-            prefix = 'ЗАМЕНА. ' if 'ЭВАКУАЦИЯ' in (ticket.get('note') or '') else ''
+            prefix = 'ЗАМЕНА. ' if is_evacuation_ticket(ticket) else ''
             lines.append(f'• {label} — {prefix}{desc[:90]}')
         extra = len(group) - 20
         if extra > 0:
@@ -1648,8 +1793,8 @@ def api_send_route():
 @app.route('/api/send_route_all', methods=['POST'])
 @login_required
 def api_send_route_all():
+    refresh_all_master_caches()
     for master in MASTERS:
-        refresh_master_cache(master)
         notify_master_route(master)
     return jsonify({'success': True, 'message': 'Кэши всех мастеров обновляются'})
 
@@ -1657,6 +1802,16 @@ def api_send_route_all():
 @login_required
 def api_clear_dates():
     cleared = clear_all_masters()
+    return jsonify({'success': True, 'cleared': cleared})
+
+@app.route('/api/clear_master', methods=['POST'])
+@login_required
+def api_clear_master():
+    data = request.json or {}
+    master = (data.get('master') or '').strip()
+    if not master:
+        return jsonify({'success': False, 'error': 'Не указан мастер'})
+    cleared = clear_one_master(master)
     return jsonify({'success': True, 'cleared': cleared})
 
 @app.route('/api/notify_curators', methods=['POST'])
@@ -1686,12 +1841,17 @@ def queue_admin_status(uid, status_display, note='', skip_report=True, actor='А
         return
     ticket = find_cached_ticket(uid) or {}
     previous = (ticket.get('note') or '').strip()
+    extra = None
     if status_display == '🔧 Эвакуация':
-        new_status = 'todo'
+        if is_supply(ticket):
+            logger.info(f'Эвакуация запрещена для {uid}: это аккумулятор или зарядка')
+            return
+        new_status = 'evacuation'
         plain = (note or 'Эвакуация').replace('ЭВАКУАЦИЯ: ', '').strip() or 'Эвакуация'
         line = 'ЭВАКУАЦИЯ: ' + plain
         sheet_note = f'{previous}\n{line}'.strip() if previous else line
         cache_note = sheet_note
+        extra = {'evac_reason': plain}
     elif status_display == '🔵 Доделать':
         new_status = 'todo'
         text = (note or '').strip() or 'Доделать'
@@ -1710,7 +1870,7 @@ def queue_admin_status(uid, status_display, note='', skip_report=True, actor='А
     source = 'Заявки'
     if uid in uid_index:
         source = (uid_index[uid].get('ticket') or {}).get('source') or 'Заявки'
-    update_ticket_in_admin_cache(uid, new_status, cache_note)
+    update_ticket_in_admin_cache(uid, new_status, cache_note, extra=extra)
     add_to_queue({
         'uid': uid,
         'source': source,
@@ -1733,6 +1893,9 @@ def api_update_status():
     skip_report = data.get('skip_report', True)
     if not uid or not status_display:
         return jsonify({'success': False, 'error': 'Недостаточно данных'})
+    ticket = find_cached_ticket(uid) or {}
+    if status_display == '🔧 Эвакуация' and is_supply(ticket):
+        return jsonify({'success': False, 'error': 'Для аккумулятора и зарядки эвакуацию ставить нельзя'})
     try:
         queue_admin_status(uid, status_display, note, skip_report, 'Админ' if session.get('role') == 'admin' else (session.get('master_name') or 'Админ'))
         refresh_master_caches_from_admin()
@@ -1772,33 +1935,27 @@ def api_admin_action():
     if not uid or not action:
         return jsonify({'success': False, 'error': 'Недостаточно данных'})
     try:
+        actor = session.get('master_name') or 'Админ'
         if action == 'done':
-            status_display = '✅ Выполнено'
-            update_ticket_in_admin_cache(uid, 'done', extra or 'Выполнено админом', status_display)
-            update_status_in_google_sheets(uid, status_display, extra)
+            queue_admin_status(uid, '✅ Выполнено', extra or 'Выполнено админом', True, actor)
         elif action == 'evacuation':
-            status_display = '🔧 Эвакуация'
-            tickets = get_tickets_from_sheets()
-            desc = ''
-            for t in tickets:
-                if t.get('uid') == uid:
-                    desc = t.get('desc', 'Эвакуация')
-                    break
-            update_ticket_in_admin_cache(uid, 'todo', f'ЭВАКУАЦИЯ: {desc}', status_display)
-            update_status_in_google_sheets(uid, status_display, desc)
+            queue_admin_status(uid, '🔧 Эвакуация', extra or 'Эвакуация', True, actor)
         elif action == 'fail':
-            mark_bike_missing(uid, session.get('master_name') or 'Админ')
+            mark_bike_missing(uid, actor)
         elif action == 'todo':
-            status_display = '🔵 Доделать'
-            update_ticket_in_admin_cache(uid, 'todo', 'Доделать', status_display)
-            update_status_in_google_sheets(uid, status_display, 'Доделать')
+            queue_admin_status(uid, '🔵 Доделать', extra or 'Доделать', True, actor)
         elif action == 'taken':
-            status_display = '🔵 Доделать'
             note = f'ЗАБРАЛИ: {extra} АКБ'
-            update_ticket_in_admin_cache(uid, 'todo', note, status_display)
-            update_status_in_google_sheets(uid, status_display, note)
+            update_ticket_in_admin_cache(uid, 'todo', note)
+            add_to_queue({
+                'uid': uid,
+                'source': source_of(uid),
+                'type': 'taken_no_replace',
+                'data': {'parts': extra, 'note': note, 'master': actor}
+            })
         else:
             return jsonify({'success': False, 'error': 'Неизвестное действие'})
+        refresh_master_caches_from_admin()
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -2115,20 +2272,14 @@ def master_done(name, darks_number, uid):
             return jsonify({'success': False, 'error': 'Выберите запчасть или напишите «нет»'})
         parts = parts_text
     event = parts
-    previous = (ticket.get('note') or '').strip()
-    full_note = f'{previous}\n{event}'.strip() if previous else event
-    
-    cache_data = get_master_cache(name)
-    if cache_data:
-        tickets = cache_data.get('tickets', [])
-        tickets = [t for t in tickets if t.get('uid') != uid]
-        save_master_cache(name, tickets, '')
+    update_ticket_in_admin_cache(uid, 'done', event)
+    refresh_master_caches_from_admin()
     
     add_to_queue({
         'uid': uid,
         'source': source_of(uid),
         'type': 'done',
-        'data': {'parts': event, 'detail': event, 'note': full_note, 'master': name, 'darks_number': darks_number, 'gos': ticket.get('gos', '')}
+        'data': {'parts': event, 'detail': event, 'note': event, 'master': name, 'darks_number': darks_number, 'gos': ticket.get('gos', '')}
     })
     label = ticket_label(ticket)
     if parts == 'Отказ от эвакуации':
@@ -2153,16 +2304,20 @@ def master_evacuation(name, darks_number, uid):
     reason = request.form.get('reason', '')
     if not reason.strip():
         return jsonify({'success': False, 'error': 'Не указана причина'})
-    cache_data = get_master_cache(name)
-    if cache_data:
-        tickets = cache_data.get('tickets', [])
-        tickets = [t for t in tickets if t.get('uid') != uid]
-        save_master_cache(name, tickets, '')
+    ticket = find_cached_ticket(uid) or {}
+    if is_supply(ticket):
+        return jsonify({'success': False, 'error': 'Для аккумулятора и зарядки эвакуацию ставить нельзя'})
+    reason = reason.strip()
+    previous = (ticket.get('note') or '').strip()
+    line = 'ЭВАКУАЦИЯ: ' + reason
+    note = f'{previous}\n{line}'.strip() if previous else line
+    update_ticket_in_admin_cache(uid, 'evacuation', note, extra={'evac_reason': reason})
+    refresh_master_caches_from_admin()
     add_to_queue({
         'uid': uid,
         'source': source_of(uid),
         'type': 'evacuation',
-        'data': {'reason': reason, 'master': name, 'darks_number': darks_number, 'gos': (find_cached_ticket(uid) or {}).get('gos', '')}
+        'data': {'reason': reason, 'note': note, 'master': name, 'darks_number': darks_number, 'gos': ticket.get('gos', '')}
     })
     label = ticket_label(find_cached_ticket(uid) or {'gos': request.form.get('gos', '')})
     notify_dark_event(darks_number, f'{label} нужно эвакуировать: {reason.strip()}')
@@ -2176,16 +2331,14 @@ def master_taken_no_replace(name, darks_number, uid):
     parts = request.form.get('parts', '')
     if not parts or int(parts) <= 0:
         return jsonify({'success': False, 'error': 'Укажите количество'})
-    cache_data = get_master_cache(name)
-    if cache_data:
-        tickets = cache_data.get('tickets', [])
-        tickets = [t for t in tickets if t.get('uid') != uid]
-        save_master_cache(name, tickets, '')
+    note = f'ЗАБРАЛИ: {parts} АКБ'
+    update_ticket_in_admin_cache(uid, 'todo', note)
+    refresh_master_caches_from_admin()
     add_to_queue({
         'uid': uid,
         'source': source_of(uid),
         'type': 'taken_no_replace',
-        'data': {'parts': parts, 'master': name, 'darks_number': darks_number}
+        'data': {'parts': parts, 'note': note, 'master': name, 'darks_number': darks_number}
     })
     return jsonify({'success': True})
 
@@ -2204,11 +2357,8 @@ def master_replace_yes(name, darks_number, uid):
     parts = request.form.get('parts', '')
     if not parts or int(parts) <= 0:
         return jsonify({'success': False, 'error': 'Укажите количество'})
-    cache_data = get_master_cache(name)
-    if cache_data:
-        tickets = cache_data.get('tickets', [])
-        tickets = [t for t in tickets if t.get('uid') != uid]
-        save_master_cache(name, tickets, '')
+    update_ticket_in_admin_cache(uid, 'done', parts)
+    refresh_master_caches_from_admin()
     add_to_queue({
         'uid': uid,
         'source': source_of(uid),
@@ -2222,16 +2372,14 @@ def master_replace_yes(name, darks_number, uid):
 def master_replace_no(name, darks_number, uid):
     if session.get('master_name') != name:
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
-    cache_data = get_master_cache(name)
-    if cache_data:
-        tickets = cache_data.get('tickets', [])
-        tickets = [t for t in tickets if t.get('uid') != uid]
-        save_master_cache(name, tickets, '')
+    reason = (request.form.get('reason') or '').strip() or 'Куратор не предоставил'
+    update_ticket_in_admin_cache(uid, 'todo', reason)
+    refresh_master_caches_from_admin()
     add_to_queue({
         'uid': uid,
         'source': source_of(uid),
         'type': 'replace_no',
-        'data': {'master': name, 'darks_number': darks_number}
+        'data': {'reason': reason, 'master': name, 'darks_number': darks_number}
     })
     return jsonify({'success': True})
 
@@ -3201,18 +3349,9 @@ if __name__ == "__main__":
     
     try:
         logger.info("📂 Загрузка данных из Google Sheets...")
-        load_darks_reference()
-        tickets = get_tickets_from_sheets()
-        uid_index = build_uid_index(tickets)
-        
-        save_admin_cache(tickets)
-        logger.info(f"✅ Админ кэш создан: {len(tickets)} заявок")
-        
-        logger.info("📂 Создание кэшей для мастеров...")
-        for master in MASTERS:
-            master_tickets = [t for t in tickets if t.get('master') == master and is_active_status(t.get('status'))]
-            save_master_cache(master, master_tickets, '')
-            logger.info(f"   ✅ Кэш для {master}: {len(master_tickets)} заявок")
+        tickets = get_tickets_from_sheets(force=True)
+        publish_caches(tickets)
+        logger.info(f"✅ Кэши созданы: {len(tickets)} заявок")
         
         # Создаём кэш IOT при старте
         logger.info("📂 Создание IOT кэшей...")

@@ -7,6 +7,15 @@
     <title>Админ-панель</title>
     <link rel="manifest" href="/manifest.json">
     <link rel="stylesheet" href="/static/css/admin.css">
+    <style>
+        .origin-badge, .supplier-badge { display:inline-block; margin-left:6px; padding:1px 6px; border-radius:8px; font-size:10px; font-weight:700; vertical-align:middle; }
+        .origin-site { background:#dbeafe; color:#1d4ed8; }
+        .origin-bot { background:#dcfce7; color:#166534; }
+        .origin-m4 { background:#f3e8ff; color:#6b21a8; }
+        .supplier-badge { background:#fff7ed; color:#9a3412; }
+        .supplier-vanta { background:#e0f2fe; color:#075985; }
+        .supplier-step { background:#ffedd5; color:#9a3412; }
+    </style>
 </head>
 <body>
 <div class="container" id="appContainer">
@@ -65,7 +74,8 @@
         <label>Источник:</label>
         <select id="sourceFilter" onchange="renderCurrentTab()">
             <option value="all">Все</option>
-            <option value="Заявки">Заявки</option>
+            <option value="Заявки">Сайт</option>
+            <option value="Заявки бот">Бот</option>
             <option value="Импорт М4">Импорт М4</option>
         </select>
         <input type="text" id="searchInput" placeholder="🔍 Поиск..." oninput="renderCurrentTab()">
@@ -79,6 +89,8 @@
         <div class="stat-card"><div class="num" id="todoCount">0</div><div class="label">🔵 Доделать</div></div>
         <div class="stat-card"><div class="num" id="processedCount">0</div><div class="label">Обработано</div></div>
         <div class="stat-card"><div class="num" id="unassignedCount">0</div><div class="label">Не назначены</div></div>
+        <div class="stat-card"><div class="num" id="siteCount">0</div><div class="label">Сайт</div></div>
+        <div class="stat-card"><div class="num" id="botCount">0</div><div class="label">Бот</div></div>
     </div>
     
     <div class="queue-bar" id="queueBar">
@@ -159,29 +171,6 @@
         <div style="margin-top:12px;text-align:right;">
             <button class="btn btn-outline" onclick="closeClearMasterModal()">Отмена</button>
             <button class="btn btn-danger" onclick="clearMaster()">🧹 Снять</button>
-        </div>
-    </div>
-</div>
-
-<!-- Модалка действий админа -->
-<div class="modal" id="actionModal">
-    <div class="modal-content">
-        <button class="close-btn" onclick="closeActionModal()">×</button>
-        <h3>⚙️ Действия с заявкой</h3>
-        <p style="color:#64748b;margin-bottom:12px;">Выберите действие для заявки <strong id="actionUidDisplay"></strong></p>
-        <div id="actionButtons">
-            <button class="btn btn-done" onclick="selectAction('done')">✅ Выполнено</button>
-            <button class="btn btn-evacuation" onclick="selectAction('evacuation')">🚚 Эвакуация</button>
-            <button class="btn btn-fail" onclick="selectAction('fail')">🚫 Вело отсутствует</button>
-            <button class="btn btn-warning" onclick="selectAction('todo')">🔧 Доделать</button>
-            <button class="btn btn-taken" onclick="selectAction('taken')">📦 Забрал без замены</button>
-        </div>
-        <div id="actionExtra" style="display:none;margin-top:12px;">
-            <input type="text" id="actionExtraInput" placeholder="Дополнительная информация..." style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
-        </div>
-        <div style="margin-top:12px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
-            <button class="btn btn-outline" onclick="closeActionModal()">Отмена</button>
-            <button class="btn btn-success" onclick="submitAction()">✅ Подтвердить</button>
         </div>
     </div>
 </div>

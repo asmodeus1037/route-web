@@ -19,6 +19,22 @@ var TAB_NAMES = ['Напр 1', 'Напр 2', 'Напр 3', 'Напр 4', 'Без
 // ============================================================
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ============================================================
+function readApi(response) {
+    if (response.status === 401) {
+        throw new Error('Сессия истекла. Обновите страницу и войдите снова.');
+    }
+    var type = response.headers.get('content-type') || '';
+    if (type.indexOf('application/json') === -1) {
+        throw new Error('Сессия истекла. Обновите страницу и войдите снова.');
+    }
+    return response.json();
+}
+
+function isSupplyTicket(ticket) {
+    var text = ((ticket && (ticket.type || '')) + ' ' + ((ticket && ticket.bike_type) || '')).toLowerCase();
+    return text.indexOf('аккумулятор') !== -1 || text.indexOf('зарядн') !== -1;
+}
+
 function showToast(message, isError) {
     var toast = document.getElementById('toast');
     if (!toast) {
@@ -144,7 +160,7 @@ function sendNotification() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: preview })
     })
-    .then(function(r) { return r.json(); })
+    .then(readApi)
     .then(function(data) {
         if (data.success) {
             showToastModern('✅ Уведомления отправлены!', 'success');
@@ -206,6 +222,11 @@ function updateStatus(select) {
         select.value = oldStatus;
         return;
     }
+    if (status === '🔧 Эвакуация' && isSupplyTicket(ticket)) {
+        alert('Для аккумулятора и зарядного устройства эвакуацию ставить нельзя');
+        select.value = oldStatus;
+        return;
+    }
     applyStatusToTicket(ticket, status, note);
     if (select) select.dataset.oldStatus = status;
     renderCurrentTab();
@@ -214,7 +235,7 @@ function updateStatus(select) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ uid: uid, status: status, note: note, skip_report: true })
     })
-    .then(function(r) { return r.json(); })
+    .then(readApi)
     .then(function(data) {
         if (!data.success) {
             showToastModern('Не сохранилось: ' + (data.error || ''), 'error');
@@ -223,8 +244,8 @@ function updateStatus(select) {
         showToastModern('Статус сохранён', 'success');
         refreshQueueStatus();
     })
-    .catch(function() {
-        showToastModern('Нет сети. Статус на экране уже изменён, в таблицу уйдёт при связи.', 'error');
+    .catch(function(err) {
+        showToastModern(err.message || 'Нет сети. Статус на экране уже изменён, в таблицу уйдёт при связи.', 'error');
     });
 }
 
@@ -235,14 +256,14 @@ function applyStatusToTicket(ticket, status, note) {
         '✅ Выполнено': 'done',
         '🔵 Доделать': 'todo',
         '⏹️ Обработано': 'processed',
-        '🔧 Эвакуация': 'todo'
+        '🔧 Эвакуация': 'evacuation'
     };
     ticket.status = statusMap[status] || 'pending';
     ticket.is_done = ticket.status === 'done';
     ticket.is_active = ticket.status !== 'done';
     if (status === '🔧 Эвакуация') {
+        ticket.status = 'evacuation';
         ticket.note = ((ticket.note || '') + '\nЭВАКУАЦИЯ: ' + (note || 'Эвакуация')).trim();
-        ticket.display_desc = ticket.desc;
     }
     if (status === '🔵 Доделать' && note) {
         ticket.note = ((ticket.note || '') + '\n' + note).trim();
@@ -339,7 +360,7 @@ function submitAction() {
             skip_report: true
         })
     })
-    .then(function(r) { return r.json(); })
+    .then(readApi)
     .then(function(data) {
         if (data.success) {
             showToastModern('✅ Действие выполнено!', 'success');
@@ -473,10 +494,19 @@ async function applyBulkStatus() {
     
     var uids = Array.from(selectedRequests);
     var all = getAllTickets();
+    var skipped = 0;
     for (var i = 0; i < all.length; i++) {
-        if (uids.indexOf(all[i].uid) !== -1) {
-            applyStatusToTicket(all[i], status, note);
+        if (uids.indexOf(all[i].uid) === -1) continue;
+        if (status === '🔧 Эвакуация' && isSupplyTicket(all[i])) {
+            skipped++;
+            uids = uids.filter(function(uid) { return uid !== all[i].uid; });
+            continue;
         }
+        applyStatusToTicket(all[i], status, note);
+    }
+    if (!uids.length) {
+        alert('Для аккумулятора и зарядного устройства эвакуацию ставить нельзя');
+        return;
     }
     selectedRequests.clear();
     updateBulkUI();
@@ -488,7 +518,7 @@ async function applyBulkStatus() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ uids: uids, status: status, comment: note, skip_report: true })
     })
-    .then(function(r) { return r.json(); })
+    .then(readApi)
     .then(function(data) {
         if (!data.success) showToastModern('Таблица не приняла: ' + (data.error || ''), 'error');
         else refreshQueueStatus();
@@ -578,7 +608,7 @@ function sendRoute() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ master: selectedMaster })
     })
-    .then(function(r) { return r.json(); })
+    .then(readApi)
     .then(function(data) {
         if (data.success) {
             var countText = typeof data.tickets === 'number' ? ' В таблице сейчас ' + data.tickets + ' открытых заявок.' : '';
@@ -612,7 +642,7 @@ function sendRouteToAll() {
     document.getElementById('syncStatus').textContent = '⏳ Обновление...';
     document.getElementById('syncStatus').style.color = '#f59e0b';
     fetch('/api/send_route_all', { method: 'POST' })
-    .then(function(r) { return r.json(); })
+    .then(readApi)
     .then(function(data) {
         if (data.success) {
             document.getElementById('syncStatus').textContent = '✅ Кэши всех мастеров обновлены';
@@ -695,7 +725,7 @@ function clearMaster(master) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ master: master })
     })
-    .then(function(r) { return r.json(); })
+    .then(readApi)
     .then(function(data) {
         if (data.success) {
             document.getElementById('syncStatus').textContent = '✅ Снято ' + data.cleared + ' заявок';
@@ -708,8 +738,8 @@ function clearMaster(master) {
         }
         document.getElementById('syncSpinner').style.display = 'none';
     })
-    .catch(function() {
-        document.getElementById('syncStatus').textContent = '❌ Ошибка сети';
+    .catch(function(err) {
+        document.getElementById('syncStatus').textContent = '❌ ' + (err.message || 'Ошибка сети');
         document.getElementById('syncStatus').style.color = '#ef4444';
         document.getElementById('syncSpinner').style.display = 'none';
     });
@@ -721,7 +751,7 @@ function clearAllMasters() {
     document.getElementById('syncStatus').textContent = '⏳ Снятие...';
     document.getElementById('syncStatus').style.color = '#f59e0b';
     fetch('/api/clear_dates', { method: 'POST' })
-    .then(function(r) { return r.json(); })
+    .then(readApi)
     .then(function(data) {
         if (data.success) {
             document.getElementById('syncStatus').textContent = '✅ Снято ' + data.cleared + ' заявок';
@@ -819,7 +849,8 @@ function getFilteredTickets(tickets) {
         var sourceMatch = sourceFilter === 'all' ? true : t.source === sourceFilter;
         var searchMatch = (t.uid || '').toLowerCase().indexOf(search) !== -1 ||
                           (t.desc || '').toLowerCase().indexOf(search) !== -1 ||
-                          (t.gos || '').toLowerCase().indexOf(search) !== -1;
+                          (t.gos || '').toLowerCase().indexOf(search) !== -1 ||
+                          (t.supplier || '').toLowerCase().indexOf(search) !== -1;
         if (masterMatch && sourceMatch && searchMatch) {
             result.push(t);
         }
@@ -848,6 +879,23 @@ function renderCurrentTab() {
     renderTicketsGrouped(filtered, containerId);
 }
 
+function originBadge(source) {
+    if (source === 'Заявки бот') return '<span class="origin-badge origin-bot">Бот</span>';
+    if (source === 'Заявки') return '<span class="origin-badge origin-site">Сайт</span>';
+    if (source === 'Импорт М4') return '<span class="origin-badge origin-m4">М4</span>';
+    return '';
+}
+
+function supplierBadge(name) {
+    var text = String(name || '').trim();
+    if (!text) return '';
+    var kind = 'supplier-badge';
+    var low = text.toLowerCase();
+    if (low.indexOf('vanta') !== -1) kind += ' supplier-vanta';
+    else if (low.indexOf('степ') !== -1) kind += ' supplier-step';
+    return '<span class="' + kind + '">' + text.replace(/[&<>]/g, '') + '</span>';
+}
+
 function renderTicketsGrouped(tickets, containerId) {
     var container = document.getElementById(containerId);
     if (!container) return;
@@ -863,12 +911,13 @@ function renderTicketsGrouped(tickets, containerId) {
     var todo = 0;
     var processed = 0;
     var unassigned = 0;
+    var site = 0;
+    var bot = 0;
     
     for (var i = 0; i < active.length; i++) {
         var t = active[i];
         // Проверяем на эвакуацию
-        if (t.status === 'evacuation' || 
-            (t.status === 'todo' && t.note && t.note.indexOf('ЭВАКУАЦИЯ:') !== -1)) {
+        if (t.status === 'evacuation') {
             evacuation++;
         } else if (t.status === 'pending') {
             pending++;
@@ -878,6 +927,8 @@ function renderTicketsGrouped(tickets, containerId) {
             processed++;
         }
         if (!t.master) unassigned++;
+        if (t.source === 'Заявки') site++;
+        else if (t.source === 'Заявки бот') bot++;
     }
     
     // Обновляем статистику
@@ -888,6 +939,10 @@ function renderTicketsGrouped(tickets, containerId) {
     var processedEl = document.getElementById('processedCount');
     if (processedEl) processedEl.textContent = processed;
     document.getElementById('unassignedCount').textContent = unassigned;
+    var siteEl = document.getElementById('siteCount');
+    var botEl = document.getElementById('botCount');
+    if (siteEl) siteEl.textContent = site;
+    if (botEl) botEl.textContent = bot;
     
     if (tickets.length === 0) { 
         container.innerHTML = '<div class="empty-state">📭 Нет активных заявок</div>'; 
@@ -935,7 +990,7 @@ function renderTicketsGrouped(tickets, containerId) {
             var statusDisplay = t.status;
             var isEvacuation = false;
             
-            if (t.status === 'todo' && t.note && t.note.indexOf('ЭВАКУАЦИЯ:') !== -1) {
+            if (t.status === 'evacuation') {
                 isEvacuation = true;
                 statusDisplay = '🔧 Эвакуация';
             } else if (t.status === 'pending') {
@@ -963,7 +1018,7 @@ function renderTicketsGrouped(tickets, containerId) {
             else if (!isProcessed && t.hours_since >= 32) hoursClass = 'warning';
             
             html += '<div class="ticket-row' + (isEvacuation ? ' evacuation-row' : '') + (isProcessed ? ' processed-row' : '') + (isQueued ? ' queued-row' : '') + '" data-uid="' + t.uid + '">';
-            html += '<span class="id">' + (t.gos || '-') + '</span>';
+            html += '<span class="id">' + (t.gos || '-') + originBadge(t.source) + supplierBadge(t.supplier) + '</span>';
             html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + (t.display_desc || t.desc || '-');
             if (t.contact) {
                 html += '<span class="who">отправил: ' + String(t.contact).replace(/[&<>]/g, '') + '</span>';
@@ -983,7 +1038,9 @@ function renderTicketsGrouped(tickets, containerId) {
             html += '<option value="✅ Выполнено"' + (statusDisplay === '✅ Выполнено' ? ' selected' : '') + '>✅ Выполнено</option>';
             html += '<option value="🔵 Доделать"' + (statusDisplay === '🔵 Доделать' ? ' selected' : '') + '>🔵 Доделать</option>';
             html += '<option value="⏹️ Обработано"' + (statusDisplay === '⏹️ Обработано' ? ' selected' : '') + '>⏹️ Обработано</option>';
-            html += '<option value="🔧 Эвакуация"' + (statusDisplay === '🔧 Эвакуация' ? ' selected' : '') + '>🔧 Эвакуация</option>';
+            if (!isSupplyTicket(t)) {
+                html += '<option value="🔧 Эвакуация"' + (statusDisplay === '🔧 Эвакуация' ? ' selected' : '') + '>🔧 Эвакуация</option>';
+            }
             html += '</select>';
             html += '</span>';
             
@@ -1076,7 +1133,7 @@ function saveDarksChanges(button) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ changes: changeList })
     })
-    .then(function(r) { return r.json(); })
+    .then(readApi)
     .then(function(data) {
         button.disabled = false;
         if (!data.success) {
@@ -1115,7 +1172,7 @@ function saveAllChanges() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ changes: changeList })
     })
-    .then(function(r) { return r.json(); })
+    .then(readApi)
     .then(function(data) {
         if (data.success) {
             var allTickets = getAllTickets();
@@ -1156,10 +1213,10 @@ function syncAll() {
     document.getElementById('syncStatus').textContent = '⏳ Синхронизация...';
     document.getElementById('syncStatus').style.color = '#f59e0b';
     fetch('/api/sync')
-    .then(function(r) { return r.json(); })
+    .then(readApi)
     .then(function(data) {
         if (data.success) {
-            document.getElementById('syncStatus').textContent = '✅ Синхронизация завершена';
+            document.getElementById('syncStatus').textContent = data.cached ? 'Данные уже свежие, таблицу не открывал' : 'Синхронизация завершена';
             document.getElementById('syncStatus').style.color = '#22c55e';
             setTimeout(function() { location.reload(); }, 1500);
         } else {
@@ -1210,7 +1267,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 function refreshQueueStatus() {
     fetch('/api/queue_status')
-        .then(function(r) { return r.json(); })
+        .then(readApi)
         .then(function(data) {
             window.queuedUids = {};
             var uids = data.uids || [];
@@ -1235,7 +1292,7 @@ function flushQueueNow() {
     var el = document.getElementById('queueText');
     if (el) el.textContent = 'Записываем в таблицу…';
     fetch('/api/flush_now', { method: 'POST' })
-        .then(function(r) { return r.json(); })
+        .then(readApi)
         .then(function(data) {
             if (!data.success) {
                 showToastModern('Не удалось записать: ' + (data.error || ''), 'error');
