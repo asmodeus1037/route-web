@@ -694,7 +694,21 @@ def _read_tickets_from_google():
         if is_quota_error(e):
             raise
     
+    attach_iot(tickets)
     return tickets
+
+def attach_iot(tickets):
+    try:
+        mapping = bike_lookup()
+    except Exception as e:
+        if is_quota_error(e):
+            raise
+        logger.error(f'Не удалось подставить IoT: {e}')
+        return
+    for ticket in tickets or []:
+        bike = mapping.get((str(ticket.get('darks') or ''), normalize_gos(ticket.get('gos'))))
+        if bike and bike.get('iot'):
+            ticket['iot'] = bike['iot']
 
 def store_ticket_memory(tickets, fresh=False):
     global _tickets_mem, _tickets_mem_at, uid_index
@@ -1484,23 +1498,54 @@ def curator_notice_groups():
         lines.append('')
         lines.append('Подготовьте, пожалуйста, технику к ремонту')
         lines.append('Хорошего дня!')
-        payload.append({'darks': dark, 'text': '\n'.join(lines)})
+        payload.append({'darks': dark, 'text': '\n'.join(lines), 'count': len(items)})
     return payload
+
+def curator_sent_map():
+    data = read_cache('curator_sent.json') or {}
+    data.pop('updated_at', None)
+    return data
+
+def remember_curator_sent(rows):
+    current = curator_sent_map()
+    now = get_msk_now().strftime('%d.%m %H:%M')
+    for row in rows:
+        current[str(row.get('darks') or '')] = {
+            'at': now,
+            'sent': int(row.get('sent') or 0),
+            'tickets': int(row.get('tickets') or 0),
+        }
+    write_cache('curator_sent.json', current)
+    return curator_sent_map()
 
 def notify_curators(message):
     try:
         groups = curator_notice_groups()
         if not groups:
-            return False
+            return {'success': False, 'error': 'Нет назначенных заявок'}
         response = requests.post(
             f"{BOT_API_URL}/send_notification",
             json={"groups": groups},
             timeout=20,
         )
-        return response.status_code == 200
+        if response.status_code != 200:
+            return {'success': False, 'error': 'Бот не принял сообщение'}
+        body = {}
+        try:
+            body = response.json() or {}
+        except Exception:
+            body = {}
+        by_dark = {str(item.get('darks') or ''): int(item.get('sent') or 0) for item in (body.get('results') or [])}
+        rows = []
+        for group in groups:
+            dark = str(group.get('darks') or '')
+            sent = by_dark.get(dark, 1 if not body.get('results') else 0)
+            rows.append({'darks': dark, 'sent': sent, 'tickets': int(group.get('count') or 0)})
+        marks = remember_curator_sent(rows)
+        return {'success': True, 'marks': marks, 'count': body.get('count', 0)}
     except Exception as e:
         logger.warning(f'Не отправились сообщения кураторам: {e}')
-        return False
+        return {'success': False, 'error': 'Не отправилось'}
 
 def generate_curator_message(tickets_data):
     now = get_msk_now().strftime('%d.%m.%Y %H:%M')
@@ -1634,6 +1679,7 @@ def admin_panel():
     return render_template('admin.html',
                           directions=directions,
                           masters=MASTERS,
+                          curator_sent=curator_sent_map(),
                           now=get_msk_now().strftime('%H:%M:%S'))
 
 # ============================================================
@@ -1821,8 +1867,8 @@ def api_notify_curators():
     message = data.get('message', '')
     if not message:
         return jsonify({'success': False, 'error': 'Нет сообщения'})
-    success = notify_curators(message)
-    return jsonify({'success': success})
+    result = notify_curators(message)
+    return jsonify(result)
 
 def refresh_master_caches_from_admin():
     admin_cache = get_admin_cache() or {}

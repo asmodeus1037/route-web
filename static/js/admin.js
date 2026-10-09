@@ -4,6 +4,7 @@
 var DATA = window.__DATA__ || {};
 var masters = DATA.masters || [];
 var directionsData = DATA.directions || {};
+var curatorSent = DATA.curatorSent || {};
 var pendingChanges = {};
 var selectedMaster = '';
 var clearMasterTarget = null;
@@ -163,8 +164,10 @@ function sendNotification() {
     .then(readApi)
     .then(function(data) {
         if (data.success) {
-            showToastModern('✅ Уведомления отправлены!', 'success');
+            if (data.marks) curatorSent = data.marks;
+            showToastModern('Уведомления отправлены', 'success');
             closeNotifyModal();
+            renderCurrentTab();
         } else {
             showToastModern('❌ Ошибка: ' + (data.error || 'неизвестная'), 'error');
         }
@@ -850,6 +853,7 @@ function getFilteredTickets(tickets) {
         var searchMatch = (t.uid || '').toLowerCase().indexOf(search) !== -1 ||
                           (t.desc || '').toLowerCase().indexOf(search) !== -1 ||
                           (t.gos || '').toLowerCase().indexOf(search) !== -1 ||
+                          (t.iot || '').toLowerCase().indexOf(search) !== -1 ||
                           (t.supplier || '').toLowerCase().indexOf(search) !== -1;
         if (masterMatch && sourceMatch && searchMatch) {
             result.push(t);
@@ -894,6 +898,15 @@ function supplierBadge(name) {
     if (low.indexOf('vanta') !== -1) kind += ' supplier-vanta';
     else if (low.indexOf('степ') !== -1) kind += ' supplier-step';
     return '<span class="' + kind + '">' + text.replace(/[&<>]/g, '') + '</span>';
+}
+
+function sentMark(darks, ticketCount) {
+    var mark = curatorSent[String(darks)];
+    if (!mark || !mark.at) return '';
+    var changed = mark.tickets && mark.tickets !== ticketCount;
+    var text = mark.sent ? ('Куратору отправлено ' + mark.at) : ('Куратору не ушло ' + mark.at + ', нет Telegram');
+    if (mark.sent && changed) text += ', список изменился';
+    return '<div class="sent-mark' + (changed || !mark.sent ? ' warn' : '') + '">' + text + '</div>';
 }
 
 function renderTicketsGrouped(tickets, containerId) {
@@ -982,6 +995,7 @@ function renderTicketsGrouped(tickets, containerId) {
         var group = darksGroups[key];
         html += '<div class="darks-group">';
         html += '<div class="darks-header"><span class="address">📍 ' + group.address + '</span><span class="darks-num">ДС ' + group.darks + ' · ' + group.tickets.length + '</span></div>';
+        html += sentMark(group.darks, group.tickets.length);
         if (group.contact) { html += '<div class="darks-contact">📞 ' + group.contact + '</div>'; }
         for (var j = 0; j < group.tickets.length; j++) {
             var t = group.tickets[j];
@@ -1018,7 +1032,7 @@ function renderTicketsGrouped(tickets, containerId) {
             else if (!isProcessed && t.hours_since >= 32) hoursClass = 'warning';
             
             html += '<div class="ticket-row' + (isEvacuation ? ' evacuation-row' : '') + (isProcessed ? ' processed-row' : '') + (isQueued ? ' queued-row' : '') + '" data-uid="' + t.uid + '">';
-            html += '<span class="id">' + (t.gos || '-') + originBadge(t.source) + supplierBadge(t.supplier) + '</span>';
+            html += '<span class="id">' + (t.gos || '-') + originBadge(t.source) + supplierBadge(t.supplier) + (t.iot ? '<span class="iot-badge">IoT ' + String(t.iot).replace(/[&<>]/g, '') + '</span>' : '') + '</span>';
             html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + (t.display_desc || t.desc || '-');
             if (t.contact) {
                 html += '<span class="who">отправил: ' + String(t.contact).replace(/[&<>]/g, '') + '</span>';

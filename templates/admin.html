@@ -15,6 +15,9 @@
         .supplier-badge { background:#fff7ed; color:#9a3412; }
         .supplier-vanta { background:#e0f2fe; color:#075985; }
         .supplier-step { background:#ffedd5; color:#9a3412; }
+        .iot-badge { display:inline-block; margin-left:6px; color:#64748b; font-size:10px; font-weight:600; }
+        .sent-mark { font-size:12px; color:#166534; padding:0 12px 8px; }
+        .sent-mark.warn { color:#b45309; }
     </style>
 </head>
 <body>
@@ -182,6 +185,7 @@
     window.__DATA__ = {
         masters: {{ masters|tojson }},
         directions: {{ directions|tojson }},
+        curatorSent: {{ curator_sent|tojson }},
         now: '{{ now }}'
     };
 </script>
