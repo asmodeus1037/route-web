@@ -75,6 +75,9 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 MSK = pytz.timezone('Europe/Moscow')
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+import db
+db.configure(PARTS)
+db.start()
 
 MASTER_CREDENTIALS = {
     'admin': {'password': 'admin123', 'name': 'Админ', 'role': 'admin'},
@@ -223,12 +226,14 @@ def update_ticket_in_admin_cache(uid, new_status, note='', display_desc='', extr
         if not admin_cache:
             return False
         updated = False
+        stamp = time.time()
         for dir_name, dir_data in admin_cache.get('directions', {}).items():
             for t in dir_data.get('tickets', []):
                 if t.get('uid') == uid:
                     t['status'] = new_status
                     t['is_done'] = new_status == 'done'
                     t['is_active'] = is_active_status(new_status)
+                    t['_local_ts'] = stamp
                     if note:
                         t['note'] = note
                     if display_desc:
@@ -246,6 +251,7 @@ def update_ticket_in_admin_cache(uid, new_status, note='', display_desc='', extr
             ticket['status'] = new_status
             ticket['is_done'] = new_status == 'done'
             ticket['is_active'] = is_active_status(new_status)
+            ticket['_local_ts'] = stamp
             if note:
                 ticket['note'] = note
             if display_desc:
@@ -253,6 +259,7 @@ def update_ticket_in_admin_cache(uid, new_status, note='', display_desc='', extr
             if extra:
                 ticket.update(extra)
             ticket['hours_since'] = ticket_hours(ticket)
+            db.mirror_ticket(ticket)
         if _tickets_mem:
             store_ticket_memory(_tickets_mem, fresh=False)
         if updated:
@@ -265,6 +272,67 @@ def update_ticket_in_admin_cache(uid, new_status, note='', display_desc='', extr
     except Exception as e:
         logger.error(f"Ошибка обновления admin_cache для {uid}: {e}")
         return False
+
+LOCAL_FIELDS = ('status', 'master', 'note', 'is_done', 'is_active', 'evac_reason', 'timer_from', 'hours_since', 'display_desc')
+
+def apply_pending_queue(tickets):
+    """Пока отметка мастера не дошла до таблицы, не возвращаем заявку ему на экран."""
+    try:
+        tasks = read_queue().get('tasks') or []
+    except Exception:
+        return tickets
+    by_uid = {}
+    for task in tasks:
+        uid = task.get('uid')
+        if uid:
+            by_uid[uid] = task
+    for ticket in tickets or []:
+        task = by_uid.get(ticket.get('uid'))
+        if not task:
+            continue
+        kind = task.get('type')
+        data = task.get('data') or {}
+        if kind == 'fail':
+            ticket['status'] = 'processed'
+            ticket['master'] = ''
+            ticket['is_done'] = False
+            ticket['is_active'] = True
+            if data.get('note'):
+                ticket['note'] = data.get('note')
+        elif kind == 'evacuation':
+            ticket['status'] = 'evacuation'
+            ticket['master'] = ''
+            ticket['is_done'] = False
+            ticket['is_active'] = True
+            if data.get('reason'):
+                ticket['evac_reason'] = data.get('reason')
+        elif kind in ('done', 'replace_yes', 'evacuation_and_replace', 'transit_replace', 'transit_bulk_close'):
+            ticket['status'] = 'done'
+            ticket['is_done'] = True
+            ticket['is_active'] = False
+    return tickets
+
+def merge_local_tickets(previous, fresh):
+    """Свежая таблица не должна возвращать заявку, которую мастер только что закрыл."""
+    prev = {}
+    now = time.time()
+    for ticket in previous or []:
+        uid = ticket.get('uid')
+        stamp = ticket.get('_local_ts') or 0
+        if uid and stamp and now - stamp < 900:
+            prev[uid] = ticket
+    for ticket in fresh or []:
+        old = prev.get(ticket.get('uid'))
+        if not old:
+            continue
+        same = all(ticket.get(key) == old.get(key) for key in ('status', 'master'))
+        if same:
+            continue
+        for key in LOCAL_FIELDS:
+            if key in old:
+                ticket[key] = old[key]
+        ticket['_local_ts'] = old.get('_local_ts')
+    return fresh
 
 # ============================================================
 # GOOGLE SHEETS
@@ -338,6 +406,7 @@ def load_darks_reference(force=False):
         if fresh:
             darks_ref = fresh
             _darks_loaded_at = time.time()
+            db.mirror_darks(darks_ref)
     except Exception as e:
         logger.error(f"Ошибка загрузки Дарксторов: {e}")
         if is_quota_error(e):
@@ -716,9 +785,11 @@ def store_ticket_memory(tickets, fresh=False):
     uid_index = build_uid_index(_tickets_mem)
     if fresh:
         _tickets_mem_at = time.time()
+        db.mirror_tickets(_tickets_mem)
     return _tickets_mem
 
 def publish_caches(tickets):
+    apply_pending_queue(tickets)
     enrich_tickets(tickets)
     save_admin_cache(tickets)
     for master in MASTERS:
@@ -741,7 +812,10 @@ def get_tickets_from_sheets(force=False):
             return _tickets_mem
         if now < _sheet_backoff_until:
             return _tickets_mem
+        previous = list(_tickets_mem)
         tickets = _read_tickets_from_google()
+        merge_local_tickets(previous, tickets)
+        apply_pending_queue(tickets)
         store_ticket_memory(tickets, fresh=True)
         logger.info(f'Таблица прочитана: {len(tickets)} заявок')
         return _tickets_mem
@@ -1062,6 +1136,7 @@ def apply_queue_to_sheets(tasks):
             if parts:
                 updates.append({'range': f'J{row_idx}', 'values': [[parts]]})
         elif task_type == 'evacuation':
+            updates.append({'range': f'G{row_idx}', 'values': [['']]})
             updates.append({'range': f'H{row_idx}', 'values': [['🔧 Эвакуация']]})
             updates.append({'range': f'J{row_idx}', 'values': [[data.get('reason') or 'Эвакуация']]})
         elif task_type == 'taken_no_replace':
@@ -1103,6 +1178,7 @@ def apply_queue_to_sheets(tasks):
             sheet_note = 'Заменен' if task_type == 'evacuation_and_replace' else (data.get('parts') or data.get('extra') or '')
         elif task_type == 'evacuation':
             sheet_status, sheet_note = 'Эвакуация', data.get('reason') or 'Эвакуация'
+            clear_master = True
         elif task_type == 'taken_no_replace':
             sheet_status, sheet_note = 'Доделать', f"ЗАБРАЛИ: {data.get('parts', '')} АКБ"
         elif task_type == 'replace_no':
@@ -1193,6 +1269,7 @@ def load_trunks():
 
 def save_trunks(data):
     _write_json(TRUNK_FILE, data)
+    db.mirror_trunks(data)
 
 def trunk_rows(master):
     bag = load_trunks().get(master) or {}
@@ -1244,6 +1321,7 @@ def queue_part_move(master, action, name, qty, uid='', gos='', darks=''):
         data['log'] = (data.get('log') or [])[-1000:]
         data['log'].append(move)
         _write_json(PARTS_QUEUE_FILE, data)
+    db.mirror_move(move)
 
 def parts_log():
     data = _read_json(PARTS_QUEUE_FILE, {})
@@ -1304,11 +1382,8 @@ def spend_parts(master, items, uid='', gos='', darks=''):
         data = load_trunks()
         bag = dict(data.get(master) or {})
         for name, qty in clean:
-            if int(bag.get(name) or 0) < qty:
-                have = int(bag.get(name) or 0)
-                return False, f'В багажнике «{name}» только {have} шт.'
-        for name, qty in clean:
-            bag[name] = int(bag.get(name) or 0) - qty
+            have = int(bag.get(name) or 0)
+            bag[name] = max(0, have - qty)
         data[master] = bag
         save_trunks(data)
     lines = []
@@ -1595,6 +1670,15 @@ def login_required(f):
 def index():
     return redirect(url_for('login_page'))
 
+@app.route('/api/db_status')
+@login_required
+def api_db_status():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    info = db.status()
+    info['success'] = True
+    return jsonify(info)
+
 @app.route('/login')
 def login_page():
     return render_template('login.html')
@@ -1875,6 +1959,7 @@ def refresh_master_caches_from_admin():
     all_tickets = []
     for dir_data in admin_cache.get('directions', {}).values():
         all_tickets.extend(dir_data.get('tickets', []))
+    apply_pending_queue(all_tickets)
     for master in MASTERS:
         master_tickets = [t for t in all_tickets if t.get('master') == master and is_active_status(t.get('status'))]
         save_master_cache(master, master_tickets, '')
@@ -2073,7 +2158,7 @@ def master_groups(name):
                     'done': 0
                 }
             groups_dict[darks_num]['tickets'].append(t)
-            if t.get('status') in ['pending', 'todo', 'processed', 'fail']:
+            if t.get('status') in ['pending', 'todo', 'processed', 'fail', 'evacuation']:
                 groups_dict[darks_num]['pending'] += 1
             else:
                 groups_dict[darks_num]['done'] += 1
@@ -2280,6 +2365,11 @@ def admin_trunks():
 # ============================================================
 # API ДЛЯ МАСТЕРОВ
 # ============================================================
+@app.route('/api/parts_catalog')
+@login_required
+def api_parts_catalog():
+    return jsonify({'parts': [name for name, price in PARTS]})
+
 @app.route('/master/<name>/darks/<darks_number>/done/<uid>', methods=['POST'])
 @login_required
 def master_done(name, darks_number, uid):
@@ -2357,8 +2447,8 @@ def master_evacuation(name, darks_number, uid):
     previous = (ticket.get('note') or '').strip()
     line = 'ЭВАКУАЦИЯ: ' + reason
     note = f'{previous}\n{line}'.strip() if previous else line
-    update_ticket_in_admin_cache(uid, 'evacuation', note, extra={'evac_reason': reason})
-    refresh_master_caches_from_admin()
+    update_ticket_in_admin_cache(uid, 'evacuation', note, extra={'evac_reason': reason, 'master': ''})
+    remove_ticket_from_master_cache(name, uid)
     add_to_queue({
         'uid': uid,
         'source': source_of(uid),
