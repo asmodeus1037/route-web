@@ -308,6 +308,17 @@ def apply_pending_queue(tickets):
             ticket['is_active'] = True
             if data.get('note'):
                 ticket['note'] = data.get('note')
+        elif kind == 'status_update':
+            new_status = data.get('new_status') or 'pending'
+            ticket['status'] = new_status
+            ticket['is_done'] = new_status == 'done'
+            ticket['is_active'] = is_active_status(new_status)
+            if new_status != 'evacuation':
+                ticket['evac_reason'] = ''
+            if new_status == 'processed':
+                ticket['master'] = ''
+            if data.get('note'):
+                ticket['note'] = data.get('note')
         elif kind == 'evacuation':
             ticket['status'] = 'evacuation'
             ticket['master'] = ''
@@ -1599,7 +1610,7 @@ def write_to_report(tasks):
             
             status_map = {
                 'done': '✅ Выполнено',
-                'fail': 'Вело отсутствует',
+                'fail': '⏹️ Обработано',
                 'evacuation': '🔧 Эвакуация',
                 'replace_yes': '✅ Выполнено',
                 'taken_no_replace': '🔵 Доделать',
@@ -2091,7 +2102,34 @@ def queue_admin_status(uid, status_display, note='', skip_report=True, actor='А
     now = get_msk_now().strftime('%d.%m %H:%M')
     actor = actor or 'Админ'
     if status_display == '⏹️ Обработано':
-        mark_bike_missing(uid, actor)
+        moment = get_msk_now()
+        timer_from = moment.strftime('%Y-%m-%d %H:%M:%S')
+        line = f"Вело отсутствует {moment.strftime('%d.%m %H:%M')}, {actor}"
+        ticket = find_cached_ticket(uid)
+        previous = (ticket.get('note') or '').strip() if ticket else ''
+        note_text = f'{previous}\n{line}'.strip() if previous else line
+        update_ticket_in_admin_cache(uid, 'processed', note_text, extra={
+            'master': '',
+            'timer_from': timer_from,
+            'hours_since': 0,
+            'evac_reason': '',
+            'is_done': False,
+            'is_active': True,
+        })
+        remove_ticket_from_master_cache((ticket or {}).get('master') or '', uid)
+        add_to_queue({
+            'uid': uid,
+            'source': source_of(uid),
+            'type': 'status_update',
+            'data': {
+                'status': '⏹️ Обработано',
+                'new_status': 'processed',
+                'note': note_text,
+                'skip_report': True,
+                'master': actor,
+                'timer_from': timer_from,
+            }
+        })
         return
     ticket = find_cached_ticket(uid) or {}
     previous = (ticket.get('note') or '').strip()
@@ -2121,6 +2159,7 @@ def queue_admin_status(uid, status_display, note='', skip_report=True, actor='А
         new_status = status_map.get(status_display, 'pending')
         cache_note = note
         sheet_note = note
+        extra = {'evac_reason': ''}
     source = 'Заявки'
     if uid in uid_index:
         source = (uid_index[uid].get('ticket') or {}).get('source') or 'Заявки'

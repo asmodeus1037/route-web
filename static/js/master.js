@@ -63,11 +63,18 @@ function mountMasterChrome() {
     if (!dock || dock.dataset.ready === '1') return;
     var base = '/master/' + encodeURIComponent(name);
     var moreOn = page === 'plan' || page === 'history';
+    function icon(path) {
+        return '<span class="dock-ico"><svg viewBox="0 0 24 24" aria-hidden="true">' + path + '</svg></span>';
+    }
+    var icoRoute = icon('<circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="18" r="2.2"/><path d="M8 7.2C12 7 14 10 16 16.2"/>');
+    var icoMap = icon('<path d="M9 4.5l6 2 4-2v15l-4 2-6-2-4 2v-15l4-2z"/><path d="M9 4.5v15M15 6.5v15"/>');
+    var icoBox = icon('<path d="M4 8l8-3 8 3-8 3-8-3z"/><path d="M4 8v8l8 3 8-3V8"/><path d="M12 11v8"/>');
+    var icoMore = icon('<circle cx="6" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="18" cy="12" r="1.4"/>');
     dock.innerHTML = ''
-        + '<a' + (page === 'route' ? ' class="on"' : '') + ' href="' + base + '">Маршрут</a>'
-        + '<a href="/api/build_route_for_master?master=' + encodeURIComponent(name) + '">Карта</a>'
-        + '<a' + (page === 'trunk' ? ' class="on"' : '') + ' href="' + base + '/trunk">Багаж</a>'
-        + '<button type="button" class="dock-more' + (moreOn ? ' on' : '') + '">Ещё</button>';
+        + '<a' + (page === 'route' ? ' class="on"' : '') + ' href="' + base + '">' + icoRoute + '<span>Маршрут</span></a>'
+        + '<a href="/api/build_route_for_master?master=' + encodeURIComponent(name) + '">' + icoMap + '<span>Карта</span></a>'
+        + '<a' + (page === 'trunk' ? ' class="on"' : '') + ' href="' + base + '/trunk">' + icoBox + '<span>Багаж</span></a>'
+        + '<button type="button" class="dock-more' + (moreOn ? ' on' : '') + '">' + icoMore + '<span>Ещё</span></button>';
     var sheet = document.createElement('div');
     sheet.className = 'more-sheet';
     sheet.hidden = true;
@@ -248,7 +255,7 @@ function submitEvacuation(name, darksNumber, uid, gos) {
         uid: uid,
         master: name,
         darks_number: darksNumber,
-        address: document.querySelector('input[name="address"]').value || '',
+        address: (document.querySelector('#evacuationForm_' + uid + ' input[name="address"]') || {}).value || '',
         old_data: {
             serial: oldSerial.value.trim(),
             gos: oldGos.value.trim(),
@@ -426,7 +433,10 @@ function togglePanel(uid) {
     var more = document.getElementById('more-' + uid);
     var card = document.getElementById('ticket-' + uid);
     var button = card ? card.querySelector('.fast-btns .fast-ok') : null;
-    if (more) more.hidden = true;
+    if (more) {
+        more.hidden = true;
+        more.classList.remove('is-open');
+    }
     if (!panel) return;
     panel.hidden = !panel.hidden;
     if (button) button.classList.toggle('is-open', !panel.hidden);
@@ -458,6 +468,7 @@ function toggleMore(uid) {
     if (panel) panel.hidden = true;
     if (!more) return;
     more.hidden = !more.hidden;
+    more.classList.toggle('is-open', !more.hidden);
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -612,19 +623,18 @@ function closeTicketInstant(name, darks, uid, action) {
 
 var trunkCache = null;
 var trunkName = '';
+var partsCatalog = null;
 
 function renderPartList(panel) {
     var box = panel.querySelector('.part-list');
     if (!box || box.dataset.ready === '1') return;
     var name = panel.dataset.master || box.dataset.master || '';
-    var paint = function(parts) {
-        var stock = (parts || []).filter(function(item) { return item.qty > 0; });
+    var paint = function() {
+        var stock = trunkCache || [];
         box.dataset.stock = JSON.stringify(stock);
+        box.dataset.catalog = JSON.stringify(partsCatalog || []);
         box.innerHTML = '<div class="part-suggest"></div><div class="part-chosen"></div>'
             + '<input class="part-query" type="text" placeholder="Запчасть или слово нет" autocomplete="off">';
-        if (!stock.length) {
-            box.innerHTML += '<a class="trunk-link" href="/master/' + encodeURIComponent(name) + '/trunk">В багажнике пусто. Если запчасти не нужны, напишите «нет».</a>';
-        }
         box.querySelector('.part-query').addEventListener('input', function(event) {
             showPartMatches(box, event.target.value);
             liftField(event.target);
@@ -634,21 +644,32 @@ function renderPartList(panel) {
         });
         box.dataset.ready = '1';
     };
-    if (trunkCache && trunkName === name) {
-        paint(trunkCache);
-        return;
+    var left = 2;
+    var step = function() {
+        left -= 1;
+        if (left <= 0) paint();
+    };
+    if (partsCatalog) {
+        step();
+    } else {
+        fetch('/api/parts_catalog', {cache: 'no-store'})
+            .then(function(response) { return response.json(); })
+            .then(function(data) { partsCatalog = data.parts || []; })
+            .catch(function() { partsCatalog = partsCatalog || []; })
+            .then(step);
     }
-    fetch('/api/master/' + encodeURIComponent(name) + '/trunk')
-        .then(function(response) { return response.json(); })
-        .then(function(data) {
-            trunkCache = data.parts || [];
-            trunkName = name;
-            paint(trunkCache);
-        })
-        .catch(function() {
-            box.textContent = 'Багажник не загрузился. Можно закрыть комментарием.';
-            box.dataset.ready = '1';
-        });
+    if (trunkCache && trunkName === name) {
+        step();
+    } else {
+        fetch('/api/master/' + encodeURIComponent(name) + '/trunk')
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                trunkCache = data.parts || [];
+                trunkName = name;
+            })
+            .catch(function() { trunkCache = trunkCache || []; })
+            .then(step);
+    }
 }
 
 function partKey(value) {
@@ -659,7 +680,11 @@ function showPartMatches(box, query) {
     var suggest = box.querySelector('.part-suggest');
     if (!suggest) return;
     var stock = [];
+    var catalog = [];
     try { stock = JSON.parse(box.dataset.stock || '[]'); } catch (e) { stock = []; }
+    try { catalog = JSON.parse(box.dataset.catalog || '[]'); } catch (e) { catalog = []; }
+    var have = {};
+    stock.forEach(function(item) { have[item.name] = item.qty || 0; });
     var q = partKey(query).trim();
     if (q === 'нет') {
         suggest.innerHTML = '<div class="part-miss">Запчасти не использовал. Нажмите «Отправить».</div>';
@@ -671,24 +696,26 @@ function showPartMatches(box, query) {
         floatSuggest(suggest);
         return;
     }
-    var hits = stock.filter(function(item) { return partKey(item.name).indexOf(q) !== -1; });
+    var hits = catalog.filter(function(name) { return partKey(name).indexOf(q) !== -1; });
     if (!hits.length) {
-        suggest.innerHTML = '<div class="part-miss">Такой запчасти нет в багажнике</div>';
+        suggest.innerHTML = '<div class="part-miss">Такой запчасти нет в списке</div>';
         floatSuggest(suggest);
         return;
     }
-    suggest.innerHTML = hits.slice(0, 6).map(function(item) {
-        return '<button type="button" class="part-hit" data-name="' + item.name.replace(/"/g, '') + '" data-max="' + item.qty + '">' + item.name + ' · ' + item.qty + ' шт</button>';
+    suggest.innerHTML = hits.slice(0, 8).map(function(name) {
+        var qty = have[name] || 0;
+        var hint = qty ? ' · в багаже ' + qty : '';
+        return '<button type="button" class="part-hit" data-name="' + name.replace(/"/g, '') + '">' + name + hint + '</button>';
     }).join('');
     suggest.querySelectorAll('.part-hit').forEach(function(button) {
         button.addEventListener('click', function() {
-            addPartChip(box, button.getAttribute('data-name'), parseInt(button.getAttribute('data-max'), 10) || 1);
+            addPartChip(box, button.getAttribute('data-name'));
         });
     });
     floatSuggest(suggest);
 }
 
-function addPartChip(box, name, maxQty) {
+function addPartChip(box, name) {
     var chosen = box.querySelector('.part-chosen');
     if (!chosen || chosen.querySelector('[data-name="' + name.replace(/"/g, '') + '"]')) {
         var query = box.querySelector('.part-query');
@@ -705,14 +732,6 @@ function addPartChip(box, name, maxQty) {
     chip.setAttribute('data-name', name);
     chip.innerHTML = '<span></span><input type="number" min="1" value="1"><button type="button">убрать</button>';
     chip.querySelector('span').textContent = name;
-    var qty = chip.querySelector('input');
-    qty.max = String(maxQty);
-    qty.addEventListener('change', function() {
-        var value = parseInt(qty.value, 10) || 1;
-        if (value > maxQty) value = maxQty;
-        if (value < 1) value = 1;
-        qty.value = String(value);
-    });
     chip.querySelector('button').addEventListener('click', function() { chip.remove(); });
     chosen.appendChild(chip);
     var query = box.querySelector('.part-query');
@@ -736,8 +755,6 @@ function closeTicket(form) {
         form.querySelectorAll('.part-chip').forEach(function(chip) {
             var qtyInput = chip.querySelector('input[type="number"]');
             var qty = parseInt(qtyInput.value, 10) || 1;
-            var max = parseInt(qtyInput.max, 10) || qty;
-            if (qty > max) qty = max;
             if (qty < 1) qty = 1;
             chosen.push({name: chip.getAttribute('data-name'), qty: qty});
         });
@@ -800,8 +817,7 @@ function openModal(name, darks, uid, type, title) {
                 method: 'POST',
                 body: formBody(fd),
                 uid: uid,
-                reload: true,
-                okText: 'Эвакуация отмечена'
+                okText: 'Эвакуация отмечена. Заявка ушла руководителю'
             });
             closeModal('reasonModal');
             return false;

@@ -768,15 +768,18 @@ h1 {
 }
 .dock {
     position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
+    left: 12px;
+    right: 12px;
+    bottom: calc(10px + env(safe-area-inset-bottom));
     z-index: 40;
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     background: #fff;
-    border-top: 1px solid #e7e5e4;
-    padding-bottom: env(safe-area-inset-bottom);
+    border: 1px solid #e7e5e4;
+    border-radius: 18px;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
+    overflow: hidden;
+    padding-bottom: 0;
 }
 .dock a {
     text-align: center;
@@ -883,10 +886,14 @@ body { padding-bottom: 96px; }
     flex: 0 0 44px;
 }
 .fast-panel, .fast-more-panel {
-    display: flex;
+    display: none;
     flex-direction: column;
     gap: 8px;
     padding: 0 10px 12px;
+}
+.fast-more-panel.is-open,
+.fast-panel:not([hidden]) {
+    display: flex;
 }
 .fast-panel input {
     width: 100%;
@@ -982,15 +989,27 @@ body { padding-bottom: 96px; }
 }
 .refuse-btn { margin: 0 0 12px; }
 .dock { grid-template-columns: repeat(4, 1fr) !important; }
+.fast-btns { display: flex; flex-direction: row; gap: 8px; width: 100%; }
+.fast-btns .fast-ok { flex: 1; min-height: 48px; }
+.fast-btns .fast-more { width: 56px; min-height: 48px; flex: 0 0 56px; font-size: 22px; }
 .dock a, .dock .dock-more {
-    font-size: 14px;
-    min-height: 52px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    font-size: 11px;
+    min-height: 62px;
     border: 0;
+    border-right: 1px solid #f1f5f9;
     background: transparent;
     font-weight: 800;
     color: #57534e;
-    padding: 10px 2px 12px;
+    padding: 8px 2px 10px;
 }
+.dock a:last-child, .dock .dock-more:last-child { border-right: 0; }
+.dock-ico { width: 22px; height: 22px; display: block; }
+.dock-ico svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .dock .dock-more.on, .dock a.on { color: #c0392b; }
 .more-sheet {
     position: fixed;

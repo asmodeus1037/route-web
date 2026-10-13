@@ -308,15 +308,9 @@
                     {% endif %}
                 </div>
                 {% if t.status in ['pending', 'todo', 'processed', 'fail'] %}
-                <div class="fast-btns stacked">
+                <div class="fast-btns">
                     <button type="button" class="fast-ok" onclick="togglePanel('{{ t.uid }}')">Готово</button>
-                    {% if is_battery %}
-                    <button type="button" class="fast-side" onclick="openTakenModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">Забираю без замены</button>
-                    <button type="button" class="fast-side" onclick="openReplaceNoModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">Куратор не дал</button>
-                    {% else %}
-                    <button type="button" class="fast-side" onclick="openModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'evacuation', 'Причина эвакуации')">Эвакуация</button>
-                    <button type="button" class="fast-side" onclick="closeTicketInstant('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'fail')">Вело отсутствует на дарксторе</button>
-                    {% endif %}
+                    <button type="button" class="fast-more" onclick="toggleMore('{{ t.uid }}')" aria-label="Ещё">⋯</button>
                 </div>
                 {% endif %}
             </div>
@@ -326,12 +320,20 @@
                     <input type="number" name="parts" min="1" placeholder="Сколько отдал" required>
                     <button type="submit" class="fast-ok">Отправить</button>
                 </form>
+                <div class="fast-more-panel" id="more-{{ t.uid }}" hidden>
+                    <button type="button" class="fast-side" onclick="openTakenModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">Забираю без замены</button>
+                    <button type="button" class="fast-side" onclick="openReplaceNoModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}')">Куратор не дал</button>
+                </div>
                 {% else %}
                 <form class="fast-panel" id="panel-{{ t.uid }}" hidden data-master="{{ name }}" action="/master/{{ name }}/darks/{{ darks_number }}/done/{{ t.uid }}" method="POST" onsubmit="return closeTicket(this)">
                     <div class="part-list" data-master="{{ name }}">Напишите запчасть</div>
                     <input type="hidden" name="parts_json" value="[]">
                     <button type="submit" class="fast-ok">Отправить</button>
                 </form>
+                <div class="fast-more-panel" id="more-{{ t.uid }}" hidden>
+                    <button type="button" class="fast-side" onclick="openModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'evacuation', 'Причина эвакуации')">Эвакуация</button>
+                    <button type="button" class="fast-side" onclick="closeTicketInstant('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'fail')">Вело отсутствует на дарксторе</button>
+                </div>
                 {% endif %}
             {% endif %}
         </div>
@@ -383,7 +385,7 @@
 
     <div class="footer">Обновлено: {{ now }}</div>
     
-    <script src="/static/js/master.js"></script>
+    <script src="/static/js/master.js?v=14"></script>
     <nav class="dock"></nav>
 </body>
 </html>

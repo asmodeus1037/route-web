@@ -38,7 +38,7 @@
         <button class="load-btn" type="submit">Загрузить багажник</button>
     </form>
     <nav class="dock"></nav>
-    <script src="/static/js/master.js"></script>
+    <script src="/static/js/master.js?v=14"></script>
     <script>
         var catalog = {{ parts|map(attribute='name')|list|tojson }};
         var picker = document.getElementById('picker');
