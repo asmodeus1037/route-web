@@ -130,6 +130,59 @@ def mirror_replacement(item):
     _wake.set()
 
 
+def write_statuses_now(tickets):
+    """Сразу записать статус, мастера и комментарий. Не через очередь."""
+    if not _state['configured'] or psycopg2 is None:
+        raise RuntimeError('База не настроена')
+    rows = []
+    for ticket in tickets or []:
+        uid = (ticket or {}).get('uid')
+        if not uid:
+            continue
+        rows.append((
+            ticket.get('status') or '',
+            ticket.get('master') or '',
+            ticket.get('note') or '',
+            ticket.get('evac_reason') or '',
+            ticket.get('timer_from') or '',
+            str(uid),
+        ))
+    rows = _unique_last(rows, 5)
+    if not rows:
+        return 0
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            execute_values(
+                cur,
+                """
+                UPDATE tickets AS t SET
+                    status = v.status,
+                    master = v.master,
+                    note = v.note,
+                    evac_reason = v.evac_reason,
+                    timer_from = v.timer_from,
+                    updated_at = now()
+                FROM (VALUES %s) AS v(status, master, note, evac_reason, timer_from, uid)
+                WHERE t.uid = v.uid
+                """,
+                rows,
+                page_size=500,
+            )
+            changed = cur.rowcount
+        conn.commit()
+        with _lock:
+            _state['connected'] = True
+            _state['last_error'] = ''
+            _state['last_sync'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        return changed
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def load_tickets():
     """Прочитать заявки из базы. None — базы нет, [] — база пустая."""
     if not _state['configured'] or psycopg2 is None:

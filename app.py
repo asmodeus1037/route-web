@@ -906,40 +906,41 @@ def import_new_tickets_from_google():
         _sheet_read_lock.release()
 
 def restore_statuses_from_sheet():
-    """Вернуть в базу статус и мастера из таблицы. Нужно после ручной порчи базы."""
+    """Вернуть в базу статус и мастера из таблицы. Запись сразу, не через очередь."""
     global _last_google_import
     fresh = _read_tickets_from_google()
+    counts = {}
+    for src in fresh:
+        key = src.get('status') or 'пусто'
+        counts[key] = counts.get(key, 0) + 1
     if not _tickets_mem:
         store_ticket_memory(fresh, fresh=True)
-        db.mirror_tickets(_tickets_mem)
-        publish_caches(_tickets_mem)
-        return len(_tickets_mem)
-    by_uid = {t.get('uid'): t for t in fresh if t.get('uid')}
-    restored = 0
-    for ticket in _tickets_mem:
-        src = by_uid.get(ticket.get('uid'))
-        if not src:
-            continue
-        ticket['status'] = src.get('status') or ticket.get('status')
-        ticket['master'] = src.get('master') or ''
-        ticket['note'] = src.get('note') or ''
-        ticket['evac_reason'] = src.get('evac_reason') or ''
-        ticket['timer_from'] = src.get('timer_from') or ''
-        ticket['is_done'] = ticket['status'] == 'done'
-        ticket['is_active'] = is_active_status(ticket['status'])
-        ticket['hours_since'] = ticket_hours(ticket)
-        ticket['_local_ts'] = time.time()
-        restored += 1
-    for src in fresh:
-        if src.get('uid') and src.get('uid') not in {t.get('uid') for t in _tickets_mem}:
-            _tickets_mem.append(src)
-            restored += 1
-    store_ticket_memory(_tickets_mem, fresh=True)
-    db.mirror_tickets(_tickets_mem)
+    else:
+        by_uid = {t.get('uid'): t for t in fresh if t.get('uid')}
+        known = set()
+        for ticket in _tickets_mem:
+            src = by_uid.get(ticket.get('uid'))
+            if not src:
+                continue
+            known.add(ticket.get('uid'))
+            ticket['status'] = src.get('status') or 'pending'
+            ticket['master'] = src.get('master') or ''
+            ticket['note'] = src.get('note') or ''
+            ticket['evac_reason'] = src.get('evac_reason') or ''
+            ticket['timer_from'] = src.get('timer_from') or ''
+            ticket['is_done'] = ticket['status'] == 'done'
+            ticket['is_active'] = is_active_status(ticket['status'])
+            ticket['hours_since'] = ticket_hours(ticket)
+            ticket['_local_ts'] = time.time()
+        for src in fresh:
+            if src.get('uid') and src.get('uid') not in known:
+                _tickets_mem.append(src)
+        store_ticket_memory(_tickets_mem, fresh=True)
+    changed = db.write_statuses_now(_tickets_mem)
     publish_caches(_tickets_mem)
     _last_google_import = time.time()
-    logger.info(f'Статусы возвращены из таблицы: {restored}')
-    return restored
+    logger.info(f'Статусы возвращены из таблицы, записано {changed}, по статусам {counts}')
+    return {'count': changed, 'from_sheet': counts}
 
 def refresh_admin_cache():
     try:
@@ -1910,8 +1911,13 @@ def api_restore_from_sheet():
     if session.get('role') != 'admin':
         return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
     try:
-        count = restore_statuses_from_sheet()
-        return jsonify({'success': True, 'count': count, 'message': 'Статусы возвращены из таблицы в базу'})
+        result = restore_statuses_from_sheet()
+        return jsonify({
+            'success': True,
+            'count': result.get('count'),
+            'from_sheet': result.get('from_sheet'),
+            'message': 'Статусы записаны в базу сразу. Обновите таблицу tickets в DBeaver.',
+        })
     except Exception as e:
         logger.error(f'Не удалось вернуть статусы: {e}')
         return jsonify({'success': False, 'error': str(e)})
