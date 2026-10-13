@@ -277,12 +277,25 @@ def _ensure_schema(conn):
                 INSERT INTO parts_catalog (name, price) VALUES %s
                 ON CONFLICT (name) DO UPDATE SET price = EXCLUDED.price
                 """,
-                _catalog,
+                _unique_last(_catalog, 0),
             )
     conn.commit()
 
 
+def _unique_last(rows, indexes=0):
+    """В одной пачке не должно быть двух строк с одним и тем же ключом."""
+    if isinstance(indexes, int):
+        indexes = (indexes,)
+    found = {}
+    for row in rows or []:
+        if not row:
+            continue
+        found[tuple(row[i] for i in indexes)] = row
+    return list(found.values())
+
+
 def _upsert_tickets(conn, rows):
+    rows = _unique_last(rows, 0)
     if not rows:
         return
     with conn.cursor() as cur:
@@ -322,6 +335,7 @@ def _upsert_tickets(conn, rows):
 
 
 def _upsert_darks(conn, rows):
+    rows = _unique_last(rows, 0)
     if not rows:
         return
     with conn.cursor() as cur:
@@ -345,6 +359,7 @@ def _upsert_darks(conn, rows):
 
 
 def _upsert_trunks(conn, rows):
+    rows = _unique_last(rows, (0, 1))
     if not rows:
         return
     with conn.cursor() as cur:
