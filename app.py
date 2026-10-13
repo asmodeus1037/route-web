@@ -222,10 +222,9 @@ def get_ticket_row_by_uid(uid):
 
 def update_ticket_in_admin_cache(uid, new_status, note='', display_desc='', extra=None):
     try:
-        admin_cache = get_admin_cache()
-        if not admin_cache:
-            return False
+        admin_cache = get_admin_cache() or {}
         updated = False
+        mirrored = False
         stamp = time.time()
         for dir_name, dir_data in admin_cache.get('directions', {}).items():
             for t in dir_data.get('tickets', []):
@@ -260,6 +259,16 @@ def update_ticket_in_admin_cache(uid, new_status, note='', display_desc='', extr
                 ticket.update(extra)
             ticket['hours_since'] = ticket_hours(ticket)
             db.mirror_ticket(ticket)
+            mirrored = True
+        if updated and not mirrored:
+            for dir_data in admin_cache.get('directions', {}).values():
+                for ticket in dir_data.get('tickets', []):
+                    if ticket.get('uid') == uid:
+                        db.mirror_ticket(ticket)
+                        mirrored = True
+                        break
+                if mirrored:
+                    break
         if _tickets_mem:
             store_ticket_memory(_tickets_mem, fresh=False)
         if updated:
@@ -785,7 +794,6 @@ def store_ticket_memory(tickets, fresh=False):
     uid_index = build_uid_index(_tickets_mem)
     if fresh:
         _tickets_mem_at = time.time()
-        db.mirror_tickets(_tickets_mem)
     return _tickets_mem
 
 def publish_caches(tickets):
@@ -836,6 +844,7 @@ def get_tickets_from_sheets(force=False):
         merge_local_tickets(previous, tickets)
         apply_pending_queue(tickets)
         store_ticket_memory(tickets, fresh=True)
+        db.mirror_tickets(_tickets_mem)
         logger.info(f'База недоступна, таблица прочитана: {len(tickets)} заявок')
         return _tickets_mem
     except Exception as e:
@@ -861,16 +870,30 @@ def import_new_tickets_from_google():
     try:
         _last_google_import = time.time()
         fresh = _read_tickets_from_google()
+        fresh_by_uid = {t.get('uid'): t for t in fresh if t.get('uid')}
+        filled = 0
+        for ticket in _tickets_mem:
+            src = fresh_by_uid.get(ticket.get('uid'))
+            if not src:
+                continue
+            sheet_master = (src.get('master') or '').strip()
+            if sheet_master and not (ticket.get('master') or '').strip():
+                ticket['master'] = sheet_master
+                ticket['_local_ts'] = time.time()
+                db.mirror_ticket(ticket)
+                filled += 1
         known = {t.get('uid') for t in _tickets_mem if t.get('uid')}
         new_ones = [t for t in fresh if t.get('uid') and t.get('uid') not in known]
-        if not new_ones:
+        for ticket in new_ones:
+            db.mirror_ticket(ticket)
+        if not new_ones and not filled:
             logger.info('Новых заявок в таблице нет')
             return 0
         merged = list(_tickets_mem) + new_ones
         apply_pending_queue(merged)
         store_ticket_memory(merged, fresh=True)
         publish_caches(merged)
-        logger.info(f'Из таблицы добавлены новые заявки: {len(new_ones)}')
+        logger.info(f'Из таблицы добавлены новые заявки: {len(new_ones)}, мастеров дописано: {filled}')
         return len(new_ones)
     except Exception as e:
         if is_quota_error(e):
@@ -950,6 +973,8 @@ def batch_update_masters(changes):
             for ticket in _tickets_mem:
                 if ticket.get('uid') == change.get('uid'):
                     ticket['master'] = change.get('master') or ''
+                    ticket['_local_ts'] = time.time()
+                    db.mirror_ticket(ticket)
         store_ticket_memory(_tickets_mem, fresh=False)
         publish_caches(_tickets_mem)
         return updated_count
@@ -974,6 +999,8 @@ def clear_masters(master_name=None):
         column = 'N' if source == 'Импорт М4' else 'G'
         grouped.setdefault(source, []).append({'range': f'{column}{row_idx}', 'values': [['']]})
         ticket['master'] = ''
+        ticket['_local_ts'] = time.time()
+        db.mirror_ticket(ticket)
         cleared += 1
     if grouped:
         book = get_sheet_client()
@@ -1088,6 +1115,7 @@ def add_to_queue(task):
         queue_data['tasks'] = [t for t in queue_data.get('tasks', []) if t.get('uid') != uid]
         queue_data['tasks'].append(task)
         _save_queue(queue_data)
+    db.mirror_event(task)
     logger.info(f"✅ Задача добавлена в очередь: {uid}")
 
 def remove_ticket_from_master_cache(master_name, uid):
@@ -2617,6 +2645,15 @@ def append_bike_swap(address, darks_number, old_data, new_data, master='', uid='
     except Exception as e:
         logger.warning(f'Строка {target} записана, мастер и номер заявки в конец не встали: {e}')
     logger.info(f"✅ Замена записана в «{sheet.title}», строка {target}, даркстор {darks_number}")
+    db.mirror_replacement({
+        'uid': uid,
+        'master': master,
+        'darks': darks_number,
+        'address': address,
+        'kind': kind,
+        'old': old_data or {},
+        'new': new_data or {},
+    })
 
 def write_transit_replacement(uid, master_name, darks_number, address, old_data, new_data):
     try:
@@ -2664,6 +2701,7 @@ def transit_replace():
     new_data = data.get('new_data', {})
     try:
         write_transit_replacement(uid, master_name, darks_number, address, old_data, new_data)
+        update_ticket_in_admin_cache(uid, 'done', 'Заменен')
         add_to_queue({
             'uid': uid,
             'source': source_of(uid),

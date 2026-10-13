@@ -28,6 +28,8 @@ _latest_darks = None
 _latest_trunks = None
 _ticket_updates = []
 _moves = []
+_events = []
+_replacements = []
 _state = {
     'configured': False,
     'connected': False,
@@ -81,6 +83,51 @@ def start():
 def status():
     with _lock:
         return dict(_state)
+
+
+def mirror_event(task):
+    """Любое нажатие мастера или админа: кто, что сделал, с какой заявкой."""
+    if not _state['configured'] or not isinstance(task, dict) or not task.get('uid'):
+        return
+    data = task.get('data') or {}
+    row = (
+        task.get('uid') or '',
+        task.get('type') or '',
+        task.get('source') or '',
+        data.get('master') or '',
+        str(data.get('darks_number') or data.get('darks') or ''),
+        data.get('gos') or '',
+        data.get('note') or data.get('parts') or data.get('reason') or data.get('status') or '',
+        data.get('new_status') or '',
+    )
+    with _lock:
+        _events.append(row)
+    _wake.set()
+
+
+def mirror_replacement(item):
+    """Замена велосипеда. В таблицу замен уходит копия, здесь оригинал."""
+    if not _state['configured'] or not isinstance(item, dict):
+        return
+    old = item.get('old') or {}
+    new = item.get('new') or {}
+    row = (
+        item.get('uid') or '',
+        item.get('master') or '',
+        str(item.get('darks') or ''),
+        item.get('address') or '',
+        item.get('kind') or '',
+        old.get('serial') or '',
+        old.get('gos') or '',
+        old.get('iot') or '',
+        new.get('serial') or '',
+        new.get('gos') or '',
+        new.get('iot') or '',
+        item.get('reason') or '',
+    )
+    with _lock:
+        _replacements.append(row)
+    _wake.set()
 
 
 def load_tickets():
@@ -327,6 +374,38 @@ def _ensure_schema(conn):
             )
         """)
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS work_log (
+                id BIGSERIAL PRIMARY KEY,
+                uid TEXT,
+                action TEXT,
+                source TEXT,
+                master TEXT,
+                darks TEXT,
+                gos TEXT,
+                note TEXT,
+                new_status TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS replacements (
+                id BIGSERIAL PRIMARY KEY,
+                uid TEXT,
+                master TEXT,
+                darks TEXT,
+                address TEXT,
+                kind TEXT,
+                old_serial TEXT,
+                old_gos TEXT,
+                old_iot TEXT,
+                new_serial TEXT,
+                new_gos TEXT,
+                new_iot TEXT,
+                reason TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS parts_catalog (
                 name TEXT PRIMARY KEY,
                 price INTEGER NOT NULL
@@ -456,6 +535,40 @@ def _insert_moves(conn, rows):
     conn.commit()
 
 
+def _insert_events(conn, rows):
+    if not rows:
+        return
+    with conn.cursor() as cur:
+        execute_values(
+            cur,
+            """
+            INSERT INTO work_log (uid, action, source, master, darks, gos, note, new_status)
+            VALUES %s
+            """,
+            rows,
+            page_size=200,
+        )
+    conn.commit()
+
+
+def _insert_replacements(conn, rows):
+    if not rows:
+        return
+    with conn.cursor() as cur:
+        execute_values(
+            cur,
+            """
+            INSERT INTO replacements (
+                uid, master, darks, address, kind,
+                old_serial, old_gos, old_iot, new_serial, new_gos, new_iot, reason
+            ) VALUES %s
+            """,
+            rows,
+            page_size=100,
+        )
+    conn.commit()
+
+
 def _worker():
     global _latest_tickets, _latest_darks, _latest_trunks
     conn = None
@@ -469,7 +582,9 @@ def _worker():
             trunks = _latest_trunks
             updates = list(_ticket_updates)
             moves = list(_moves)
-        if not any((tickets, darks, trunks, updates, moves)):
+            events = list(_events)
+            replacements = list(_replacements)
+        if not any((tickets, darks, trunks, updates, moves, events, replacements)):
             continue
         try:
             if conn is None or conn.closed:
@@ -502,6 +617,14 @@ def _worker():
                 _insert_moves(conn, moves)
                 with _lock:
                     del _moves[:len(moves)]
+            if events:
+                _insert_events(conn, events)
+                with _lock:
+                    del _events[:len(events)]
+            if replacements:
+                _insert_replacements(conn, replacements)
+                with _lock:
+                    del _replacements[:len(replacements)]
             with _lock:
                 _state['connected'] = True
                 _state['last_error'] = ''
