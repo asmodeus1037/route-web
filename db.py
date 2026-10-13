@@ -83,6 +83,68 @@ def status():
         return dict(_state)
 
 
+def load_tickets():
+    """Прочитать заявки из базы. None — базы нет, [] — база пустая."""
+    if not _state['configured'] or psycopg2 is None:
+        return None
+    url = _database_url()
+    if not url:
+        return None
+    conn = None
+    try:
+        conn = psycopg2.connect(url)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT uid, source, darks, type, bike_type, supplier, description,
+                       gos, contact, created_at, timer_from, master, status, note,
+                       evac_reason, direction, address, parts, row_index
+                FROM tickets
+            """)
+            fetched = cur.fetchall()
+        tickets = []
+        for row in fetched:
+            status = row[12] or ''
+            tickets.append({
+                'uid': row[0] or '',
+                'source': row[1] or '',
+                'darks': row[2] or '',
+                'type': row[3] or '',
+                'bike_type': row[4] or '',
+                'bike_subtype': '',
+                'supplier': row[5] or '',
+                'desc': row[6] or '',
+                'display_desc': row[6] or '',
+                'gos': row[7] or '',
+                'contact': row[8] or '',
+                'created': row[9] or '',
+                'timer_from': row[10] or '',
+                'master': row[11] or '',
+                'status': status,
+                'note': row[13] or '',
+                'evac_reason': row[14] or '',
+                'direction': row[15] or '',
+                'address': row[16] or '',
+                'parts': row[17] or '',
+                'row_index': row[18] or 0,
+                'coords': '',
+                'sent_date': '',
+            })
+        with _lock:
+            _state['connected'] = True
+            _state['last_error'] = ''
+            _state['tickets'] = len(tickets)
+        return tickets
+    except Exception as e:
+        logger.warning(f'Не прочитал заявки из базы: {e}')
+        with _lock:
+            _state['connected'] = False
+            _state['last_error'] = str(e)[:300]
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def mirror_tickets(tickets):
     if not _state['configured']:
         return

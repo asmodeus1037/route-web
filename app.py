@@ -796,13 +796,26 @@ def publish_caches(tickets):
         master_tickets = [t for t in tickets if clean_name(t.get('master')) == clean_name(master) and is_active_status(t.get('status'))]
         save_master_cache(master, master_tickets, '')
 
+_last_google_import = 0
+
+def _tickets_from_db(previous):
+    rows = db.load_tickets()
+    if not rows:
+        return None
+    for ticket in rows:
+        ticket['hours_since'] = ticket_hours(ticket)
+        ticket['is_done'] = ticket.get('status') == 'done'
+        ticket['is_active'] = is_active_status(ticket.get('status'))
+    merge_local_tickets(previous, rows)
+    apply_pending_queue(rows)
+    enrich_tickets(rows)
+    return rows
+
 def get_tickets_from_sheets(force=False):
+    """Рабочий список заявок. Сначала база, таблицу открываем только если базы нет."""
     global _sheet_backoff_until
     now = time.time()
     if _tickets_mem and not force and now - _tickets_mem_at < 120:
-        return _tickets_mem
-    if now < _sheet_backoff_until:
-        logger.info('Google ограничил чтение, берём прошлую копию')
         return _tickets_mem
     if not _sheet_read_lock.acquire(blocking=False):
         return _tickets_mem
@@ -810,22 +823,62 @@ def get_tickets_from_sheets(force=False):
         now = time.time()
         if _tickets_mem and not force and now - _tickets_mem_at < 120:
             return _tickets_mem
-        if now < _sheet_backoff_until:
-            return _tickets_mem
         previous = list(_tickets_mem)
+        rows = _tickets_from_db(previous)
+        if rows:
+            store_ticket_memory(rows, fresh=True)
+            logger.info(f'Заявки взяты из базы: {len(rows)}')
+            return _tickets_mem
+        if now < _sheet_backoff_until:
+            logger.info('Google ограничил чтение, берём прошлую копию')
+            return _tickets_mem
         tickets = _read_tickets_from_google()
         merge_local_tickets(previous, tickets)
         apply_pending_queue(tickets)
         store_ticket_memory(tickets, fresh=True)
-        logger.info(f'Таблица прочитана: {len(tickets)} заявок')
+        logger.info(f'База недоступна, таблица прочитана: {len(tickets)} заявок')
         return _tickets_mem
     except Exception as e:
         if is_quota_error(e):
             _sheet_backoff_until = time.time() + 75
             logger.warning('Лимит Google. Пауза 75 секунд, работаем на прошлой копии.')
         else:
-            logger.error(f'Ошибка чтения таблицы: {e}')
+            logger.error(f'Ошибка чтения заявок: {e}')
         return _tickets_mem
+    finally:
+        _sheet_read_lock.release()
+
+def import_new_tickets_from_google():
+    """Забрать с таблицы только новые заявки. Старые статусы из таблицы не затирают базу."""
+    global _last_google_import, _sheet_backoff_until
+    now = time.time()
+    if now < _sheet_backoff_until or now - _last_google_import < 60:
+        return 0
+    if not _tickets_mem:
+        return 0
+    if not _sheet_read_lock.acquire(blocking=False):
+        return 0
+    try:
+        _last_google_import = time.time()
+        fresh = _read_tickets_from_google()
+        known = {t.get('uid') for t in _tickets_mem if t.get('uid')}
+        new_ones = [t for t in fresh if t.get('uid') and t.get('uid') not in known]
+        if not new_ones:
+            logger.info('Новых заявок в таблице нет')
+            return 0
+        merged = list(_tickets_mem) + new_ones
+        apply_pending_queue(merged)
+        store_ticket_memory(merged, fresh=True)
+        publish_caches(merged)
+        logger.info(f'Из таблицы добавлены новые заявки: {len(new_ones)}')
+        return len(new_ones)
+    except Exception as e:
+        if is_quota_error(e):
+            _sheet_backoff_until = time.time() + 75
+            logger.warning('Лимит Google при заборе новых заявок. Пауза 75 секунд.')
+        else:
+            logger.error(f'Не удалось забрать новые заявки из таблицы: {e}')
+        return 0
     finally:
         _sheet_read_lock.release()
 
@@ -1527,13 +1580,10 @@ def process_queue_background():
         try:
             time.sleep(10)
             flush_queue()
-            quiet = time.time() < _sheet_backoff_until
-            stale = (not _tickets_mem_at) or (time.time() - _tickets_mem_at >= 120)
-            if stale and not quiet and time.time() - _app_started_at > 20:
-                tickets = get_tickets_from_sheets(force=True)
-                if tickets:
-                    publish_caches(tickets)
-                    logger.info(f'Фоновое обновление: {len(tickets)} заявок')
+            if time.time() - _app_started_at < 30:
+                continue
+            if time.time() - _last_google_import >= 180:
+                import_new_tickets_from_google()
         except Exception as e:
             logger.error(f"❌ Ошибка в фоновом процессе: {e}")
 
@@ -1772,29 +1822,20 @@ def admin_panel():
 @app.route('/api/sync')
 @login_required
 def api_sync():
-    global uid_index, darks_ref
     try:
-        age = time.time() - _tickets_mem_at if _tickets_mem_at else 999
-        if _tickets_mem and age < 90:
-            return jsonify({
-                'success': True,
-                'cached': True,
-                'count': len(_tickets_mem),
-                'message': 'Данные уже свежие, таблицу не открывал',
-            })
-        if time.time() < _sheet_backoff_until:
-            return jsonify({
-                'success': False,
-                'error': 'Google ограничил чтение. Подождите минуту, работаем на прошлой копии.',
-            })
-        logger.info("🔄 Начинаем синхронизацию с Google Sheets...")
         flush_queue()
-        tickets = get_tickets_from_sheets(force=True)
-        if not _tickets_mem and time.time() < _sheet_backoff_until:
-            return jsonify({'success': False, 'error': 'Google ограничил чтение. Подождите минуту.'})
-        publish_caches(_tickets_mem or tickets)
-        logger.info(f"✅ Синхронизация завершена: {len(tickets)} заявок")
-        return jsonify({'success': True, 'cached': False, 'count': len(tickets)})
+        added = import_new_tickets_from_google()
+        tickets = get_tickets_from_sheets(force=False) or []
+        if tickets:
+            publish_caches(tickets)
+        logger.info(f"Синхронизация: в работе {len(tickets)}, новых из таблицы {added}")
+        return jsonify({
+            'success': True,
+            'cached': added == 0,
+            'count': len(tickets),
+            'new': added,
+            'message': f'Новых заявок с сайта: {added}. Остальное читается из базы.',
+        })
     except Exception as e:
         logger.error(f"Ошибка синхронизации: {e}")
         return jsonify({'success': False, 'error': str(e)})
