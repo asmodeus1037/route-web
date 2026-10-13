@@ -11,6 +11,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import urllib.parse
 import pytz
+import html
 import logging
 import secrets
 from functools import wraps
@@ -1231,7 +1232,7 @@ def mark_bike_missing(uid, actor_name):
             'skip_report': False
         }
     })
-    notify_dark_event((ticket or {}).get('darks', ''), f'{ticket_label(ticket)} нет вело на дарксторе, заявка перенесена')
+    notify_dark_event((ticket or {}).get('darks', ''), f'⏹️ {ticket_label(ticket)} нет вело на дарксторе, заявка перенесена')
     return note
 
 def apply_queue_to_sheets(tasks):
@@ -1666,6 +1667,17 @@ def process_queue_background():
 # ============================================================
 # ОТПРАВКА УВЕДОМЛЕНИЙ
 # ============================================================
+def tg_plain(value):
+    return html.escape(str(value or ''), quote=False)
+
+def ticket_mark(ticket):
+    kind = str((ticket or {}).get('type') or '').lower()
+    if 'аккумулятор' in kind:
+        return '🔋'
+    if 'заряд' in kind:
+        return '⚡'
+    return '🚲'
+
 def curator_notice_groups():
     tickets = []
     cache = get_admin_cache() or {}
@@ -1683,10 +1695,17 @@ def curator_notice_groups():
         if not dark:
             continue
         address = (items[0].get('address') or '').strip()
+        names = []
+        for ticket in items:
+            master = (ticket.get('master') or '').strip()
+            if master and master not in names:
+                names.append(master)
+        master_title = 'Вам назначен мастер' if len(names) < 2 else 'Вам назначены мастера'
         lines = [
-            'Привет, на связи Vanta Bikes!',
+            'Привет!',
+            f'{master_title}: {", ".join(names)}',
             '',
-            f'{address} (даркстор {dark})'.strip(),
+            f'<b>{tg_plain(address)} (даркстор {tg_plain(dark)})</b>',
             f'Заявки ({len(items)}):',
         ]
         for ticket in items:
@@ -1695,7 +1714,7 @@ def curator_notice_groups():
             else:
                 name = ticket.get('gos') or 'Без номера'
             mark = ' — ЗАМЕНА' if is_evacuation_ticket(ticket) else ''
-            lines.append(f'   {name} | {(ticket.get("desc") or "-")}{mark}')
+            lines.append(f'{ticket_mark(ticket)} {tg_plain(name)} | {tg_plain(ticket.get("desc") or "-")}{mark}')
         lines.append('')
         lines.append('Подготовьте, пожалуйста, технику к ремонту')
         lines.append('Хорошего дня!')
@@ -1971,7 +1990,12 @@ def master_route_text(master_name):
     cache = get_master_cache(master_name) or {}
     tickets = [t for t in cache.get('tickets') or [] if is_active_status(t.get('status'))]
     enrich_tickets(tickets)
-    lines = [f'Вам назначены заявки: {len(tickets)}']
+    lines = [
+        tg_plain(master_name),
+        get_msk_now().strftime('%d.%m.%Y'),
+        '',
+        f'Вам назначены заявки: {len(tickets)}',
+    ]
     if not tickets:
         return 'На вас сейчас нет открытых заявок.'
     by_dark = {}
@@ -1980,12 +2004,12 @@ def master_route_text(master_name):
     for dark, group in by_dark.items():
         address = (group[0].get('address') or '').strip()
         lines.append('')
-        lines.append(f'{address} (даркстор {dark})'.strip())
+        lines.append(f'<b>{tg_plain(address)} (даркстор {tg_plain(dark)})</b>')
         for ticket in group[:20]:
             label = ticket_label(ticket)
             desc = (ticket.get('desc') or '').replace('\n', ' ').strip()
             prefix = 'ЗАМЕНА. ' if is_evacuation_ticket(ticket) else ''
-            lines.append(f'• {label} — {prefix}{desc[:90]}')
+            lines.append(f'• {tg_plain(label)} — {tg_plain(prefix + desc[:90])}')
         extra = len(group) - 20
         if extra > 0:
             lines.append(f'и ещё {extra}')
@@ -2034,7 +2058,6 @@ def api_batch_update():
                 names.append(master)
         for master in names:
             refresh_master_cache(master)
-            notify_master_route(master)
     return jsonify({'success': True, 'updated': updated})
 
 @app.route('/api/send_route', methods=['POST'])
@@ -2583,7 +2606,7 @@ def master_done(name, darks_number, uid):
     if parts == 'Отказ от эвакуации':
         notify_dark_event(darks_number, f'{label} отказ от эвакуации')
     else:
-        notify_dark_event(darks_number, f'{label} заявка выполнена')
+        notify_dark_event(darks_number, f'✅ {label} заявка выполнена')
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/fail/<uid>')
@@ -2618,7 +2641,7 @@ def master_evacuation(name, darks_number, uid):
         'data': {'reason': reason, 'note': note, 'master': name, 'darks_number': darks_number, 'gos': ticket.get('gos', '')}
     })
     label = ticket_label(find_cached_ticket(uid) or {'gos': request.form.get('gos', '')})
-    notify_dark_event(darks_number, f'{label} нужно эвакуировать: {reason.strip()}')
+    notify_dark_event(darks_number, f'🔧 {label} нужно эвакуировать: {reason.strip()}')
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/taken_no_replace/<uid>', methods=['POST'])
@@ -2969,7 +2992,7 @@ def master_evacuation_replace():
         
         update_ticket_in_admin_cache(uid, 'done', 'Заменен при эвакуации', '✅ Выполнено')
         update_status_in_google_sheets(uid, '✅ Выполнено', 'Заменен при эвакуации')
-        notify_dark_event(darks_number, f'{old_data.get("gos") or ticket_label(ticket)} заменен и готов к эксплуатации')
+        notify_dark_event(darks_number, f'✅ {old_data.get("gos") or ticket_label(ticket)} заменен и готов к эксплуатации')
         
         add_to_queue({
             'uid': uid,
