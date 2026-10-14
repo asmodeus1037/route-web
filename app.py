@@ -447,6 +447,10 @@ def enrich_tickets(tickets):
             ticket['coords'] = info['coords']
         if info.get('direction') and not ticket.get('direction'):
             ticket['direction'] = info['direction']
+    try:
+        attach_iot(tickets)
+    except Exception as exc:
+        logger.warning(f'IoT к заявкам не подставился: {exc}')
     return tickets
 
 def parse_created_date(date_str):
@@ -577,7 +581,28 @@ def lookup_bike_point(iot):
     ensure_xdevice_loop()
     refresh_xdevice_points(force=False)
     key = normalize_iot(iot).lower()
+    if not key:
+        return None
     return _xdevice_points.get(key)
+
+def resolve_ticket_iot(iot, darks, gos):
+    if normalize_iot(iot):
+        return iot
+    key = normalize_gos(gos)
+    if not key:
+        return ''
+    try:
+        mapping = bike_lookup()
+    except Exception as exc:
+        logger.warning(f'База вело для карты: {exc}')
+        return ''
+    direct = mapping.get((str(darks or '').strip(), key))
+    if direct and direct.get('iot'):
+        return direct['iot']
+    for plate_key, item in mapping.items():
+        if plate_key[1] == key and item.get('iot'):
+            return item['iot']
+    return ''
 
 def normalize_gos(value):
     return re.sub(r'[^0-9A-Za-zА-Яа-я]', '', str(value or '')).upper()
@@ -1938,7 +1963,10 @@ def generate_curator_message(tickets_data):
 def api_bike_location():
     if session.get('role') != 'admin':
         return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
-    point = lookup_bike_point(request.args.get('iot', ''))
+    iot = resolve_ticket_iot(request.args.get('iot', ''), request.args.get('darks', ''), request.args.get('gos', ''))
+    if not normalize_iot(iot):
+        return jsonify({'success': False, 'error': 'У этого номера нет IoT в базе велосипедов'})
+    point = lookup_bike_point(iot)
     if not point:
         return jsonify({'success': False, 'error': _xdevice_error or 'Точки для этого IoT нет'})
     lat = point['lat']

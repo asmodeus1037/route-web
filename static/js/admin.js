@@ -887,17 +887,22 @@ function renderCurrentTab() {
     renderTicketsGrouped(filtered, containerId);
 }
 
-function mapButton(iot) {
-    var safe = String(iot || '').replace(/[&<>"']/g, '');
-    if (!safe) return '';
-    return '<button type="button" class="btn-map" data-iot="' + safe + '" onclick="openBikeMap(this)">Карта</button>';
+function mapButton(iot, gos, darks) {
+    var safeIot = String(iot || '').replace(/[&<>"']/g, '');
+    var safeGos = String(gos || '').replace(/[&<>"']/g, '');
+    var safeDark = String(darks || '').replace(/[&<>"']/g, '');
+    if (!safeIot && !safeGos) return '';
+    return '<button type="button" class="btn-map" data-iot="' + safeIot + '" data-gos="' + safeGos + '" data-darks="' + safeDark + '" onclick="openBikeMap(this)">Карта</button>';
 }
 
 function openBikeMap(button) {
     var iot = button.getAttribute('data-iot') || '';
+    var gos = button.getAttribute('data-gos') || '';
+    var darks = button.getAttribute('data-darks') || '';
     button.disabled = true;
     showToastModern('Ищу точку...', 'success');
-    fetch('/api/bike_location?iot=' + encodeURIComponent(iot))
+    var query = 'iot=' + encodeURIComponent(iot) + '&gos=' + encodeURIComponent(gos) + '&darks=' + encodeURIComponent(darks);
+    fetch('/api/bike_location?' + query)
         .then(readApi)
         .then(function(data) {
             button.disabled = false;
@@ -1066,7 +1071,7 @@ function renderTicketsGrouped(tickets, containerId) {
             
             html += '<div class="ticket-row' + (isEvacuation ? ' evacuation-row' : '') + (isProcessed ? ' processed-row' : '') + (isQueued ? ' queued-row' : '') + '" data-uid="' + t.uid + '">';
             html += '<span class="id">' + (t.gos || '—') + '</span>';
-            html += '<span class="map-cell">' + mapButton(t.iot) + '</span>';
+            html += '<span class="map-cell">' + (isSupplyTicket(t) ? '' : mapButton(t.iot, t.gos, t.darks)) + '</span>';
             html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + originBadge(t.source) + supplierBadge(t.supplier) + (t.display_desc || t.desc || '-');
             if (t.contact) {
                 html += '<span class="who">отправил: ' + String(t.contact).replace(/[&<>]/g, '') + '</span>';
