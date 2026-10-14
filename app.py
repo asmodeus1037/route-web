@@ -1889,13 +1889,18 @@ def api_broadcast_curators():
             json={'text': text},
             timeout=40,
         )
-        body = response.json() if response.content else {}
+        if response.status_code == 404:
+            return jsonify({'success': False, 'error': 'На боте ещё нет рассылки. Нужно залить обновление route-bot.'})
+        try:
+            body = response.json() if response.content else {}
+        except Exception:
+            body = {}
         if response.status_code != 200 or not body.get('success'):
-            return jsonify({'success': False, 'error': 'Бот не принял сообщение'})
+            return jsonify({'success': False, 'error': body.get('error') or 'Бот не принял сообщение'})
         return jsonify({'success': True, 'count': body.get('count', 0)})
     except Exception as e:
         logger.warning(f'Рассылка кураторам не ушла: {e}')
-        return jsonify({'success': False, 'error': 'Не отправилось'})
+        return jsonify({'success': False, 'error': 'Бот не ответил'})
 
 def generate_curator_message(tickets_data):
     now = get_msk_now().strftime('%d.%m.%Y %H:%M')

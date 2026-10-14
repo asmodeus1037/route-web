@@ -1210,3 +1210,15 @@ h1 {
     color: #78716c;
     font-size: 10px;
 }
+/* map-and-groups */
+.top-actions { display:flex; gap:12px; flex-wrap:wrap; align-items:stretch; }
+.action-group { display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:8px 10px; }
+.action-label { width:100%; font-size:11px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color:#64748b; }
+.btn-view { background:#0369a1 !important; color:#fff !important; }
+.btn-send { background:#0f766e !important; color:#fff !important; }
+.btn-clear-master { background:#e11d48 !important; color:#fff !important; }
+.btn-broadcast { background:#7c3aed; color:#fff; }
+.ticket-row { grid-template-columns: max-content 78px minmax(0,1fr) 96px 110px 132px 72px !important; }
+.ticket-row .id { overflow:visible !important; text-overflow:clip !important; white-space:nowrap !important; font-size:15px !important; font-weight:800 !important; }
+.ticket-row .map-cell { display:flex; align-items:center; }
+.btn-map { background:#0369a1; color:#fff; border:0; border-radius:8px; padding:6px 8px; font-size:12px; font-weight:800; cursor:pointer; }

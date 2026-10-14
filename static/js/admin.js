@@ -890,7 +890,7 @@ function renderCurrentTab() {
 function mapButton(iot) {
     var safe = String(iot || '').replace(/[&<>"']/g, '');
     if (!safe) return '';
-    return '<button type="button" class="btn-map" data-iot="' + safe + '" onclick="openBikeMap(this)">На карте</button>';
+    return '<button type="button" class="btn-map" data-iot="' + safe + '" onclick="openBikeMap(this)">Карта</button>';
 }
 
 function openBikeMap(button) {
@@ -1065,8 +1065,9 @@ function renderTicketsGrouped(tickets, containerId) {
             else if (!isProcessed && t.hours_since >= 32) hoursClass = 'warning';
             
             html += '<div class="ticket-row' + (isEvacuation ? ' evacuation-row' : '') + (isProcessed ? ' processed-row' : '') + (isQueued ? ' queued-row' : '') + '" data-uid="' + t.uid + '">';
-            html += '<span class="id">' + (t.gos || '-') + supplierBadge(t.supplier) + (t.iot ? '<span class="iot-badge">IoT ' + String(t.iot).replace(/[&<>]/g, '') + '</span>' + mapButton(t.iot) : '') + '</span>';
-            html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + originBadge(t.source) + (t.display_desc || t.desc || '-');
+            html += '<span class="id">' + (t.gos || '—') + '</span>';
+            html += '<span class="map-cell">' + mapButton(t.iot) + '</span>';
+            html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + originBadge(t.source) + supplierBadge(t.supplier) + (t.display_desc || t.desc || '-');
             if (t.contact) {
                 html += '<span class="who">отправил: ' + String(t.contact).replace(/[&<>]/g, '') + '</span>';
             }

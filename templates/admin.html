@@ -68,19 +68,30 @@
         <a href="#" class="logout-btn" onclick="adminLogout(event)">🚪 Выйти</a>
     </h1>
     <div class="subtitle">Назначение мастеров и отправка маршрутов</div>
-    <div class="top-actions">
-        <a class="btn btn-view" href="/admin/trunks">Багажники мастеров</a>
-        <button class="btn btn-view" onclick="showRoutes()">🗺️ Просмотр маршрутов</button>
-        <button class="btn btn-send" onclick="openSendModal()">Отправить маршрут</button>
-        <button class="btn btn-success" onclick="saveAllChanges()">Сохранить назначения</button>
-        <button class="btn btn-notify" onclick="openBroadcastModal()">Сообщение через бота</button>
-        <button class="btn btn-clear-master" onclick="openClearMasterModal()">🧹 Снять заявки</button>
-        <button class="btn btn-notify" onclick="openNotifyModal()">📢 Уведомить кураторов</button>
-        <button class="btn btn-primary" onclick="syncAll()">🔄 Синхронизировать</button>
-        <button class="btn btn-bulk" id="bulkModeBtn" onclick="toggleBulkMode()">📋 Массовое изменение статуса</button>
+        <div class="top-actions">
+        <div class="action-group">
+            <span class="action-label">Смотреть</span>
+            <a class="btn btn-view" href="/admin/trunks">Багажники мастеров</a>
+            <button class="btn btn-view" onclick="showRoutes()">Просмотр маршрутов</button>
+        </div>
+        <div class="action-group">
+            <span class="action-label">Мастера</span>
+            <button class="btn btn-send" onclick="openSendModal()">Отправить маршрут</button>
+            <button class="btn btn-success" onclick="saveAllChanges()">Сохранить назначения</button>
+            <button class="btn btn-clear-master" onclick="openClearMasterModal()">Снять заявки</button>
+            <button class="btn btn-bulk" id="bulkModeBtn" onclick="toggleBulkMode()">Массовый статус</button>
+        </div>
+        <div class="action-group">
+            <span class="action-label">Кураторы</span>
+            <button class="btn btn-notify" onclick="openNotifyModal()">Уведомить кураторов</button>
+            <button class="btn btn-broadcast" onclick="openBroadcastModal()">Сообщение через бота</button>
+        </div>
+        <div class="action-group">
+            <span class="action-label">Таблица</span>
+            <button class="btn btn-primary" onclick="syncAll()">Синхронизировать</button>
+        </div>
     </div>
-    
-    <!-- Панель массового выделения -->
+<!-- Панель массового выделения -->
     <div class="bulk-panel" id="bulkPanel">
         <div class="info">
             📌 <span id="selectedCount">Выбрано: 0</span> заявок
@@ -246,6 +257,6 @@
         now: '{{ now }}'
     };
 </script>
-<script src="/static/js/admin.js?v=17"></script>
+<script src="/static/js/admin.js?v=18"></script>
 </body>
 </html>
