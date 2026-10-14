@@ -887,17 +887,25 @@ function renderCurrentTab() {
     renderTicketsGrouped(filtered, containerId);
 }
 
-function mapButton(iot) {
-    var safe = String(iot || '').replace(/[&<>"']/g, '');
-    if (!safe) return '';
-    return '<button type="button" class="btn-map" data-iot="' + safe + '" onclick="openBikeMap(this)">На карте</button>';
+function bikeButtons(iot, gos, darks) {
+    var safeIot = String(iot || '').replace(/[&<>"']/g, '');
+    var safeGos = String(gos || '').replace(/[&<>"']/g, '');
+    var safeDark = String(darks || '').replace(/[&<>"']/g, '');
+    if (!safeIot && !safeGos) return '';
+    var attrs = ' data-iot="' + safeIot + '" data-gos="' + safeGos + '" data-darks="' + safeDark + '"';
+    return '<span class="bike-actions">'
+        + '<button type="button" class="btn-mini map"' + attrs + ' onclick="openBikeMap(this)">Карта</button>'
+        + '</span>';
 }
 
 function openBikeMap(button) {
     var iot = button.getAttribute('data-iot') || '';
+    var gos = button.getAttribute('data-gos') || '';
+    var darks = button.getAttribute('data-darks') || '';
     button.disabled = true;
     showToastModern('Ищу точку...', 'success');
-    fetch('/api/bike_location?iot=' + encodeURIComponent(iot))
+    var query = 'iot=' + encodeURIComponent(iot) + '&gos=' + encodeURIComponent(gos) + '&darks=' + encodeURIComponent(darks);
+    fetch('/api/bike_location?' + query)
         .then(readApi)
         .then(function(data) {
             button.disabled = false;
@@ -916,7 +924,146 @@ function openBikeMap(button) {
         });
 }
 
-function originBadge(source) {
+function setBikePower(button, action) {
+    var gos = button.getAttribute('data-gos') || 'велосипед';
+    var question = action === 'on'
+        ? 'Включить ' + gos + '? Он сможет поехать.'
+        : 'Выключить ' + gos + '? Он заблокируется.';
+    if (!confirm(question)) return;
+    button.disabled = true;
+    fetch('/api/bike_power', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            action: action,
+            iot: button.getAttribute('data-iot') || '',
+            gos: button.getAttribute('data-gos') || '',
+            darks: button.getAttribute('data-darks') || ''
+        })
+    })
+    .then(readApi)
+    .then(function(data) {
+        button.disabled = false;
+        showToastModern(data.success ? (data.message || 'Готово') : (data.error || 'Не вышло'), data.success ? 'success' : 'error');
+    })
+    .catch(function() {
+        button.disabled = false;
+        showToastModern('Нет сети', 'error');
+    });
+}
+
+function toggleRowMenu(event, button) {
+    if (event) event.stopPropagation();
+    var menu = button.parentNode;
+    var open = menu.classList.contains('open');
+    var opened = document.querySelectorAll('.row-menu.open');
+    for (var i = 0; i < opened.length; i++) opened[i].classList.remove('open');
+    if (!open) menu.classList.add('open');
+}
+
+function searchBike() {
+    var input = document.getElementById('bikeQuery');
+    var box = document.getElementById('bikeSearchResult');
+    var query = (input.value || '').trim();
+    if (query.length < 3) {
+        box.innerHTML = '<p style="color:#b45309;">Введите хотя бы 3 символа.</p>';
+        return;
+    }
+    box.innerHTML = '<p>Ищу...</p>';
+    fetch('/api/bike_search?q=' + encodeURIComponent(query))
+        .then(readApi)
+        .then(function(data) {
+            if (!data.success) {
+                box.innerHTML = '<p style="color:#b91c1c;">' + (data.error || 'Не найдено') + '</p>';
+                return;
+            }
+            var items = data.items || [];
+            if (!items.length) {
+                box.innerHTML = '<p>Такого велосипеда в базе нет.</p>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < items.length; i++) {
+                var item = items[i];
+                html += '<div class="bike-card">';
+                html += '<div><b>Госномер:</b> ' + (item.gos || '—') + '</div>';
+                html += '<div><b>IoT:</b> ' + (item.iot || '—') + '</div>';
+                html += '<div><b>Серийный:</b> ' + (item.serial || '—') + '</div>';
+                html += '<div><b>Тип:</b> ' + (item.kind || '—') + '</div>';
+                html += '<div><b>Поставщик:</b> ' + (item.supplier || '—') + '</div>';
+                html += '<div><b>Даркстор:</b> ' + (item.darks || '—') + (item.address ? (', ' + item.address) : '') + '</div>';
+                if (item.url) html += '<div style="margin-top:8px;"><a href="' + item.url + '" target="_blank">Открыть на карте</a>' + (item.online ? ' · на связи' : ' · последняя точка') + '</div>';
+                else html += '<div style="margin-top:8px;color:#64748b;">Точки на карте сейчас нет</div>';
+                html += '</div>';
+            }
+            box.innerHTML = html;
+        })
+        .catch(function(error) {
+            box.innerHTML = '<p style="color:#b91c1c;">' + (error.message || 'Нет сети') + '</p>';
+        });
+}
+
+function openCreateTicket() {
+    document.getElementById('createTicketModal').classList.add('active');
+}
+
+function closeCreateTicket() {
+    document.getElementById('createTicketModal').classList.remove('active');
+}
+
+function toggleCustomType() {
+    var chosen = document.querySelector('input[name="createType"]:checked');
+    var field = document.getElementById('createCustom');
+    field.style.display = chosen && chosen.value === 'Свой вариант' ? 'block' : 'none';
+}
+
+function submitCreateTicket() {
+    var chosen = document.querySelector('input[name="createType"]:checked');
+    var payload = {
+        darks: document.getElementById('createDarks').value.trim(),
+        type: chosen ? chosen.value : '',
+        custom_type: document.getElementById('createCustom').value.trim(),
+        desc: document.getElementById('createDesc').value.trim(),
+        gos: document.getElementById('createGos').value.trim()
+    };
+    fetch('/api/admin_ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+    .then(readApi)
+    .then(function(data) {
+        if (!data.success) {
+            alert(data.error || 'Не создалось');
+            return;
+        }
+        var ticket = data.ticket;
+        if (ticket) {
+            var dir = ticket.direction || 'Без направления';
+            if (!directionsData[dir]) directionsData[dir] = { tickets: [], active_count: 0 };
+            directionsData[dir].tickets.push(ticket);
+            directionsData[dir].active_count += 1;
+        }
+        closeCreateTicket();
+        document.getElementById('createDarks').value = '';
+        document.getElementById('createDesc').value = '';
+        document.getElementById('createGos').value = '';
+        document.getElementById('createCustom').value = '';
+        showToastModern('Заявка создана', 'success');
+        renderCurrentTab();
+    })
+    .catch(function(error) {
+        alert(error.message || 'Нет сети');
+    });
+}
+
+document.addEventListener('click', function() {
+    var opened = document.querySelectorAll('.row-menu.open');
+    for (var i = 0; i < opened.length; i++) opened[i].classList.remove('open');
+});
+
+function originBadge(source, contact) {
+    if (String(contact || '').trim().toLowerCase() === 'админ') return '<span class="origin-badge origin-admin">Админ</span>';
     if (source === 'Заявки бот') return '<span class="origin-badge origin-bot">Бот</span>';
     if (source === 'Заявки') return '<span class="origin-badge origin-site">Сайт</span>';
     if (source === 'Импорт М4') return '<span class="origin-badge origin-m4">М4</span>';
@@ -1064,9 +1211,9 @@ function renderTicketsGrouped(tickets, containerId) {
             if (!isProcessed && t.hours_since > 48) hoursClass = 'overdue';
             else if (!isProcessed && t.hours_since >= 32) hoursClass = 'warning';
             
-            html += '<div class="ticket-row' + (isEvacuation ? ' evacuation-row' : '') + (isProcessed ? ' processed-row' : '') + (isQueued ? ' queued-row' : '') + '" data-uid="' + t.uid + '">';
-            html += '<span class="id">' + (t.gos || '-') + supplierBadge(t.supplier) + (t.iot ? '<span class="iot-badge">IoT ' + String(t.iot).replace(/[&<>]/g, '') + '</span>' + mapButton(t.iot) : '') + '</span>';
-            html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + originBadge(t.source) + (t.display_desc || t.desc || '-');
+            html += '<div class="ticket-row' + (isEvacuation ? ' evacuation-row' : '') + (isProcessed ? ' processed-row' : '') + (isQueued ? ' queued-row' : '') + (String(t.contact || '').trim().toLowerCase() === 'админ' ? ' admin-made' : '') + '" data-uid="' + t.uid + '">';
+            html += '<span class="id">' + (t.gos || '—') + '</span>';
+            html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + originBadge(t.source, t.contact) + supplierBadge(t.supplier) + (t.display_desc || t.desc || '-');
             if (t.contact) {
                 html += '<span class="who">отправил: ' + String(t.contact).replace(/[&<>]/g, '') + '</span>';
             }
@@ -1092,6 +1239,11 @@ function renderTicketsGrouped(tickets, containerId) {
             html += '</span></span>';
             
             html += '<span class="hours ' + hoursClass + '">⏱️ ' + hoursDisplay + ' ч</span>';
+            if (!isSupplyTicket(t) && (t.gos || t.iot)) {
+                html += '<span class="row-menu"><button type="button" class="dots" onclick="toggleRowMenu(event, this)">⋯</button><span class="menu-pop">' + bikeButtons(t.iot, t.gos, t.darks) + '</span></span>';
+            } else {
+                html += '<span></span>';
+            }
             html += '</div>';
         }
         html += '<div class="assign-all-bar"><label>📌 Все:</label><select id="assignMaster_' + group.darks + '"><option value="">—</option>';

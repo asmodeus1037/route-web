@@ -12,13 +12,31 @@
         .origin-site { background:#dbeafe; color:#1d4ed8; }
         .origin-bot { background:#dcfce7; color:#166534; }
         .origin-m4 { background:#f3e8ff; color:#6b21a8; }
+        .origin-admin { background:#fef3c7; color:#92400e; }
         .supplier-badge { background:#fff7ed; color:#9a3412; }
-        .supplier-vanta { background:#e0f2fe; color:#075985; }
-        .supplier-step { background:#ffedd5; color:#9a3412; }
+        .supplier-vanta { background:#fee2e2; color:#b91c1c; }
+        .supplier-step { background:#f3e8ff; color:#6b21a8; }
         .iot-badge { display:inline-block; margin-left:6px; color:#64748b; font-size:10px; font-weight:600; }
         .sent-mark { font-size:12px; color:#166534; padding:0 12px 8px; }
         .sent-mark.warn { color:#b45309; }
         .field-label { display:none; }
+        .ticket-row { grid-template-columns: max-content minmax(0,1fr) 96px 110px 132px 72px 36px !important; }
+        .ticket-row.admin-made { box-shadow: inset 3px 0 0 #d97706; }
+        .row-menu { position: relative; justify-self: end; }
+        .row-menu .dots { width: 32px; height: 32px; border: 1px solid #e2e8f0; background: #fff; border-radius: 8px; cursor: pointer; font-size: 18px; line-height: 1; color: #334155; }
+        .row-menu .menu-pop { display: none; position: absolute; right: 0; top: 36px; z-index: 30; background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; box-shadow: 0 8px 24px rgba(15,23,42,.12); padding: 6px; }
+        .row-menu.open .menu-pop { display: block; }
+        .bike-search { background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:16px; }
+        .bike-search input, .create-form input, .create-form textarea { width:100%; box-sizing:border-box; border:1px solid #cbd5e1; border-radius:10px; padding:10px 12px; font:inherit; }
+        .bike-card { border:1px solid #e2e8f0; border-radius:12px; padding:12px; margin-top:10px; }
+        .create-form label { display:block; font-weight:800; margin:12px 0 6px; }
+        .create-form .choices { display:grid; gap:6px; }
+        .bike-actions { display: inline-flex; gap: 4px; align-items: center; vertical-align: middle; }
+        .btn-mini { border: 1px solid #cbd5e1; background: #fff; color: #334155; border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 700; line-height: 18px; cursor: pointer; }
+        .btn-mini.map { color: #075985; border-color: #7dd3fc; background: #f0f9ff; }
+        .btn-mini.on { color: #166534; border-color: #86efac; background: #f0fdf4; }
+        .btn-mini.off { color: #9f1239; border-color: #fda4af; background: #fff1f2; }
+        .btn-mini:disabled { opacity: 0.55; cursor: wait; }
         @media (max-width: 760px) {
             body { padding-bottom: 24px; }
             .tabs { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -69,15 +87,28 @@
     </h1>
     <div class="subtitle">Назначение мастеров и отправка маршрутов</div>
     <div class="top-actions">
-        <a class="btn btn-view" href="/admin/trunks">Багажники мастеров</a>
-        <button class="btn btn-view" onclick="showRoutes()">🗺️ Просмотр маршрутов</button>
-        <button class="btn btn-send" onclick="openSendModal()">Отправить маршрут</button>
-        <button class="btn btn-success" onclick="saveAllChanges()">Сохранить назначения</button>
-        <button class="btn btn-notify" onclick="openBroadcastModal()">Сообщение через бота</button>
-        <button class="btn btn-clear-master" onclick="openClearMasterModal()">🧹 Снять заявки</button>
-        <button class="btn btn-notify" onclick="openNotifyModal()">📢 Уведомить кураторов</button>
-        <button class="btn btn-primary" onclick="syncAll()">🔄 Синхронизировать</button>
-        <button class="btn btn-bulk" id="bulkModeBtn" onclick="toggleBulkMode()">📋 Массовое изменение статуса</button>
+        <div class="action-group">
+            <span class="action-label">Смотреть</span>
+            <a class="btn btn-view" href="/admin/trunks">Багажники мастеров</a>
+            <button class="btn btn-view" onclick="showRoutes()">Просмотр маршрутов</button>
+        </div>
+        <div class="action-group">
+            <span class="action-label">Мастера</span>
+            <button class="btn btn-send" onclick="openSendModal()">Отправить маршрут</button>
+            <button class="btn btn-success" onclick="saveAllChanges()">Сохранить назначения</button>
+            <button class="btn btn-clear-master" onclick="openClearMasterModal()">Снять заявки</button>
+            <button class="btn btn-bulk" id="bulkModeBtn" onclick="toggleBulkMode()">Массовый статус</button>
+        </div>
+        <div class="action-group">
+            <span class="action-label">Кураторы</span>
+            <button class="btn btn-notify" onclick="openNotifyModal()">Уведомить кураторов</button>
+            <button class="btn btn-broadcast" onclick="openBroadcastModal()">Сообщение через бота</button>
+        </div>
+        <div class="action-group">
+            <span class="action-label">Таблица</span>
+            <button class="btn btn-primary" onclick="syncAll()">Синхронизировать</button>
+            <button class="btn btn-broadcast" onclick="openCreateTicket()">Создать задачу</button>
+        </div>
     </div>
     
     <!-- Панель массового выделения -->
@@ -106,6 +137,7 @@
         <button class="tab-btn" data-tab="tab-3">📍 Напр 3 <span class="count">({{ directions.get('Напр 3', {}).get('active_count', 0) }})</span></button>
         <button class="tab-btn" data-tab="tab-4">📍 Напр 4 <span class="count">({{ directions.get('Напр 4', {}).get('active_count', 0) }})</span></button>
         <button class="tab-btn" data-tab="tab-5">📍 Без направления <span class="count">({{ directions.get('Без направления', {}).get('active_count', 0) }})</span></button>
+        <button class="tab-btn" data-tab="tab-search">Поиск вело</button>
     </div>
     
     <div class="filters">
@@ -166,6 +198,17 @@
         </div>
         <div class="tab-content" id="tab-5">
             <div id="renderDir5"></div>
+        </div>
+        <div class="tab-content" id="tab-search">
+            <div class="bike-search">
+                <h3 style="margin:0 0 6px;">Поиск велосипеда</h3>
+                <p style="color:#64748b;margin:0 0 12px;">Введите госномер, номер IoT или серийный номер. Остальные данные подставятся сами.</p>
+                <div style="display:flex;gap:8px;">
+                    <input id="bikeQuery" placeholder="РЕ111Р, 25-9194 или номер рамы" onkeydown="if (event.key==='Enter') searchBike()">
+                    <button class="btn btn-view" type="button" onclick="searchBike()">Найти</button>
+                </div>
+                <div id="bikeSearchResult"></div>
+            </div>
         </div>
     </div>
 </div>
@@ -229,7 +272,35 @@
         <textarea id="broadcastText" rows="5" style="width:100%;box-sizing:border-box;font:inherit;padding:10px;border:1px solid #e2e8f0;border-radius:10px;" placeholder="Текст сообщения"></textarea>
         <div style="margin-top:12px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
             <button class="btn btn-outline" onclick="closeBroadcastModal()">Отмена</button>
-            <button class="btn btn-notify" onclick="sendBroadcast()">Отправить всем</button>
+            <button class="btn btn-broadcast" onclick="sendBroadcast()">Отправить всем</button>
+        </div>
+    </div>
+</div>
+
+<!-- Заявка от администратора -->
+<div class="modal" id="createTicketModal">
+    <div class="modal-content">
+        <button class="close-btn" onclick="closeCreateTicket()">×</button>
+        <h3>Создать задачу</h3>
+        <div class="create-form">
+            <label>Номер дарка</label>
+            <input id="createDarks" placeholder="1234">
+            <label>Тип техники</label>
+            <div class="choices">
+                <label><input type="radio" name="createType" value="Электровелосипед" checked onchange="toggleCustomType()"> Электровелосипед</label>
+                <label><input type="radio" name="createType" value="Аккумуляторная батарея" onchange="toggleCustomType()"> Аккумуляторная батарея</label>
+                <label><input type="radio" name="createType" value="Зарядное устройство" onchange="toggleCustomType()"> Зарядное устройство</label>
+                <label><input type="radio" name="createType" value="Свой вариант" onchange="toggleCustomType()"> Свой вариант</label>
+            </div>
+            <input id="createCustom" placeholder="Свой тип техники" style="display:none;margin-top:8px;">
+            <label>Описание проблемы</label>
+            <input id="createDesc" placeholder="Что сломалось">
+            <label>Гос номер велосипеда в формате РЕ111Р</label>
+            <input id="createGos" placeholder="РЕ111Р">
+        </div>
+        <div style="margin-top:12px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
+            <button class="btn btn-outline" onclick="closeCreateTicket()">Отмена</button>
+            <button class="btn btn-success" onclick="submitCreateTicket()">Создать</button>
         </div>
     </div>
 </div>
@@ -246,6 +317,6 @@
         now: '{{ now }}'
     };
 </script>
-<script src="/static/js/admin.js?v=17"></script>
+<script src="/static/js/admin.js?v=23"></script>
 </body>
 </html>

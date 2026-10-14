@@ -92,11 +92,11 @@ h1 {
 }
 
 .btn-view {
-    background: #8b5cf6;
+    background: #0369a1;
     color: white;
 }
 .btn-view:hover {
-    background: #7c3aed;
+    background: #075985;
 }
 
 .btn-send {
@@ -124,11 +124,11 @@ h1 {
 }
 
 .btn-clear-master {
-    background: #8b5cf6;
+    background: #e11d48;
     color: white;
 }
 .btn-clear-master:hover {
-    background: #7c3aed;
+    background: #be123c;
 }
 
 .btn-warning {
@@ -182,16 +182,46 @@ h1 {
     background: #dc3545;
 }
 
+.btn-broadcast {
+    background: #7c3aed;
+    color: white;
+}
+.btn-broadcast:hover {
+    background: #6d28d9;
+}
+
 .top-actions {
     display: flex;
-    gap: 8px;
+    gap: 12px;
     flex-wrap: wrap;
-    margin-bottom: 10px;
+    margin-bottom: 14px;
+    align-items: stretch;
+}
+
+.action-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    padding: 8px 10px;
+}
+
+.action-label {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #64748b;
+    width: 100%;
 }
 
 .top-actions .btn {
-    padding: 5px 16px;
-    font-size: 12px;
+    padding: 8px 14px;
+    font-size: 13px;
+    border-radius: 10px;
 }
 
 .tabs {
@@ -379,17 +409,17 @@ h1 {
 /* Карточка заявки */
 .ticket-row {
     display: grid;
-    grid-template-columns: 70px 1fr 80px 80px 110px 60px 40px;
-    gap: 4px;
-    padding: 6px 8px;
+    grid-template-columns: max-content 78px minmax(0, 1fr) 96px 110px 132px 72px;
+    gap: 8px;
+    padding: 8px 10px;
     border-bottom: 1px solid #eef2f6;
     align-items: center;
-    font-size: 11px;
+    font-size: 13px;
     background: white;
     border-radius: 4px;
     margin-bottom: 2px;
     position: relative;
-    min-height: 32px;
+    min-height: 40px;
     transition: all 0.2s;
 }
 
@@ -403,12 +433,35 @@ h1 {
 }
 
 .ticket-row .id {
-    font-weight: 600;
+    font-weight: 800;
     color: #0f172a;
-    font-size: 10px;
+    font-size: 15px;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    overflow: visible;
+    text-overflow: clip;
+    letter-spacing: 0.02em;
+}
+
+.btn-map {
+    background: #0369a1;
+    color: #fff;
+    border: 0;
+    border-radius: 8px;
+    padding: 6px 8px;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.btn-map:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+.ticket-row .map-cell {
+    display: flex;
+    align-items: center;
 }
 
 .ticket-row .desc {
@@ -896,10 +949,10 @@ h1 {
    ============================================================ */
 @media (max-width: 992px) {
     .ticket-row {
-        grid-template-columns: 60px 1fr 60px 70px 95px 50px 35px;
-        font-size: 10px;
-        padding: 4px 6px;
-        gap: 2px;
+        grid-template-columns: max-content minmax(0, 1fr) 80px 96px 116px 64px 32px;
+        font-size: 12px;
+        padding: 6px 8px;
+        gap: 6px;
     }
     
     .ticket-row .desc {
@@ -920,15 +973,15 @@ h1 {
     }
     
     .ticket-row {
-        grid-template-columns: 50px 1fr 55px 60px 85px 45px 30px;
-        font-size: 9px;
-        padding: 3px 4px;
-        gap: 2px;
-        min-height: 28px;
+        grid-template-columns: max-content minmax(0, 1fr) 70px 90px 110px 60px 32px;
+        font-size: 12px;
+        padding: 6px;
+        gap: 6px;
+        min-height: 36px;
     }
     
     .ticket-row .id {
-        font-size: 9px;
+        font-size: 14px;
     }
     
     .ticket-row .desc {
@@ -993,14 +1046,14 @@ h1 {
 
 @media (max-width: 480px) {
     .ticket-row {
-        grid-template-columns: 40px 1fr 50px 55px 75px 40px 28px;
-        font-size: 8px;
-        padding: 2px 3px;
-        gap: 1px;
+        grid-template-columns: max-content minmax(0, 1fr) 32px;
+        font-size: 13px;
+        padding: 8px;
+        gap: 6px;
     }
     
     .ticket-row .id {
-        font-size: 8px;
+        font-size: 16px;
     }
     
     .ticket-row .desc {
@@ -1179,46 +1232,3 @@ h1 {
 .btn-bulk.active {
     background: #dc3545;
 }
-
-.ticket-row.processed-row {
-    background: #f8fafc !important;
-    border-left: 4px solid #94a3b8 !important;
-}
-
-.ticket-row.queued-row {
-    box-shadow: inset 4px 0 0 #d97706;
-    background: #fffbeb !important;
-}
-
-.queue-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 8px;
-    margin: 0 0 8px;
-    padding: 6px 10px;
-    background: #f8fafc;
-    border: 1px solid #e7e5e4;
-    border-radius: 8px;
-    font-size: 12px;
-    color: #57534e;
-}
-
-.who {
-    display: block;
-    margin-top: 2px;
-    color: #78716c;
-    font-size: 10px;
-}
-/* map-and-groups */
-.top-actions { display:flex; gap:12px; flex-wrap:wrap; align-items:stretch; }
-.action-group { display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:8px 10px; }
-.action-label { width:100%; font-size:11px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color:#64748b; }
-.btn-view { background:#0369a1 !important; color:#fff !important; }
-.btn-send { background:#0f766e !important; color:#fff !important; }
-.btn-clear-master { background:#e11d48 !important; color:#fff !important; }
-.btn-broadcast { background:#7c3aed; color:#fff; }
-.ticket-row { grid-template-columns: max-content 78px minmax(0,1fr) 96px 110px 132px 72px !important; }
-.ticket-row .id { overflow:visible !important; text-overflow:clip !important; white-space:nowrap !important; font-size:15px !important; font-weight:800 !important; }
-.ticket-row .map-cell { display:flex; align-items:center; }
-.btn-map { background:#0369a1; color:#fff; border:0; border-radius:8px; padding:6px 8px; font-size:12px; font-weight:800; cursor:pointer; }
