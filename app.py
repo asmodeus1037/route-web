@@ -1865,6 +1865,16 @@ def notify_curators(message):
         logger.warning(f'Не отправились сообщения кураторам: {e}')
         return {'success': False, 'error': 'Не отправилось'}
 
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('authenticated'):
+            if request.path.startswith('/api/'):
+                return jsonify({'success': False, 'error': 'Сессия истекла. Обновите страницу и войдите снова.'}), 401
+            return redirect(url_for('login_page'))
+        return f(*args, **kwargs)
+    return decorated_function
+
 @app.route('/api/broadcast_curators', methods=['POST'])
 @login_required
 def api_broadcast_curators():
@@ -1918,16 +1928,6 @@ def generate_curator_message(tickets_data):
 # ============================================================
 # АВТОРИЗАЦИЯ
 # ============================================================
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not session.get('authenticated'):
-            if request.path.startswith('/api/'):
-                return jsonify({'success': False, 'error': 'Сессия истекла. Обновите страницу и войдите снова.'}), 401
-            return redirect(url_for('login_page'))
-        return f(*args, **kwargs)
-    return decorated_function
-
 @app.route('/api/bike_location')
 @login_required
 def api_bike_location():
