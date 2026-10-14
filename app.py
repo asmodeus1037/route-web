@@ -5,7 +5,7 @@ import random
 import time
 import threading
 import requests
-from flask import Flask, render_template, request, redirect, url_for, jsonify, session, send_from_directory
+from flask import Flask, render_template, request, redirect, url_for, jsonify, session, send_from_directory, send_file
 from datetime import datetime
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -2228,6 +2228,230 @@ def api_admin_ticket():
         pass
     publish_new_ticket(ticket)
     return jsonify({'success': True, 'ticket': ticket})
+
+DOC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates', 'docs')
+DOC_KINDS = {
+    'postavka': ('postavka_template.docx', 'ПОСТАВКА'),
+    'vyvoz': ('vyvoz_template.docx', 'ВЫВОЗ'),
+    'sverka': ('sverka_template.docx', 'СВЕРКА'),
+    'zamena': ('zamena_template.docx', 'ЗАМЕНА'),
+}
+
+def fill_doc_text(doc, mapping):
+    def apply(paragraph):
+        text = paragraph.text
+        updated = text
+        for key, value in mapping.items():
+            updated = updated.replace(key, '' if value is None else str(value))
+        if updated != text and paragraph.runs:
+            paragraph.runs[0].text = updated
+            for run in paragraph.runs[1:]:
+                run.text = ''
+    for paragraph in doc.paragraphs:
+        apply(paragraph)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    apply(paragraph)
+
+def bike_catalog():
+    rows = load_bike_rows()
+    items = []
+    for row in rows[1:]:
+        frame = (row[0] if row else '').strip()
+        gos = (row[1] if len(row) > 1 else '').strip()
+        iot = (row[2] if len(row) > 2 else '').strip()
+        if frame or gos or iot:
+            items.append({'frame': frame, 'gos': gos, 'iot': iot})
+    return items
+
+def find_catalog_bike(items, token):
+    token = (token or '').strip()
+    if len(token) < 3:
+        return None
+    key_gos = normalize_gos(token)
+    key_iot = normalize_iot(token).lower()
+    key_frame = re.sub(r'\s+', '', token).lower()
+    for item in items:
+        if key_gos and normalize_gos(item['gos']) == key_gos:
+            return item
+        if key_iot and normalize_iot(item['iot']).lower() == key_iot:
+            return item
+        if key_frame and re.sub(r'\s+', '', item['frame']).lower() == key_frame:
+            return item
+    return None
+
+def parse_bike_lines(text, items):
+    found = []
+    missing = []
+    seen = set()
+    for raw in (text or '').splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        tokens = [line] + [part for part in re.split(r'[\s,;]+', line) if part]
+        bike = None
+        for token in tokens:
+            bike = find_catalog_bike(items, token)
+            if bike:
+                break
+        if not bike:
+            missing.append(line)
+            continue
+        key = normalize_gos(bike['gos']) or re.sub(r'\s+', '', bike['frame']).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append(bike)
+    return found, missing
+
+def write_bike_row(table, values):
+    row = table.add_row()
+    for index, value in enumerate(values):
+        if index < len(row.cells):
+            row.cells[index].text = '' if value is None else str(value)
+
+def add_bike_table(table, bikes, with_state, akb_count):
+    number = 1
+    for bike in bikes:
+        values = [number, 'Электровелосипед\nVanta Bike Monster', bike.get('frame') or '-', bike.get('gos') or '-', bike.get('iot') or '-']
+        if with_state:
+            values.append('БУ')
+        write_bike_row(table, values)
+        number += 1
+    for _ in range(max(0, akb_count)):
+        values = [number, 'АКБ Vanta', '-', '-', '-']
+        if with_state:
+            values.append('БУ')
+        write_bike_row(table, values)
+        number += 1
+
+def append_supply_log(rows):
+    book = get_gspread_client().open_by_key(IOT_VEHICLES_SHEET_ID)
+    sheet = book.worksheet('ПОСТАВКА/ВЫВОЗ вело')
+    column = sheet.col_values(1)
+    start = len(column) + 1
+    for index, value in enumerate(column, start=1):
+        if index > 1 and not str(value).strip():
+            start = index
+            break
+    finish = start + len(rows) - 1
+    sheet.update(f'A{start}:F{finish}', rows, value_input_option='USER_ENTERED')
+
+@app.route('/api/make_document', methods=['POST'])
+@login_required
+def api_make_document():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    data = request.json or {}
+    kind = (data.get('kind') or '').strip()
+    if kind not in DOC_KINDS:
+        return jsonify({'success': False, 'error': 'Выберите тип документа'})
+    date = (data.get('date') or '').strip()
+    darks = str(data.get('darks') or '').strip()
+    if not date:
+        return jsonify({'success': False, 'error': 'Укажите дату'})
+    if not darks:
+        return jsonify({'success': False, 'error': 'Укажите номер даркстора'})
+    if not darks_ref:
+        try:
+            load_darks_reference()
+        except Exception:
+            pass
+    info = (darks_ref or {}).get(darks) or {}
+    if darks_ref and not info:
+        return jsonify({'success': False, 'error': 'Такого даркстора нет в списке'})
+    address = info.get('address') or ''
+    try:
+        catalog = bike_catalog()
+    except Exception:
+        return jsonify({'success': False, 'error': 'База велосипедов сейчас не открылась'})
+    full_kit = bool(data.get('full_kit', True))
+    try:
+        akb_count = int(data.get('akb_count') or 0)
+    except (TypeError, ValueError):
+        akb_count = 0
+    if akb_count < 0 or akb_count > 500:
+        return jsonify({'success': False, 'error': 'Количество АКБ указано неверно'})
+    take, missing_take = parse_bike_lines(data.get('take_lines') or data.get('lines') or '', catalog)
+    give, missing_give = ([], [])
+    if kind == 'zamena':
+        give, missing_give = parse_bike_lines(data.get('give_lines') or '', catalog)
+    missing = missing_take + missing_give
+    if missing:
+        return jsonify({'success': False, 'error': 'Нет в базе велосипедов: ' + ', '.join(missing[:8])})
+    if kind == 'zamena':
+        if not take or not give:
+            return jsonify({'success': False, 'error': 'Для замены нужны оба списка: что забрали и что поставили'})
+        bikes = take
+        extra_akb = 0
+    else:
+        if not take:
+            return jsonify({'success': False, 'error': 'Добавьте хотя бы один велосипед'})
+        bikes = take
+        extra_akb = len(bikes) * 2 if kind == 'postavka' or (kind == 'vyvoz' and full_kit) else (akb_count if kind == 'vyvoz' else 0)
+    template_name, operation = DOC_KINDS[kind]
+    path = os.path.join(DOC_DIR, template_name)
+    if not os.path.exists(path):
+        return jsonify({'success': False, 'error': 'Шаблон документа не найден на сервере'})
+    try:
+        from docx import Document
+        from io import BytesIO
+        doc = Document(path)
+        akb_total = len(bikes) * 2 if kind != 'vyvoz' else extra_akb
+        if kind == 'zamena':
+            akb_total = 0
+        fill_doc_text(doc, {
+            '{ДАТА}': date,
+            '{ДС}': darks,
+            '{АДРЕС}': address,
+            '{ЗАБОР}': len(take),
+            '{ПОСТАВКА}': len(give),
+            '{ВЕЛО_ИТОГО}': len(bikes),
+            '{АКБ_ИТОГО}': akb_total,
+            '{ВСЕГО}': len(bikes) + akb_total,
+            '{таблица}': '',
+        })
+        if kind == 'zamena':
+            add_bike_table(doc.tables[0], take, False, 0)
+            add_bike_table(doc.tables[1], give, False, 0)
+        elif kind == 'sverka':
+            add_bike_table(doc.tables[0], bikes, False, 0)
+        else:
+            add_bike_table(doc.tables[0], bikes, True, extra_akb)
+        buffer = BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+    except Exception as exc:
+        logger.warning(f'Документ не собрался: {exc}')
+        return jsonify({'success': False, 'error': 'Не удалось собрать документ'})
+    log_note = 'ok'
+    log_rows = []
+    if kind == 'zamena':
+        for bike in take:
+            log_rows.append([date, 'Вывоз', darks, bike.get('frame') or '', bike.get('gos') or '', bike.get('iot') or ''])
+        for bike in give:
+            log_rows.append([date, 'Поставка', darks, bike.get('frame') or '', bike.get('gos') or '', bike.get('iot') or ''])
+    else:
+        title = {'postavka': 'Поставка', 'vyvoz': 'Вывоз', 'sverka': 'Сверка'}.get(kind, operation)
+        for bike in bikes:
+            log_rows.append([date, title, darks, bike.get('frame') or '', bike.get('gos') or '', bike.get('iot') or ''])
+    try:
+        if log_rows:
+            append_supply_log(log_rows)
+    except Exception as exc:
+        logger.warning(f'Журнал поставки не записался: {exc}')
+        log_note = 'sheet-failed'
+    filename = f'{darks}_{operation}_{date.replace(".", "")}.docx'
+    response = send_file(
+        buffer,
+        as_attachment=True,
+        download_name=filename,
+        mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    )
+    response.headers['X-Log-Note'] = log_note
+    return response
 
 # ============================================================
 # МАРШРУТЫ
