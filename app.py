@@ -60,6 +60,8 @@ PARTS_SET = set(PARTS_PRICE)
 CACHE_TTL = 300
 CACHE_DIR = "/data/cache"
 BOT_API_URL = "https://route-bot-dzufear.waw0.amvera.tech"
+XDEVICE_URL = "https://app.xdevice.ru/api/v1/objects"
+XDEVICE_TTL = 3600
 
 # IOT настройки
 IOT_SOURCE_SHEET_ID = "1BoZ7GFmL2q56bjqt1CFVV_PeqnKVaeb3anTJkf0s6xA"
@@ -482,6 +484,100 @@ def generate_ticket_id(date_str):
         return f"{date_part}-{random_part}"
     except:
         return None
+
+_xdevice_lock = threading.Lock()
+_xdevice_points = {}
+_xdevice_loaded_at = 0
+_xdevice_error = ""
+_xdevice_started = False
+
+def xdevice_token():
+    token = (os.environ.get("XDEVICE_TOKEN") or "").strip()
+    if token:
+        return token
+    path = "/data/xdevice_token.txt"
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as handle:
+            return handle.read().strip()
+    return ""
+
+def normalize_iot(value):
+    return re.sub(r'(?i)^iot\s*', '', str(value or '')).strip()
+
+def refresh_xdevice_points(force=False):
+    global _xdevice_points, _xdevice_loaded_at, _xdevice_error
+    now_ts = time.time()
+    if not force and _xdevice_points and now_ts - _xdevice_loaded_at < XDEVICE_TTL:
+        return
+    token = xdevice_token()
+    if not token:
+        _xdevice_error = "В настройках сервера нет ключа XDEVICE_TOKEN"
+        return
+    if not _xdevice_lock.acquire(timeout=50):
+        return
+    try:
+        if not force and _xdevice_points and time.time() - _xdevice_loaded_at < XDEVICE_TTL:
+            return
+        response = requests.get(
+            XDEVICE_URL,
+            params={"limit": 5000},
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            timeout=40,
+        )
+        response.raise_for_status()
+        items = response.json()
+        if not isinstance(items, list):
+            raise RuntimeError("Ответ IoT не список")
+        points = {}
+        for obj in items:
+            state = obj.get("state") or {}
+            lat = state.get("lat")
+            lon = state.get("lon")
+            if lat is None or lon is None:
+                continue
+            point = {
+                "lat": lat,
+                "lon": lon,
+                "online": bool(state.get("online")),
+                "name": str(obj.get("name") or ""),
+                "at": state.get("time") or 0,
+            }
+            keys = set()
+            name = normalize_iot(obj.get("name"))
+            if name:
+                keys.add(name.lower())
+            ident = str(obj.get("id") or "")
+            if ":" in ident:
+                keys.add(ident.split(":", 1)[1].lower())
+            for key in keys:
+                points[key] = point
+        _xdevice_points = points
+        _xdevice_loaded_at = time.time()
+        _xdevice_error = ""
+        logger.info(f"Точки IoT обновлены: {len(items)} модулей, с координатами {len(set(id(p) for p in points.values()))}")
+    except Exception as exc:
+        _xdevice_error = "Точки IoT не обновились"
+        logger.warning(f"Точки IoT не обновились: {exc}")
+    finally:
+        _xdevice_lock.release()
+
+def xdevice_loop():
+    while True:
+        refresh_xdevice_points(force=True)
+        time.sleep(XDEVICE_TTL)
+
+def ensure_xdevice_loop():
+    global _xdevice_started
+    if _xdevice_started:
+        return
+    _xdevice_started = True
+    threading.Thread(target=xdevice_loop, daemon=True).start()
+
+def lookup_bike_point(iot):
+    ensure_xdevice_loop()
+    refresh_xdevice_points(force=False)
+    key = normalize_iot(iot).lower()
+    return _xdevice_points.get(key)
 
 def normalize_gos(value):
     return re.sub(r'[^0-9A-Za-zА-Яа-я]', '', str(value or '')).upper()
@@ -1831,6 +1927,31 @@ def login_required(f):
             return redirect(url_for('login_page'))
         return f(*args, **kwargs)
     return decorated_function
+
+@app.route('/api/bike_location')
+@login_required
+def api_bike_location():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    point = lookup_bike_point(request.args.get('iot', ''))
+    if not point:
+        return jsonify({'success': False, 'error': _xdevice_error or 'Точки для этого IoT нет'})
+    lat = point['lat']
+    lon = point['lon']
+    when = ""
+    if point.get('at'):
+        try:
+            when = datetime.fromtimestamp(point['at'] / 1000, MSK).strftime('%d.%m %H:%M')
+        except Exception:
+            when = ""
+    return jsonify({
+        'success': True,
+        'lat': lat,
+        'lon': lon,
+        'online': point['online'],
+        'at': when,
+        'url': f'https://yandex.ru/maps/?ll={lon},{lat}&pt={lon},{lat}&z=16&l=map',
+    })
 
 # ============================================================
 # МАРШРУТЫ
@@ -3718,6 +3839,7 @@ if __name__ == "__main__":
     
     background_thread = threading.Thread(target=process_queue_background, daemon=True)
     background_thread.start()
+    ensure_xdevice_loop()
     logger.info("🚀 Фоновый процесс обработки очереди запущен")
     
     try:

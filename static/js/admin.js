@@ -887,6 +887,35 @@ function renderCurrentTab() {
     renderTicketsGrouped(filtered, containerId);
 }
 
+function mapButton(iot) {
+    var safe = String(iot || '').replace(/[&<>"']/g, '');
+    if (!safe) return '';
+    return '<button type="button" class="btn-map" data-iot="' + safe + '" onclick="openBikeMap(this)">На карте</button>';
+}
+
+function openBikeMap(button) {
+    var iot = button.getAttribute('data-iot') || '';
+    button.disabled = true;
+    showToastModern('Ищу точку...', 'success');
+    fetch('/api/bike_location?iot=' + encodeURIComponent(iot))
+        .then(readApi)
+        .then(function(data) {
+            button.disabled = false;
+            if (!data.success || !data.url) {
+                showToastModern(data.error || 'Точки нет', 'error');
+                return;
+            }
+            var note = data.online ? 'На связи' : 'Последняя точка';
+            if (data.at) note += ', ' + data.at;
+            showToastModern(note, 'success');
+            window.open(data.url, '_blank');
+        })
+        .catch(function() {
+            button.disabled = false;
+            showToastModern('Нет сети', 'error');
+        });
+}
+
 function originBadge(source) {
     if (source === 'Заявки бот') return '<span class="origin-badge origin-bot">Бот</span>';
     if (source === 'Заявки') return '<span class="origin-badge origin-site">Сайт</span>';
@@ -1036,7 +1065,7 @@ function renderTicketsGrouped(tickets, containerId) {
             else if (!isProcessed && t.hours_since >= 32) hoursClass = 'warning';
             
             html += '<div class="ticket-row' + (isEvacuation ? ' evacuation-row' : '') + (isProcessed ? ' processed-row' : '') + (isQueued ? ' queued-row' : '') + '" data-uid="' + t.uid + '">';
-            html += '<span class="id">' + (t.gos || '-') + supplierBadge(t.supplier) + (t.iot ? '<span class="iot-badge">IoT ' + String(t.iot).replace(/[&<>]/g, '') + '</span>' : '') + '</span>';
+            html += '<span class="id">' + (t.gos || '-') + supplierBadge(t.supplier) + (t.iot ? '<span class="iot-badge">IoT ' + String(t.iot).replace(/[&<>]/g, '') + '</span>' + mapButton(t.iot) : '') + '</span>';
             html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + originBadge(t.source) + (t.display_desc || t.desc || '-');
             if (t.contact) {
                 html += '<span class="who">отправил: ' + String(t.contact).replace(/[&<>]/g, '') + '</span>';
