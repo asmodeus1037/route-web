@@ -8,7 +8,7 @@
     <link rel="manifest" href="/manifest.json">
     <link rel="stylesheet" href="/static/css/admin.css">
     <style>
-        .origin-badge, .supplier-badge { display:inline-block; margin-left:6px; padding:1px 6px; border-radius:8px; font-size:10px; font-weight:700; vertical-align:middle; }
+        .origin-badge, .supplier-badge { display:inline-block; margin:0 6px 0 0; padding:2px 8px; border-radius:8px; font-size:12px; font-weight:800; vertical-align:middle; }
         .origin-site { background:#dbeafe; color:#1d4ed8; }
         .origin-bot { background:#dcfce7; color:#166534; }
         .origin-m4 { background:#f3e8ff; color:#6b21a8; }
@@ -71,7 +71,9 @@
     <div class="top-actions">
         <a class="btn btn-view" href="/admin/trunks">Багажники мастеров</a>
         <button class="btn btn-view" onclick="showRoutes()">🗺️ Просмотр маршрутов</button>
-        <button class="btn btn-send" onclick="openSendModal()">📤 Обновить кэш мастера</button>
+        <button class="btn btn-send" onclick="openSendModal()">Отправить маршрут</button>
+        <button class="btn btn-success" onclick="saveAllChanges()">Сохранить назначения</button>
+        <button class="btn btn-notify" onclick="openBroadcastModal()">Сообщение через бота</button>
         <button class="btn btn-clear-master" onclick="openClearMasterModal()">🧹 Снять заявки</button>
         <button class="btn btn-notify" onclick="openNotifyModal()">📢 Уведомить кураторов</button>
         <button class="btn btn-primary" onclick="syncAll()">🔄 Синхронизировать</button>
@@ -172,8 +174,9 @@
 <div class="modal" id="notifyModal">
     <div class="modal-content">
         <button class="close-btn" onclick="closeNotifyModal()">×</button>
-        <h3>📢 Оповестить кураторов</h3>
-        <div id="notifyPreview"></div>
+        <h3>Сверка перед отправкой</h3>
+        <p style="color:#64748b;margin:0 0 10px;">Это не текст сообщения. Здесь видно, какому куратору какой даркстор уйдёт. В Telegram каждый получит только свою точку.</p>
+        <div id="notifyPreview" style="white-space:normal;line-height:1.45;max-height:60vh;overflow:auto;"></div>
         <div style="margin-top:12px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
             <button class="btn btn-outline" onclick="closeNotifyModal()">Отмена</button>
             <button class="btn btn-notify" onclick="sendNotification()">📢 Отправить</button>
@@ -185,12 +188,11 @@
 <div class="modal" id="sendModal">
     <div class="modal-content">
         <button class="close-btn" onclick="closeSendModal()">×</button>
-        <h3>📤 Обновить кэш мастера</h3>
-        <p style="color:#64748b;margin-bottom:12px;">Выберите мастера для обновления кэша</p>
+        <h3>Отправить маршрут</h3>
+        <p style="color:#64748b;margin-bottom:12px;">Мастер сразу получит заявки в телефон и в Telegram</p>
         <div id="sendMasterList"></div>
         <div style="margin-top:12px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
-            <button class="btn btn-send" id="sendToAllBtn" onclick="sendRouteToAll()">📤 Обновить ВСЕХ</button>
-            <button class="btn btn-send" id="sendToMasterBtn" style="display:none;background:#22c55e;color:white;" onclick="sendRoute()">📤 Обновить</button>
+            <button class="btn btn-send" id="sendToAllBtn" onclick="sendRouteToAll()">Отправить заявки всем</button>
             <button class="btn btn-outline" onclick="closeSendModal()">Отмена</button>
         </div>
     </div>
@@ -214,7 +216,20 @@
         <div id="clearMasterList"></div>
         <div style="margin-top:12px;text-align:right;">
             <button class="btn btn-outline" onclick="closeClearMasterModal()">Отмена</button>
-            <button class="btn btn-danger" onclick="clearMaster()">🧹 Снять</button>
+        </div>
+    </div>
+</div>
+
+<!-- Сообщение всем кураторам -->
+<div class="modal" id="broadcastModal">
+    <div class="modal-content">
+        <button class="close-btn" onclick="closeBroadcastModal()">×</button>
+        <h3>Сообщение через бота</h3>
+        <p style="color:#64748b;margin-bottom:12px;">Получат все кураторы, которые нажимали /start в боте</p>
+        <textarea id="broadcastText" rows="5" style="width:100%;box-sizing:border-box;font:inherit;padding:10px;border:1px solid #e2e8f0;border-radius:10px;" placeholder="Текст сообщения"></textarea>
+        <div style="margin-top:12px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
+            <button class="btn btn-outline" onclick="closeBroadcastModal()">Отмена</button>
+            <button class="btn btn-notify" onclick="sendBroadcast()">Отправить всем</button>
         </div>
     </div>
 </div>
@@ -226,10 +241,11 @@
     window.__DATA__ = {
         masters: {{ masters|tojson }},
         directions: {{ directions|tojson }},
+        darksPeople: {{ darks_people|tojson }},
         curatorSent: {{ curator_sent|tojson }},
         now: '{{ now }}'
     };
 </script>
-<script src="/static/js/admin.js"></script>
+<script src="/static/js/admin.js?v=16"></script>
 </body>
 </html>

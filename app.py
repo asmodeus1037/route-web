@@ -25,7 +25,7 @@ app.secret_key = secrets.token_hex(16)
 CREDENTIALS_FILE = "/data/credentials.json"
 SHEET_NAME = "Система ремонта ВВ"
 START_COORDS = "55.775267, 37.745690"
-MASTERS = ['Антон', 'Сергей', 'Руслан', 'Сергей Транзит', 'Алексей']
+MASTERS = ['Антон', 'Сергей', 'Иван', 'Алексей']
 PARTS = [
     ('Покрышка', 1200),
     ('Камера', 300),
@@ -84,8 +84,7 @@ MASTER_CREDENTIALS = {
     'admin': {'password': 'admin123', 'name': 'Админ', 'role': 'admin'},
     'anton': {'password': 'anton1987', 'name': 'Антон', 'role': 'master'},
     'sergey': {'password': 'sergey1992', 'name': 'Сергей', 'role': 'master'},
-    'ruslan': {'password': 'ruslan1985', 'name': 'Руслан', 'role': 'master'},
-    'transit': {'password': 'transit2024', 'name': 'Сергей Транзит', 'role': 'master'},
+    'ivan': {'password': 'ivan1994', 'name': 'Иван', 'role': 'master'},
     'alexey': {'password': 'alexey0304', 'name': 'Алексей', 'role': 'master'},
     'iot': {'password': 'iot2026', 'name': 'IOT-Мастер', 'role': 'iot'}
 }
@@ -421,6 +420,7 @@ def load_darks_reference(force=False):
                     'address': cell(i_address),
                     'direction': cell(i_direction),
                     'coords': cell(i_coords),
+                    'curators': cell(4),
                     'master': cell(i_master),
                     'master_tg': cell(i_tg),
                 }
@@ -985,51 +985,48 @@ def refresh_all_master_caches():
         logger.error(f"Ошибка обновления кэшей мастеров: {e}")
 
 def batch_update_masters(changes):
-    global uid_index
+    """Сразу в базу. В таблицу уходит очередью, страница больше не ждёт Google."""
     updated_count = 0
-    try:
-        flush_queue()
-        if not uid_index:
-            tickets = get_tickets_from_sheets()
-            uid_index = build_uid_index(tickets)
-        sheet_client = get_sheet_client()
-        updates_zayavki = []
-        updates_import = []
-        for change in changes:
-            uid = change.get('uid')
-            source = change.get('source')
-            master = change.get('master')
-            if not uid or not master:
+    for change in changes or []:
+        uid = (change or {}).get('uid')
+        if not uid:
+            continue
+        master = change.get('master') or ''
+        source = change.get('source') or source_of(uid)
+        found = False
+        for ticket in _tickets_mem:
+            if ticket.get('uid') != uid:
                 continue
-            row_idx = get_ticket_row_by_uid(uid)
-            if not row_idx:
-                continue
-            if source in ('Заявки', 'Заявки бот'):
-                updates_zayavki.append((source, {'range': f'G{row_idx}', 'values': [[master]]}))
-                updated_count += 1
-            elif source == 'Импорт М4':
-                updates_import.append({'range': f'N{row_idx}', 'values': [[master]]})
-                updated_count += 1
-        grouped = {}
-        for source, update in updates_zayavki:
-            grouped.setdefault(source, []).append(update)
-        for source, updates in grouped.items():
-            sheet_client.worksheet(source).batch_update(updates)
-        if updates_import:
-            worksheet = sheet_client.worksheet("Импорт М4")
-            worksheet.batch_update(updates_import)
-        for change in changes:
-            for ticket in _tickets_mem:
-                if ticket.get('uid') == change.get('uid'):
-                    ticket['master'] = change.get('master') or ''
+            ticket['master'] = master
+            ticket['_local_ts'] = time.time()
+            db.mirror_ticket(ticket)
+            source = ticket.get('source') or source
+            found = True
+        if not found:
+            cache = get_admin_cache() or {}
+            for dir_data in cache.get('directions', {}).values():
+                for ticket in dir_data.get('tickets', []):
+                    if ticket.get('uid') != uid:
+                        continue
+                    ticket['master'] = master
                     ticket['_local_ts'] = time.time()
                     db.mirror_ticket(ticket)
+                    source = ticket.get('source') or source
+                    found = True
+                    break
+                if found:
+                    break
+        add_to_queue({
+            'uid': uid,
+            'source': source,
+            'type': 'assign',
+            'data': {'master': master, 'skip_report': True},
+        })
+        updated_count += 1
+    if _tickets_mem:
         store_ticket_memory(_tickets_mem, fresh=False)
         publish_caches(_tickets_mem)
-        return updated_count
-    except Exception as e:
-        logger.error(f"Ошибка batch_update_masters: {e}")
-        return 0
+    return updated_count
 
 def clear_masters(master_name=None):
     wanted = clean_name(master_name) if master_name else ''
@@ -1251,7 +1248,9 @@ def apply_queue_to_sheets(tasks):
             row_idx = found['row_index']
         data = task.get('data') or {}
         task_type = task.get('type')
-        if task_type == 'fail':
+        if task_type == 'assign':
+            updates.append({'range': f'G{row_idx}', 'values': [[data.get('master') or '']]})
+        elif task_type == 'fail':
             updates.append({'range': f'G{row_idx}', 'values': [['']]})
             updates.append({'range': f'H{row_idx}', 'values': [['⏹️ Обработано']]})
             updates.append({'range': f'J{row_idx}', 'values': [[data.get('note', '')]]})
@@ -1300,6 +1299,9 @@ def apply_queue_to_sheets(tasks):
             '🔧 Эвакуация': 'Эвакуация'
         }
         clear_master = False
+        if task_type == 'assign':
+            import_updates.append({'range': f'N{row_idx}', 'values': [[data.get('master') or '']]})
+            continue
         if task_type == 'fail':
             sheet_status, sheet_note = 'Обработано', data.get('note') or ''
             clear_master = True
@@ -1767,6 +1769,28 @@ def notify_curators(message):
         logger.warning(f'Не отправились сообщения кураторам: {e}')
         return {'success': False, 'error': 'Не отправилось'}
 
+@app.route('/api/broadcast_curators', methods=['POST'])
+@login_required
+def api_broadcast_curators():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    text = ((request.json or {}).get('text') or '').strip()
+    if not text:
+        return jsonify({'success': False, 'error': 'Напишите текст'})
+    try:
+        response = requests.post(
+            f'{BOT_API_URL}/broadcast',
+            json={'text': text},
+            timeout=40,
+        )
+        body = response.json() if response.content else {}
+        if response.status_code != 200 or not body.get('success'):
+            return jsonify({'success': False, 'error': 'Бот не принял сообщение'})
+        return jsonify({'success': True, 'count': body.get('count', 0)})
+    except Exception as e:
+        logger.warning(f'Рассылка кураторам не ушла: {e}')
+        return jsonify({'success': False, 'error': 'Не отправилось'})
+
 def generate_curator_message(tickets_data):
     now = get_msk_now().strftime('%d.%m.%Y %H:%M')
     message = f"📢 Привет, на связи Vanta Bikes! ({now})\n\n"
@@ -1875,6 +1899,16 @@ def no_store_master_pages(response):
 # ============================================================
 # СТАТИКА
 # ============================================================
+@app.route('/manifest.json')
+def web_manifest():
+    response = send_from_directory('static', 'manifest.json')
+    response.headers['Content-Type'] = 'application/manifest+json'
+    return response
+
+@app.route('/.well-known/assetlinks.json')
+def assetlinks():
+    return send_from_directory('static/.well-known', 'assetlinks.json')
+
 @app.route('/static/<path:filename>')
 def static_files(filename):
     return send_from_directory('static', filename)
@@ -1905,9 +1939,17 @@ def admin_panel():
         save_admin_cache(tickets)
         cache_data = get_admin_cache()
         directions = cache_data.get('directions', {})
+    load_darks_reference()
+    darks_people = {}
+    for number, info in (darks_ref or {}).items():
+        darks_people[str(number)] = {
+            'curators': (info or {}).get('curators') or '',
+            'address': (info or {}).get('address') or '',
+        }
     return render_template('admin.html',
                           directions=directions,
                           masters=MASTERS,
+                          darks_people=darks_people,
                           curator_sent=curator_sent_map(),
                           now=get_msk_now().strftime('%H:%M:%S'))
 

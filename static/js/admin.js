@@ -110,6 +110,14 @@ function closeNotifyModal() {
     document.getElementById('notifyModal').classList.remove('active');
 }
 
+function previewText(value) {
+    return String(value == null ? '' : value).replace(/[&<>]/g, function(ch) {
+        if (ch === '&') return '&';
+        if (ch === '<') return '<';
+        return '>';
+    });
+}
+
 function generateNotifyPreview() {
     var allTickets = getAllTickets();
     var assigned = [];
@@ -117,36 +125,50 @@ function generateNotifyPreview() {
         var t = allTickets[i];
         if (t.master && !t.is_done) assigned.push(t);
     }
+    var box = document.getElementById('notifyPreview');
     if (assigned.length === 0) {
-        document.getElementById('notifyPreview').textContent = 'Нет назначенных заявок для оповещения';
+        box.textContent = 'Нет назначенных заявок для оповещения';
         return;
     }
+    var people = (window.__DATA__ && window.__DATA__.darksPeople) || {};
     var groups = {};
     for (var i = 0; i < assigned.length; i++) {
         var t = assigned[i];
-        var key = t.darks || 'без номера';
+        var key = String(t.darks || 'без номера');
         if (!groups[key]) {
             groups[key] = { address: t.address || 'Адрес не указан', darks: key, tickets: [] };
         }
         groups[key].tickets.push(t);
     }
-    var preview = '📢 Привет, на связи Vanta Bikes!\n\n';
-    for (var key in groups) {
+    var html = '';
+    var keys = Object.keys(groups).sort(function(a, b) {
+        return (parseInt(a, 10) || 999999) - (parseInt(b, 10) || 999999);
+    });
+    for (var k = 0; k < keys.length; k++) {
+        var key = keys[k];
         var group = groups[key];
-        preview += '📍 ' + group.address + ' (даркстор ' + key + ')\n';
-        preview += '📋 Заявки (' + group.tickets.length + '):\n';
+        var info = people[key] || {};
+        var masters = [];
         for (var j = 0; j < group.tickets.length; j++) {
-            var t = group.tickets[j];
-            var identifier = (t.type && (t.type === 'Аккумуляторная батарея' || t.type === 'Зарядное устройство')) 
-                ? t.type 
-                : (t.gos || 'Без номера');
-            preview += '   ' + identifier + ' | ' + (t.desc || '-') + '\n';
+            var master = (group.tickets[j].master || '').trim();
+            if (master && masters.indexOf(master) === -1) masters.push(master);
         }
-        preview += '\n';
+        var curators = (info.curators || '').trim() || 'не указан';
+        html += '<div style="padding:12px 0;border-bottom:1px solid #e7e5e4;">';
+        html += '<div style="font-weight:800;">' + previewText(group.address) + ' (даркстор ' + previewText(key) + ')</div>';
+        html += '<div>Мастер: ' + previewText(masters.join(', ') || 'не назначен') + '</div>';
+        html += '<div>Куратор: ' + previewText(curators) + '</div>';
+        html += '<div style="margin-top:6px;">Заявки (' + group.tickets.length + '):</div>';
+        for (var n = 0; n < group.tickets.length; n++) {
+            var ticket = group.tickets[n];
+            var identifier = (ticket.type === 'Аккумуляторная батарея' || ticket.type === 'Зарядное устройство')
+                ? ticket.type
+                : (ticket.gos || 'Без номера');
+            html += '<div>• ' + previewText(identifier) + ' | ' + previewText(ticket.desc || '-') + '</div>';
+        }
+        html += '</div>';
     }
-    preview += 'Подготовьте, пожалуйста, технику к ремонту\n';
-    preview += 'Хорошего дня! 🙌';
-    document.getElementById('notifyPreview').textContent = preview;
+    box.innerHTML = html;
 }
 
 function sendNotification() {
@@ -563,13 +585,10 @@ function openSendModal() {
         var status = count > 0 ? '<span class="send-status sent">✅ ' + count + ' заявок</span>' : '<span class="send-status">❌ нет заявок</span>';
         html += '<div style="padding:8px 12px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;">';
         html += '<span><strong>' + master + '</strong> ' + status + '</span>';
-        html += '<button class="btn btn-sm btn-send" onclick="selectMaster(\'' + master + '\')"' + (count === 0 ? ' disabled style="opacity:0.5;"' : '') + '>Выбрать</button>';
+        html += '<button class="btn btn-sm btn-send" onclick="sendRouteTo(\'' + master + '\')"' + (count === 0 ? ' disabled style="opacity:0.5;"' : '') + '>Отправить заявки</button>';
         html += '</div>';
     }
     list.innerHTML = html;
-    selectedMaster = '';
-    document.getElementById('sendToMasterBtn').style.display = 'none';
-    document.getElementById('sendToAllBtn').style.display = 'inline-block';
     modal.classList.add('active');
 }
 
@@ -577,24 +596,9 @@ function closeSendModal() {
     document.getElementById('sendModal').classList.remove('active');
 }
 
-function selectMaster(master) {
+function sendRouteTo(master) {
     selectedMaster = master;
-    var btns = document.querySelectorAll('#sendMasterList .btn-send');
-    for (var i = 0; i < btns.length; i++) {
-        btns[i].style.background = '#e2e8f0';
-    }
-    for (var i = 0; i < btns.length; i++) {
-        if (btns[i].textContent.indexOf('Выбрать') !== -1 && btns[i].parentElement.textContent.indexOf(master) !== -1) {
-            btns[i].style.background = '#22c55e';
-            btns[i].style.color = 'white';
-        }
-    }
-    var sendBtn = document.getElementById('sendToMasterBtn');
-    sendBtn.textContent = '📤 Обновить ' + master;
-    sendBtn.style.display = 'inline-block';
-    document.getElementById('sendToAllBtn').style.display = 'inline-block';
-    document.getElementById('syncStatus').textContent = '📝 Выбран: ' + master;
-    document.getElementById('syncStatus').style.color = '#f59e0b';
+    sendRoute();
 }
 
 function sendRoute() {
@@ -602,7 +606,7 @@ function sendRoute() {
         alert('Выберите мастера!');
         return;
     }
-    if (!confirm('Обновить кэш мастера ' + selectedMaster + '?')) return;
+    if (!confirm('Отправить заявки мастеру ' + selectedMaster + '?')) return;
     document.getElementById('syncSpinner').style.display = 'block';
     document.getElementById('syncStatus').textContent = '⏳ Обновление...';
     document.getElementById('syncStatus').style.color = '#f59e0b';
@@ -640,7 +644,7 @@ function sendRoute() {
 }
 
 function sendRouteToAll() {
-    if (!confirm('Обновить кэши ВСЕХ мастеров?')) return;
+    if (!confirm('Отправить заявки всем мастерам?')) return;
     document.getElementById('syncSpinner').style.display = 'block';
     document.getElementById('syncStatus').textContent = '⏳ Обновление...';
     document.getElementById('syncStatus').style.color = '#f59e0b';
@@ -1032,8 +1036,8 @@ function renderTicketsGrouped(tickets, containerId) {
             else if (!isProcessed && t.hours_since >= 32) hoursClass = 'warning';
             
             html += '<div class="ticket-row' + (isEvacuation ? ' evacuation-row' : '') + (isProcessed ? ' processed-row' : '') + (isQueued ? ' queued-row' : '') + '" data-uid="' + t.uid + '">';
-            html += '<span class="id">' + (t.gos || '-') + originBadge(t.source) + supplierBadge(t.supplier) + (t.iot ? '<span class="iot-badge">IoT ' + String(t.iot).replace(/[&<>]/g, '') + '</span>' : '') + '</span>';
-            html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + (t.display_desc || t.desc || '-');
+            html += '<span class="id">' + (t.gos || '-') + supplierBadge(t.supplier) + (t.iot ? '<span class="iot-badge">IoT ' + String(t.iot).replace(/[&<>]/g, '') + '</span>' : '') + '</span>';
+            html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + originBadge(t.source) + (t.display_desc || t.desc || '-');
             if (t.contact) {
                 html += '<span class="who">отправил: ' + String(t.contact).replace(/[&<>]/g, '') + '</span>';
             }
@@ -1065,8 +1069,7 @@ function renderTicketsGrouped(tickets, containerId) {
         for (var mi2 = 0; mi2 < masters.length; mi2++) {
             html += '<option value="' + masters[mi2] + '">' + masters[mi2] + '</option>';
         }
-        html += '</select><button type="button" class="btn btn-success" onclick="assignAllDarks(\'' + String(group.darks).replace(/'/g, '') + '\')">Назначить</button>';
-        html += '<button type="button" class="btn btn-success" data-darks="' + group.darks + '" onclick="saveDarksChanges(this)">Сохранить</button></div>';
+        html += '</select><button type="button" class="btn btn-success" onclick="assignAllDarks(\'' + String(group.darks).replace(/'/g, '') + '\')">Назначить</button></div>';
         html += '</div>';
     }
     container.innerHTML = html;
@@ -1084,6 +1087,7 @@ function onMasterChange(select) {
     var key = uid + '|' + source;
     pendingChanges[key] = master;
     updateChangesInfo();
+    savePendingKeys([key], false);
 }
 
 function assignAllDarks(darks) {
@@ -1091,15 +1095,18 @@ function assignAllDarks(darks) {
     var master = select.value;
     if (!master) { alert('Выберите мастера'); return; }
     var allTickets = getAllTickets();
+    var keys = [];
     for (var i = 0; i < allTickets.length; i++) {
         var t = allTickets[i];
-        if (t.darks === darks && !t.is_done) {
+        if (String(t.darks) === String(darks) && !t.is_done) {
             var key = t.uid + '|' + t.source;
             pendingChanges[key] = master;
+            keys.push(key);
         }
     }
     updateChangesInfo();
     renderCurrentTab();
+    savePendingKeys(keys, false);
 }
 
 function updateChangesInfo() {
@@ -1111,7 +1118,7 @@ function updateChangesInfo() {
         document.getElementById('syncStatus').textContent = '📝 Есть изменения';
         document.getElementById('syncStatus').style.color = '#f59e0b';
     } else {
-        el.textContent = 'Назначения уходят в таблицу кнопкой «Сохранить» у даркстора';
+        el.textContent = 'Назначение сразу пишется в базу. «Сохранить назначения» нужно, только если сеть оборвалась.';
         document.getElementById('syncStatus').textContent = '✅ Готово';
         document.getElementById('syncStatus').style.color = '#22c55e';
     }
@@ -1169,7 +1176,84 @@ function saveDarksChanges(button) {
     });
 }
 
+function savePendingKeys(keys, ask) {
+    if (!keys || !keys.length) {
+        if (ask) alert('Нет несохранённых назначений');
+        return;
+    }
+    if (ask && !confirm('Сохранить ' + keys.length + ' назначений?')) return;
+    var changeList = [];
+    for (var i = 0; i < keys.length; i++) {
+        var parts = keys[i].split('|');
+        changeList.push({ uid: parts[0], source: parts[1], master: pendingChanges[keys[i]] || '' });
+    }
+    fetch('/api/batch_update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ changes: changeList })
+    })
+    .then(readApi)
+    .then(function(data) {
+        if (!data.success) {
+            showToastModern('Не сохранилось: ' + (data.error || ''), 'error');
+            return;
+        }
+        var allTickets = getAllTickets();
+        for (var i = 0; i < changeList.length; i++) {
+            var c = changeList[i];
+            for (var j = 0; j < allTickets.length; j++) {
+                if (allTickets[j].uid === c.uid) allTickets[j].master = c.master;
+            }
+            delete pendingChanges[c.uid + '|' + c.source];
+        }
+        updateChangesInfo();
+        showToastModern('Назначение записано', 'success');
+    })
+    .catch(function() {
+        showToastModern('Нет сети. Нажмите «Сохранить назначения», когда связь появится.', 'error');
+    });
+}
+
 function saveAllChanges() {
+    savePendingKeys(Object.keys(pendingChanges), true);
+}
+
+function openBroadcastModal() {
+    document.getElementById('broadcastModal').classList.add('active');
+}
+
+function closeBroadcastModal() {
+    document.getElementById('broadcastModal').classList.remove('active');
+}
+
+function sendBroadcast() {
+    var text = (document.getElementById('broadcastText').value || '').trim();
+    if (!text) {
+        alert('Напишите текст');
+        return;
+    }
+    if (!confirm('Отправить это сообщение всем кураторам?')) return;
+    fetch('/api/broadcast_curators', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text })
+    })
+    .then(readApi)
+    .then(function(data) {
+        if (!data.success) {
+            showToastModern('Не отправилось: ' + (data.error || ''), 'error');
+            return;
+        }
+        document.getElementById('broadcastText').value = '';
+        closeBroadcastModal();
+        showToastModern('Отправлено: ' + (data.count || 0), 'success');
+    })
+    .catch(function() {
+        showToastModern('Нет сети', 'error');
+    });
+}
+
+function saveAllChangesOld() {
     var keys = Object.keys(pendingChanges);
     if (keys.length === 0) { alert('Нет изменений'); return; }
     if (!confirm('Сохранить ' + keys.length + ' изменений?')) return;
