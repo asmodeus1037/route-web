@@ -887,12 +887,17 @@ function renderCurrentTab() {
     renderTicketsGrouped(filtered, containerId);
 }
 
-function mapButton(iot, gos, darks) {
+function bikeButtons(iot, gos, darks) {
     var safeIot = String(iot || '').replace(/[&<>"']/g, '');
     var safeGos = String(gos || '').replace(/[&<>"']/g, '');
     var safeDark = String(darks || '').replace(/[&<>"']/g, '');
     if (!safeIot && !safeGos) return '';
-    return '<button type="button" class="btn-map" data-iot="' + safeIot + '" data-gos="' + safeGos + '" data-darks="' + safeDark + '" onclick="openBikeMap(this)">Карта</button>';
+    var attrs = ' data-iot="' + safeIot + '" data-gos="' + safeGos + '" data-darks="' + safeDark + '"';
+    return '<span class="bike-actions">'
+        + '<button type="button" class="btn-mini map"' + attrs + ' onclick="openBikeMap(this)">Карта</button>'
+        + '<button type="button" class="btn-mini on"' + attrs + ' onclick="setBikePower(this, \'on\')">Вкл</button>'
+        + '<button type="button" class="btn-mini off"' + attrs + ' onclick="setBikePower(this, \'off\')">Выкл</button>'
+        + '</span>';
 }
 
 function openBikeMap(button) {
@@ -919,6 +924,21 @@ function openBikeMap(button) {
             button.disabled = false;
             showToastModern('Нет сети', 'error');
         });
+}
+
+function setBikePower(button, action) {
+    var gos = button.getAttribute('data-gos') || 'велосипед';
+    var question = action === 'on' ? ('Включить ' + gos + '? Он сможет поехать.') : ('Выключить ' + gos + '? Он заблокируется.');
+    if (!confirm(question)) return;
+    button.disabled = true;
+    fetch('/api/bike_power', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: action, iot: button.getAttribute('data-iot') || '', gos: button.getAttribute('data-gos') || '', darks: button.getAttribute('data-darks') || '' })
+    }).then(readApi).then(function(data) {
+        button.disabled = false;
+        showToastModern(data.success ? (data.message || 'Готово') : (data.error || 'Не вышло'), data.success ? 'success' : 'error');
+    }).catch(function() { button.disabled = false; showToastModern('Нет сети', 'error'); });
 }
 
 function originBadge(source) {
@@ -1071,7 +1091,7 @@ function renderTicketsGrouped(tickets, containerId) {
             
             html += '<div class="ticket-row' + (isEvacuation ? ' evacuation-row' : '') + (isProcessed ? ' processed-row' : '') + (isQueued ? ' queued-row' : '') + '" data-uid="' + t.uid + '">';
             html += '<span class="id">' + (t.gos || '—') + '</span>';
-            html += '<span class="map-cell">' + (isSupplyTicket(t) ? '' : mapButton(t.iot, t.gos, t.darks)) + '</span>';
+            html += '<span class="map-cell">' + (isSupplyTicket(t) ? '' : bikeButtons(t.iot, t.gos, t.darks)) + '</span>';
             html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + originBadge(t.source) + supplierBadge(t.supplier) + (t.display_desc || t.desc || '-');
             if (t.contact) {
                 html += '<span class="who">отправил: ' + String(t.contact).replace(/[&<>]/g, '') + '</span>';

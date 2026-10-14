@@ -537,15 +537,17 @@ def refresh_xdevice_points(force=False):
             state = obj.get("state") or {}
             lat = state.get("lat")
             lon = state.get("lon")
-            if lat is None or lon is None:
-                continue
             point = {
                 "lat": lat,
                 "lon": lon,
                 "online": bool(state.get("online")),
                 "name": str(obj.get("name") or ""),
                 "at": state.get("time") or 0,
+                "object_id": str(obj.get("id") or ""),
+                "lock": bool(state.get("lock")),
             }
+            if not point["object_id"] and lat is None:
+                continue
             keys = set()
             name = normalize_iot(obj.get("name"))
             if name:
@@ -1967,7 +1969,7 @@ def api_bike_location():
     if not normalize_iot(iot):
         return jsonify({'success': False, 'error': 'У этого номера нет IoT в базе велосипедов'})
     point = lookup_bike_point(iot)
-    if not point:
+    if not point or point.get('lat') is None or point.get('lon') is None:
         return jsonify({'success': False, 'error': _xdevice_error or 'Точки для этого IoT нет'})
     lat = point['lat']
     lon = point['lon']
@@ -1985,6 +1987,49 @@ def api_bike_location():
         'at': when,
         'url': f'https://yandex.ru/maps/?ll={lon},{lat}&pt={lon},{lat}&z=16&l=map',
     })
+
+def send_bike_command(object_id, command):
+    token = xdevice_token()
+    if not token:
+        return False, 'В настройках сервера нет ключа XDEVICE_TOKEN'
+    url = 'https://app.xdevice.ru/api/v1/objects/' + str(object_id) + '/commands/' + command
+    try:
+        response = requests.post(url, json={}, headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/json'}, timeout=25)
+    except Exception as exc:
+        logger.warning(f'Команда вело не ушла: {exc}')
+        return False, 'Сервер IoT не ответил'
+    if response.status_code == 400 and 'error_offline' in response.text:
+        return False, 'Велосипед не на связи. Команда не дошла.'
+    if response.status_code >= 400:
+        return False, 'Команда не принята'
+    return True, ''
+
+@app.route('/api/bike_power', methods=['POST'])
+@login_required
+def api_bike_power():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    data = request.json or {}
+    action = (data.get('action') or '').strip()
+    if action not in ('on', 'off'):
+        return jsonify({'success': False, 'error': 'Нужно включить или выключить'})
+    iot = resolve_ticket_iot(data.get('iot', ''), data.get('darks', ''), data.get('gos', ''))
+    if not normalize_iot(iot):
+        return jsonify({'success': False, 'error': 'У этого номера нет IoT в базе велосипедов'})
+    point = lookup_bike_point(iot)
+    object_id = (point or {}).get('object_id') or ''
+    if not object_id:
+        refresh_xdevice_points(force=True)
+        point = lookup_bike_point(iot)
+        object_id = (point or {}).get('object_id') or ''
+    if not object_id:
+        return jsonify({'success': False, 'error': 'Этот IoT не найден у поставщика'})
+    ok, error = send_bike_command(object_id, 'unlock' if action == 'on' else 'lock')
+    if not ok:
+        return jsonify({'success': False, 'error': error})
+    if point is not None:
+        point['lock'] = action == 'off'
+    return jsonify({'success': True, 'lock': action == 'off', 'message': 'Велосипед включён' if action == 'on' else 'Велосипед выключен'})
 
 # ============================================================
 # МАРШРУТЫ
@@ -2510,6 +2555,49 @@ def api_build_route_for_master():
         points = [START_COORDS] + coords_list
         url = 'https://yandex.ru/maps/?rtext=' + '~'.join(points)
     return redirect(url)
+
+def send_bike_command(object_id, command):
+    token = xdevice_token()
+    if not token:
+        return False, 'В настройках сервера нет ключа XDEVICE_TOKEN'
+    url = 'https://app.xdevice.ru/api/v1/objects/' + str(object_id) + '/commands/' + command
+    try:
+        response = requests.post(url, json={}, headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/json'}, timeout=25)
+    except Exception as exc:
+        logger.warning(f'Команда вело не ушла: {exc}')
+        return False, 'Сервер IoT не ответил'
+    if response.status_code == 400 and 'error_offline' in response.text:
+        return False, 'Велосипед не на связи. Команда не дошла.'
+    if response.status_code >= 400:
+        return False, 'Команда не принята'
+    return True, ''
+
+@app.route('/api/bike_power', methods=['POST'])
+@login_required
+def api_bike_power():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    data = request.json or {}
+    action = (data.get('action') or '').strip()
+    if action not in ('on', 'off'):
+        return jsonify({'success': False, 'error': 'Нужно включить или выключить'})
+    iot = resolve_ticket_iot(data.get('iot', ''), data.get('darks', ''), data.get('gos', ''))
+    if not normalize_iot(iot):
+        return jsonify({'success': False, 'error': 'У этого номера нет IoT в базе велосипедов'})
+    point = lookup_bike_point(iot)
+    object_id = (point or {}).get('object_id') or ''
+    if not object_id:
+        refresh_xdevice_points(force=True)
+        point = lookup_bike_point(iot)
+        object_id = (point or {}).get('object_id') or ''
+    if not object_id:
+        return jsonify({'success': False, 'error': 'Этот IoT не найден у поставщика'})
+    ok, error = send_bike_command(object_id, 'unlock' if action == 'on' else 'lock')
+    if not ok:
+        return jsonify({'success': False, 'error': error})
+    if point is not None:
+        point['lock'] = action == 'off'
+    return jsonify({'success': True, 'lock': action == 'off', 'message': 'Велосипед включён' if action == 'on' else 'Велосипед выключен'})
 
 # ============================================================
 # МАРШРУТЫ МАСТЕРОВ
