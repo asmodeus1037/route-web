@@ -447,10 +447,6 @@ def enrich_tickets(tickets):
             ticket['coords'] = info['coords']
         if info.get('direction') and not ticket.get('direction'):
             ticket['direction'] = info['direction']
-    try:
-        attach_iot(tickets)
-    except Exception as exc:
-        logger.warning(f'IoT к заявкам не подставился: {exc}')
     return tickets
 
 def parse_created_date(date_str):
@@ -537,17 +533,15 @@ def refresh_xdevice_points(force=False):
             state = obj.get("state") or {}
             lat = state.get("lat")
             lon = state.get("lon")
+            if lat is None or lon is None:
+                continue
             point = {
                 "lat": lat,
                 "lon": lon,
                 "online": bool(state.get("online")),
                 "name": str(obj.get("name") or ""),
                 "at": state.get("time") or 0,
-                "object_id": str(obj.get("id") or ""),
-                "lock": bool(state.get("lock")),
             }
-            if not point["object_id"] and lat is None:
-                continue
             keys = set()
             name = normalize_iot(obj.get("name"))
             if name:
@@ -583,28 +577,7 @@ def lookup_bike_point(iot):
     ensure_xdevice_loop()
     refresh_xdevice_points(force=False)
     key = normalize_iot(iot).lower()
-    if not key:
-        return None
     return _xdevice_points.get(key)
-
-def resolve_ticket_iot(iot, darks, gos):
-    if normalize_iot(iot):
-        return iot
-    key = normalize_gos(gos)
-    if not key:
-        return ''
-    try:
-        mapping = bike_lookup()
-    except Exception as exc:
-        logger.warning(f'База вело для карты: {exc}')
-        return ''
-    direct = mapping.get((str(darks or '').strip(), key))
-    if direct and direct.get('iot'):
-        return direct['iot']
-    for plate_key, item in mapping.items():
-        if plate_key[1] == key and item.get('iot'):
-            return item['iot']
-    return ''
 
 def normalize_gos(value):
     return re.sub(r'[^0-9A-Za-zА-Яа-я]', '', str(value or '')).upper()
@@ -1916,18 +1889,13 @@ def api_broadcast_curators():
             json={'text': text},
             timeout=40,
         )
-        if response.status_code == 404:
-            return jsonify({'success': False, 'error': 'На боте ещё нет рассылки. Нужно залить обновление route-bot.'})
-        try:
-            body = response.json() if response.content else {}
-        except Exception:
-            body = {}
+        body = response.json() if response.content else {}
         if response.status_code != 200 or not body.get('success'):
-            return jsonify({'success': False, 'error': body.get('error') or 'Бот не принял сообщение'})
+            return jsonify({'success': False, 'error': 'Бот не принял сообщение'})
         return jsonify({'success': True, 'count': body.get('count', 0)})
     except Exception as e:
         logger.warning(f'Рассылка кураторам не ушла: {e}')
-        return jsonify({'success': False, 'error': 'Бот не ответил'})
+        return jsonify({'success': False, 'error': 'Не отправилось'})
 
 def generate_curator_message(tickets_data):
     now = get_msk_now().strftime('%d.%m.%Y %H:%M')
@@ -1965,11 +1933,8 @@ def generate_curator_message(tickets_data):
 def api_bike_location():
     if session.get('role') != 'admin':
         return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
-    iot = resolve_ticket_iot(request.args.get('iot', ''), request.args.get('darks', ''), request.args.get('gos', ''))
-    if not normalize_iot(iot):
-        return jsonify({'success': False, 'error': 'У этого номера нет IoT в базе велосипедов'})
-    point = lookup_bike_point(iot)
-    if not point or point.get('lat') is None or point.get('lon') is None:
+    point = lookup_bike_point(request.args.get('iot', ''))
+    if not point:
         return jsonify({'success': False, 'error': _xdevice_error or 'Точки для этого IoT нет'})
     lat = point['lat']
     lon = point['lon']
@@ -1987,49 +1952,6 @@ def api_bike_location():
         'at': when,
         'url': f'https://yandex.ru/maps/?ll={lon},{lat}&pt={lon},{lat}&z=16&l=map',
     })
-
-def send_bike_command(object_id, command):
-    token = xdevice_token()
-    if not token:
-        return False, 'В настройках сервера нет ключа XDEVICE_TOKEN'
-    url = 'https://app.xdevice.ru/api/v1/objects/' + str(object_id) + '/commands/' + command
-    try:
-        response = requests.post(url, json={}, headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/json'}, timeout=25)
-    except Exception as exc:
-        logger.warning(f'Команда вело не ушла: {exc}')
-        return False, 'Сервер IoT не ответил'
-    if response.status_code == 400 and 'error_offline' in response.text:
-        return False, 'Велосипед не на связи. Команда не дошла.'
-    if response.status_code >= 400:
-        return False, 'Команда не принята'
-    return True, ''
-
-@app.route('/api/bike_power', methods=['POST'])
-@login_required
-def api_bike_power():
-    if session.get('role') != 'admin':
-        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
-    data = request.json or {}
-    action = (data.get('action') or '').strip()
-    if action not in ('on', 'off'):
-        return jsonify({'success': False, 'error': 'Нужно включить или выключить'})
-    iot = resolve_ticket_iot(data.get('iot', ''), data.get('darks', ''), data.get('gos', ''))
-    if not normalize_iot(iot):
-        return jsonify({'success': False, 'error': 'У этого номера нет IoT в базе велосипедов'})
-    point = lookup_bike_point(iot)
-    object_id = (point or {}).get('object_id') or ''
-    if not object_id:
-        refresh_xdevice_points(force=True)
-        point = lookup_bike_point(iot)
-        object_id = (point or {}).get('object_id') or ''
-    if not object_id:
-        return jsonify({'success': False, 'error': 'Этот IoT не найден у поставщика'})
-    ok, error = send_bike_command(object_id, 'unlock' if action == 'on' else 'lock')
-    if not ok:
-        return jsonify({'success': False, 'error': error})
-    if point is not None:
-        point['lock'] = action == 'off'
-    return jsonify({'success': True, 'lock': action == 'off', 'message': 'Велосипед включён' if action == 'on' else 'Велосипед выключен'})
 
 # ============================================================
 # МАРШРУТЫ
@@ -2555,6 +2477,7 @@ def api_build_route_for_master():
         points = [START_COORDS] + coords_list
         url = 'https://yandex.ru/maps/?rtext=' + '~'.join(points)
     return redirect(url)
+
 # ============================================================
 # МАРШРУТЫ МАСТЕРОВ
 # ============================================================
