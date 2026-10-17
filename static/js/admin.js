@@ -1003,6 +1003,223 @@ function searchBike() {
         });
 }
 
+function openBikeSearch() {
+    document.getElementById('bikeSearchModal').classList.add('active');
+}
+
+function closeBikeSearch() {
+    document.getElementById('bikeSearchModal').classList.remove('active');
+}
+
+function openDocs() {
+    var modal = document.getElementById('docsModal');
+    modal.classList.add('active');
+    var date = document.getElementById('docDate');
+    if (!date.value) {
+        var now = new Date();
+        var day = String(now.getDate()).padStart(2, '0');
+        var month = String(now.getMonth() + 1).padStart(2, '0');
+        date.value = day + '.' + month + '.' + now.getFullYear();
+    }
+    toggleDocKind();
+}
+
+function closeDocs() {
+    document.getElementById('docsModal').classList.remove('active');
+}
+
+function toggleDocKind() {
+    var kind = document.getElementById('docKind').value;
+    var fullBox = document.getElementById('docFullBox');
+    var akb = document.getElementById('docAkb');
+    var full = document.getElementById('docFull').checked;
+    fullBox.style.display = kind === 'vyvoz' ? 'block' : 'none';
+    akb.style.display = kind === 'vyvoz' && !full ? 'block' : 'none';
+    document.getElementById('docOneList').style.display = kind === 'zamena' ? 'none' : 'block';
+    document.getElementById('docTwoLists').style.display = kind === 'zamena' ? 'block' : 'none';
+}
+
+var docBikes = { one: [], take: [], give: [] };
+
+function docListId(bucket) {
+    if (bucket === 'take') return 'docTakeList';
+    if (bucket === 'give') return 'docGiveList';
+    return 'docBikeList';
+}
+
+function docInputId(bucket) {
+    if (bucket === 'take') return 'docTake';
+    if (bucket === 'give') return 'docGive';
+    return 'docLines';
+}
+
+function escapeDoc(value) {
+    return String(value || '').replace(/[&<>"']/g, function(char) {
+        return {'&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;'}[char];
+    });
+}
+
+function addDocBikes(bucket) {
+    var input = document.getElementById(docInputId(bucket));
+    var text = input.value.trim();
+    if (!text) return;
+    fetch('/api/resolve_bikes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lines: text })
+    })
+    .then(readApi)
+    .then(function(data) {
+        if (!data.success) {
+            alert(data.error || 'Не разобрал');
+            return;
+        }
+        var list = docBikes[bucket];
+        (data.bikes || []).forEach(function(bike) {
+            var same = list.some(function(item) {
+                if (bike.iot && item.iot === bike.iot) return true;
+                if (bike.frame && item.frame === bike.frame) return true;
+                return false;
+            });
+            if (!same) {
+                list.push({
+                    frame: bike.frame || '',
+                    gos: bike.gos || '',
+                    iot: bike.iot || ''
+                });
+            }
+        });
+        input.value = '';
+        renderDocBikes(bucket);
+        if ((data.missing || []).length) alert('Не добавил: ' + data.missing.join(', '));
+    })
+    .catch(function(error) {
+        alert(error.message || 'Нет сети');
+    });
+}
+
+function renderDocBikes(bucket) {
+    var box = document.getElementById(docListId(bucket));
+    var list = docBikes[bucket];
+    if (!list.length) {
+        box.innerHTML = '';
+        return;
+    }
+    var html = '<table class="doc-bikes"><tr><th>Номер рамы</th><th>Госномер</th><th>IoT</th><th></th></tr>';
+    for (var i = 0; i < list.length; i++) {
+        html += '<tr>';
+        html += docCell(bucket, i, 'frame');
+        html += docCell(bucket, i, 'gos');
+        html += docCell(bucket, i, 'iot');
+        html += '<td><button type="button" class="btn-mini" onclick="removeDocBike(\'' + bucket + '\',' + i + ')">Убрать</button></td>';
+        html += '</tr>';
+    }
+    html += '</table>';
+    box.innerHTML = html;
+}
+
+function docCell(bucket, index, field) {
+    var value = docBikes[bucket][index][field] || '';
+    return '<td title="Дважды нажмите, чтобы исправить" ondblclick="editDocCell(this)" data-bucket="' + bucket + '" data-index="' + index + '" data-field="' + field + '">' + escapeDoc(value || '—') + '</td>';
+}
+
+function editDocCell(cell) {
+    if (cell.querySelector('input')) return;
+    var bucket = cell.getAttribute('data-bucket');
+    var index = parseInt(cell.getAttribute('data-index'), 10);
+    var field = cell.getAttribute('data-field');
+    var current = docBikes[bucket][index][field] || '';
+    cell.innerHTML = '<input type="text">';
+    var input = cell.querySelector('input');
+    var closed = false;
+    input.value = current;
+    input.focus();
+    input.select();
+    function save() {
+        if (closed) return;
+        closed = true;
+        docBikes[bucket][index][field] = input.value.trim();
+        renderDocBikes(bucket);
+    }
+    input.addEventListener('keydown', function(event) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            save();
+        }
+        if (event.key === 'Escape') {
+            closed = true;
+            renderDocBikes(bucket);
+        }
+    });
+    input.addEventListener('blur', save);
+}
+
+function removeDocBike(bucket, index) {
+    docBikes[bucket].splice(index, 1);
+    renderDocBikes(bucket);
+}
+
+function submitDoc() {
+    var company = document.getElementById('docCompany').value;
+    if (!company) {
+        alert('Выберите компанию');
+        return;
+    }
+    var kind = document.getElementById('docKind').value;
+    if (kind !== 'zamena' && document.getElementById('docLines').value.trim()) {
+        alert('Сначала нажмите «Добавить», строка ещё не в списке');
+        return;
+    }
+    if (kind === 'zamena' && (document.getElementById('docTake').value.trim() || document.getElementById('docGive').value.trim())) {
+        alert('Сначала нажмите «Добавить», строка ещё не в списке');
+        return;
+    }
+    var payload = {
+        kind: kind,
+        company: company,
+        date: document.getElementById('docDate').value.trim(),
+        darks: document.getElementById('docDarks').value.trim(),
+        full_kit: document.getElementById('docFull').checked,
+        akb_count: document.getElementById('docAkb').value,
+        bikes: docBikes.one,
+        take_bikes: docBikes.take,
+        give_bikes: docBikes.give
+    };
+    fetch('/api/make_document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+    .then(function(response) {
+        var note = response.headers.get('X-Log-Note') || '';
+        var type = response.headers.get('Content-Type') || '';
+        if (type.indexOf('application/json') !== -1) {
+            return response.json().then(function(data) {
+                throw new Error(data.error || 'Не создалось');
+            });
+        }
+        if (!response.ok) throw new Error('Не создалось');
+        var match = /filename=\"?([^\";]+)\"?/.exec(response.headers.get('Content-Disposition') || '');
+        var name = match ? match[1] : 'document.docx';
+        return response.blob().then(function(blob) {
+            return { blob: blob, name: name, note: note };
+        });
+    })
+    .then(function(file) {
+        var link = document.createElement('a');
+        link.href = URL.createObjectURL(file.blob);
+        link.download = file.name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        if (file.note === 'sheet-failed') showToastModern('Документ скачан, в таблицу не записался', 'error');
+        else showToastModern('Документ скачан', 'success');
+    })
+    .catch(function(error) {
+        alert(error.message || 'Не создалось');
+    });
+}
+
 function openCreateTicket() {
     document.getElementById('createTicketModal').classList.add('active');
 }

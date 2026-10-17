@@ -535,14 +535,16 @@ def refresh_xdevice_points(force=False):
         points = {}
         for obj in items:
             state = obj.get("state") or {}
-            lat = state.get("lat")
-            lon = state.get("lon")
+            processed = obj.get("processedState") or {}
+            navigation = processed.get("navigation") if isinstance(processed.get("navigation"), dict) else {}
+            gps = state.get("gps") if isinstance(state.get("gps"), dict) else {}
+            lat, lon = live_bike_coords(processed, navigation, gps)
             point = {
                 "lat": lat,
                 "lon": lon,
                 "online": bool(state.get("online")),
                 "name": str(obj.get("name") or ""),
-                "at": state.get("time") or 0,
+                "at": state.get("time") or gps.get("gps-time") or 0,
                 "object_id": str(obj.get("id") or ""),
                 "lock": bool(state.get("lock")),
             }
@@ -578,6 +580,31 @@ def ensure_xdevice_loop():
         return
     _xdevice_started = True
     threading.Thread(target=xdevice_loop, daemon=True).start()
+
+def coord_number(value):
+    try:
+        if value is None or value == '':
+            return None
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if abs(number) < 1:
+        return None
+    return number
+
+def live_bike_coords(processed, navigation, gps):
+    pairs = (
+        (processed.get("lat"), processed.get("lon")),
+        (navigation.get("coord-latitude"), navigation.get("coord-longitude")),
+        (gps.get("gps-latitude"), gps.get("gps-longitude")),
+        (processed.get("last_valid_lat"), processed.get("last_valid_lon")),
+    )
+    for lat, lon in pairs:
+        lat_n = coord_number(lat)
+        lon_n = coord_number(lon)
+        if lat_n is not None and lon_n is not None:
+            return lat_n, lon_n
+    return None, None
 
 def lookup_bike_point(iot):
     ensure_xdevice_loop()
@@ -2266,6 +2293,142 @@ def bike_catalog():
             items.append({'frame': frame, 'gos': gos, 'iot': iot})
     return items
 
+def iot_tail(value):
+    text = normalize_iot(value).lower().replace(' ', '')
+    if '-' in text:
+        text = text.split('-', 1)[1]
+    text = re.sub(r'\D', '', text).lstrip('0')
+    return text or '0'
+
+def classify_bike_token(token):
+    compact = re.sub(r'\s+', '', token or '')
+    if re.fullmatch(r'\d{2}-\d{3,6}', compact):
+        return 'iot', compact
+    if re.fullmatch(r'\d{10,20}', compact):
+        return 'frame', compact
+    if re.fullmatch(r'\d{3,5}', compact):
+        return 'iot_short', compact
+    if re.search(r'[A-Za-zА-Яа-я]', compact) and re.search(r'\d', compact) and len(compact) <= 12:
+        return 'gos', compact
+    return '', ''
+
+def parse_line_fields(line):
+    fields = {'frame': '', 'gos': '', 'iot': '', 'short': False}
+    for part in re.split(r'[\s,;]+', (line or '').strip()):
+        if not part:
+            continue
+        kind, value = classify_bike_token(part)
+        if kind == 'frame' and not fields['frame']:
+            fields['frame'] = value
+        elif kind == 'gos' and not fields['gos']:
+            fields['gos'] = value
+        elif kind == 'iot' and not fields['iot']:
+            fields['iot'] = value
+            fields['short'] = False
+        elif kind == 'iot_short' and not fields['iot']:
+            fields['iot'] = '25-' + value
+            fields['short'] = True
+    return fields
+
+def catalog_by_iot(items, iot):
+    tail = iot_tail(iot)
+    exact = []
+    hits = []
+    wanted = normalize_iot(iot).lower()
+    for item in items:
+        if not item.get('iot'):
+            continue
+        if normalize_iot(item['iot']).lower() == wanted:
+            exact.append(item)
+        elif iot_tail(item['iot']) == tail:
+            hits.append(item)
+    return exact or hits
+
+def catalog_by_field(items, field, token):
+    if field == 'gos':
+        key = normalize_gos(token)
+        return [item for item in items if key and normalize_gos(item.get('gos')) == key]
+    key = re.sub(r'\s+', '', token or '').lower()
+    return [item for item in items if key and re.sub(r'\s+', '', item.get('frame') or '').lower() == key]
+
+def resolve_bike_line(line, items):
+    fields = parse_line_fields(line)
+    if not fields['frame'] and not fields['gos'] and not fields['iot']:
+        return None, line
+    match = None
+    if fields['iot']:
+        hits = catalog_by_iot(items, fields['iot'])
+        if len(hits) > 1:
+            return None, line + ' — несколько велосипедов с таким IoT'
+        if len(hits) == 1:
+            match = hits[0]
+    if not match and fields['gos']:
+        hits = catalog_by_field(items, 'gos', fields['gos'])
+        if len(hits) == 1:
+            match = hits[0]
+    if not match and fields['frame']:
+        hits = catalog_by_field(items, 'frame', fields['frame'])
+        if len(hits) == 1:
+            match = hits[0]
+    if fields['short'] and not match and not fields['frame'] and not fields['gos']:
+        return None, line + ' — такого IoT нет в базе'
+    bike = {
+        'frame': fields['frame'] or ((match or {}).get('frame') or ''),
+        'gos': fields['gos'] or ((match or {}).get('gos') or ''),
+        'iot': (match or {}).get('iot') if fields['short'] and match else (fields['iot'] or ((match or {}).get('iot') or '')),
+    }
+    if not bike['frame'] and not bike['gos'] and not bike['iot']:
+        return None, line
+    return bike, None
+
+def parse_bike_lines(text, items):
+    found = []
+    missing = []
+    seen = set()
+    for raw in (text or '').splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        bike, error = resolve_bike_line(line, items)
+        if error:
+            missing.append(error)
+            continue
+        key = (bike.get('iot') or '').lower() or normalize_gos(bike.get('gos')) or (bike.get('frame') or '').lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append(bike)
+    return found, missing
+
+def bikes_from_request(data, list_key, lines_key, catalog):
+    raw = data.get(list_key)
+    if isinstance(raw, list) and raw:
+        bikes = []
+        seen = set()
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            bike = {
+                'frame': str(item.get('frame') or '').strip(),
+                'gos': str(item.get('gos') or '').strip(),
+                'iot': str(item.get('iot') or '').strip(),
+            }
+            if not bike['frame'] and not bike['gos'] and not bike['iot']:
+                continue
+            key = bike['iot'].lower() or normalize_gos(bike['gos']) or bike['frame'].lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            bikes.append(bike)
+        if bikes:
+            return bikes, []
+    return parse_bike_lines(data.get(lines_key) or '', catalog)
+
+def equipment_names(company):
+    if company == 'ВелоСтеп':
+        return 'Электровелосипед\nВелоСтеп', 'АКБ ВелоСтеп'
+    return 'Электровелосипед\nVanta Bike Monster', 'АКБ Vanta'
+
 def find_catalog_bike(items, token):
     token = (token or '').strip()
     if len(token) < 3:
@@ -2282,46 +2445,23 @@ def find_catalog_bike(items, token):
             return item
     return None
 
-def parse_bike_lines(text, items):
-    found = []
-    missing = []
-    seen = set()
-    for raw in (text or '').splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        tokens = [line] + [part for part in re.split(r'[\s,;]+', line) if part]
-        bike = None
-        for token in tokens:
-            bike = find_catalog_bike(items, token)
-            if bike:
-                break
-        if not bike:
-            missing.append(line)
-            continue
-        key = normalize_gos(bike['gos']) or re.sub(r'\s+', '', bike['frame']).lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        found.append(bike)
-    return found, missing
-
 def write_bike_row(table, values):
     row = table.add_row()
     for index, value in enumerate(values):
         if index < len(row.cells):
             row.cells[index].text = '' if value is None else str(value)
 
-def add_bike_table(table, bikes, with_state, akb_count):
+def add_bike_table(table, bikes, with_state, akb_count, company):
+    bike_name, akb_name = equipment_names(company)
     number = 1
     for bike in bikes:
-        values = [number, 'Электровелосипед\nVanta Bike Monster', bike.get('frame') or '-', bike.get('gos') or '-', bike.get('iot') or '-']
+        values = [number, bike_name, bike.get('frame') or '-', bike.get('gos') or '-', bike.get('iot') or '-']
         if with_state:
             values.append('БУ')
         write_bike_row(table, values)
         number += 1
     for _ in range(max(0, akb_count)):
-        values = [number, 'АКБ Vanta', '-', '-', '-']
+        values = [number, akb_name, '-', '-', '-']
         if with_state:
             values.append('БУ')
         write_bike_row(table, values)
@@ -2337,7 +2477,22 @@ def append_supply_log(rows):
             start = index
             break
     finish = start + len(rows) - 1
-    sheet.update(f'A{start}:F{finish}', rows, value_input_option='USER_ENTERED')
+    sheet.update(f'A{start}:G{finish}', rows, value_input_option='USER_ENTERED')
+
+@app.route('/api/resolve_bikes', methods=['POST'])
+@login_required
+def api_resolve_bikes():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    data = request.json or {}
+    try:
+        catalog = bike_catalog()
+    except Exception:
+        return jsonify({'success': False, 'error': 'База велосипедов сейчас не открылась'})
+    bikes, missing = parse_bike_lines(data.get('lines') or '', catalog)
+    if not bikes and missing:
+        return jsonify({'success': False, 'error': 'Не разобрал: ' + ', '.join(missing[:8])})
+    return jsonify({'success': True, 'bikes': bikes, 'missing': missing})
 
 @app.route('/api/make_document', methods=['POST'])
 @login_required
@@ -2350,6 +2505,9 @@ def api_make_document():
         return jsonify({'success': False, 'error': 'Выберите тип документа'})
     date = (data.get('date') or '').strip()
     darks = str(data.get('darks') or '').strip()
+    company = (data.get('company') or '').strip()
+    if company not in ('Vanta', 'ВелоСтеп'):
+        return jsonify({'success': False, 'error': 'Выберите компанию'})
     if not date:
         return jsonify({'success': False, 'error': 'Укажите дату'})
     if not darks:
@@ -2374,13 +2532,15 @@ def api_make_document():
         akb_count = 0
     if akb_count < 0 or akb_count > 500:
         return jsonify({'success': False, 'error': 'Количество АКБ указано неверно'})
-    take, missing_take = parse_bike_lines(data.get('take_lines') or data.get('lines') or '', catalog)
-    give, missing_give = ([], [])
     if kind == 'zamena':
-        give, missing_give = parse_bike_lines(data.get('give_lines') or '', catalog)
+        take, missing_take = bikes_from_request(data, 'take_bikes', 'take_lines', catalog)
+        give, missing_give = bikes_from_request(data, 'give_bikes', 'give_lines', catalog)
+    else:
+        take, missing_take = bikes_from_request(data, 'bikes', 'lines', catalog)
+        give, missing_give = [], []
     missing = missing_take + missing_give
     if missing:
-        return jsonify({'success': False, 'error': 'Нет в базе велосипедов: ' + ', '.join(missing[:8])})
+        return jsonify({'success': False, 'error': 'Не разобрал: ' + ', '.join(missing[:8])})
     if kind == 'zamena':
         if not take or not give:
             return jsonify({'success': False, 'error': 'Для замены нужны оба списка: что забрали и что поставили'})
@@ -2412,14 +2572,15 @@ def api_make_document():
             '{АКБ_ИТОГО}': akb_total,
             '{ВСЕГО}': len(bikes) + akb_total,
             '{таблица}': '',
+            '{КОМПАНИЯ}': company,
         })
         if kind == 'zamena':
-            add_bike_table(doc.tables[0], take, False, 0)
-            add_bike_table(doc.tables[1], give, False, 0)
+            add_bike_table(doc.tables[0], take, False, 0, company)
+            add_bike_table(doc.tables[1], give, False, 0, company)
         elif kind == 'sverka':
-            add_bike_table(doc.tables[0], bikes, False, 0)
+            add_bike_table(doc.tables[0], bikes, False, 0, company)
         else:
-            add_bike_table(doc.tables[0], bikes, True, extra_akb)
+            add_bike_table(doc.tables[0], bikes, True, extra_akb, company)
         buffer = BytesIO()
         doc.save(buffer)
         buffer.seek(0)
@@ -2430,13 +2591,13 @@ def api_make_document():
     log_rows = []
     if kind == 'zamena':
         for bike in take:
-            log_rows.append([date, 'Вывоз', darks, bike.get('frame') or '', bike.get('gos') or '', bike.get('iot') or ''])
+            log_rows.append([date, 'Вывоз', company, darks, bike.get('frame') or '', bike.get('gos') or '', bike.get('iot') or ''])
         for bike in give:
-            log_rows.append([date, 'Поставка', darks, bike.get('frame') or '', bike.get('gos') or '', bike.get('iot') or ''])
+            log_rows.append([date, 'Поставка', company, darks, bike.get('frame') or '', bike.get('gos') or '', bike.get('iot') or ''])
     else:
         title = {'postavka': 'Поставка', 'vyvoz': 'Вывоз', 'sverka': 'Сверка'}.get(kind, operation)
         for bike in bikes:
-            log_rows.append([date, title, darks, bike.get('frame') or '', bike.get('gos') or '', bike.get('iot') or ''])
+            log_rows.append([date, title, company, darks, bike.get('frame') or '', bike.get('gos') or '', bike.get('iot') or ''])
     try:
         if log_rows:
             append_supply_log(log_rows)

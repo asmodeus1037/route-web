@@ -778,6 +778,46 @@ h1 {
     margin-bottom: 12px;
 }
 
+.doc-modal {
+    max-width: 760px;
+}
+
+.doc-add {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.doc-add textarea {
+    flex: 1;
+    min-width: 0;
+}
+
+.doc-bikes {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+    font-size: 13px;
+}
+
+.doc-bikes th,
+.doc-bikes td {
+    border-bottom: 1px solid #e2e8f0;
+    padding: 6px 4px;
+    text-align: left;
+}
+
+.doc-bikes input {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.doc-hint {
+    color: #64748b;
+    font-size: 12px;
+    margin: 8px 0 0;
+}
+
 .modal-content .close-btn {
     float: right;
     background: none;
