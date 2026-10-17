@@ -1115,6 +1115,30 @@ def restore_statuses_from_sheet():
     logger.info(f'Статусы возвращены из таблицы, записано {changed}, по статусам {counts}')
     return {'count': changed, 'from_sheet': counts}
 
+def reconcile_from_google():
+    """Кнопка руководителя: сайт и база становятся как Google Таблица.
+    Свои несохранённые записи сначала отправляются в таблицу, они важнее."""
+    try:
+        flush_queue()
+    except Exception as exc:
+        logger.warning(f'Очередь перед сверкой не ушла: {exc}')
+    fresh = _read_tickets_from_google()
+    fresh = [ticket for ticket in fresh if ticket.get('uid')]
+    if not fresh:
+        raise RuntimeError('Таблица не открылась или в ней нет заявок. Базу не менял.')
+    apply_pending_queue(fresh)
+    for ticket in fresh:
+        ticket['is_done'] = ticket.get('status') == 'done'
+        ticket['is_active'] = is_active_status(ticket.get('status'))
+        ticket['hours_since'] = ticket_hours(ticket)
+    closed = db.reconcile_from_sheet(fresh)
+    store_ticket_memory(fresh, fresh=True)
+    publish_caches(fresh)
+    open_count = len([ticket for ticket in fresh if ticket.get('status') != 'done'])
+    logger.info(f'Сверка с таблицей: строк {len(fresh)}, открытых {open_count}, закрыто лишних {closed}')
+    return {'sheet': len(fresh), 'open': open_count, 'closed': closed}
+
+
 def refresh_admin_cache():
     try:
         flush_queue()
@@ -3159,6 +3183,25 @@ def api_restore_from_sheet():
     except Exception as e:
         logger.error(f'Не удалось вернуть статусы: {e}')
         return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/reconcile_sheet', methods=['POST'])
+@login_required
+def api_reconcile_sheet():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    try:
+        result = reconcile_from_google()
+        return jsonify({
+            'success': True,
+            'sheet': result['sheet'],
+            'open': result['open'],
+            'closed': result['closed'],
+            'message': f"В таблице {result['sheet']} заявок, открытых {result['open']}. Лишние в базе закрыты: {result['closed']}.",
+        })
+    except Exception as e:
+        logger.error(f'Сверка с таблицей не удалась: {e}')
+        return jsonify({'success': False, 'error': str(e)})
+
 
 @app.route('/api/queue_status')
 @login_required

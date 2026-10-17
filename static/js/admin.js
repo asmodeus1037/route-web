@@ -1712,6 +1712,38 @@ function saveAllChangesOld() {
     });
 }
 
+function reconcileSheet() {
+    var keys = Object.keys(pendingChanges);
+    if (keys.length > 0) {
+        alert('Сначала нажмите «Сохранить назначения». Несохранённых мастеров в сверку не беру.');
+        return;
+    }
+    if (!confirm('Админка и база станут такими же, как Google Таблица. Заявки, которых в таблице уже нет, закроются. Продолжить?')) {
+        return;
+    }
+    document.getElementById('syncSpinner').style.display = 'block';
+    document.getElementById('syncStatus').textContent = 'Сверяю с таблицей...';
+    document.getElementById('syncStatus').style.color = '#f59e0b';
+    fetch('/api/reconcile_sheet', { method: 'POST' })
+    .then(readApi)
+    .then(function(data) {
+        document.getElementById('syncSpinner').style.display = 'none';
+        if (data.success) {
+            document.getElementById('syncStatus').textContent = data.message;
+            document.getElementById('syncStatus').style.color = '#22c55e';
+            setTimeout(function() { location.reload(); }, 1200);
+        } else {
+            document.getElementById('syncStatus').textContent = 'Ошибка: ' + (data.error || '');
+            document.getElementById('syncStatus').style.color = '#ef4444';
+        }
+    })
+    .catch(function() {
+        document.getElementById('syncStatus').textContent = 'Ошибка сети';
+        document.getElementById('syncStatus').style.color = '#ef4444';
+        document.getElementById('syncSpinner').style.display = 'none';
+    });
+}
+
 function syncAll() {
     var keys = Object.keys(pendingChanges);
     if (keys.length > 0) {

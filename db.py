@@ -130,6 +130,43 @@ def mirror_replacement(item):
     _wake.set()
 
 
+def reconcile_from_sheet(tickets):
+    """Таблица становится списком заявок. Чего в ней нет, в базе закрывается."""
+    if not _state['configured'] or psycopg2 is None:
+        raise RuntimeError('База не настроена')
+    rows = [_ticket_row(ticket) for ticket in tickets or []]
+    rows = [row for row in rows if row]
+    uids = [row[0] for row in rows]
+    if not uids:
+        raise RuntimeError('В таблице нет заявок, базу не трогаю')
+    conn = _connect()
+    try:
+        _upsert_tickets(conn, rows)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE tickets
+                SET status = 'done', updated_at = now()
+                WHERE NOT (uid = ANY(%s))
+                  AND COALESCE(status, '') <> 'done'
+                """,
+                (uids,),
+            )
+            closed = cur.rowcount
+        conn.commit()
+        with _lock:
+            _state['connected'] = True
+            _state['last_error'] = ''
+            _state['last_sync'] = time.strftime('%Y-%m-%d %H:%M:%S')
+            _state['tickets'] = len(uids)
+        return closed
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def write_statuses_now(tickets):
     """Сразу записать статус, мастера и комментарий. Не через очередь."""
     if not _state['configured'] or psycopg2 is None:
