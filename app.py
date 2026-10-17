@@ -2799,6 +2799,8 @@ def api_make_document():
         bikes = take
         extra_akb = len(bikes) * 2 if kind == 'postavka' or (kind == 'vyvoz' and full_kit) else (akb_count if kind == 'vyvoz' else 0)
     template_name, operation = DOC_KINDS[kind]
+    if company == 'ВелоСтеп':
+        template_name = template_name.replace('_template.docx', '_velostep.docx')
     path = os.path.join(DOC_DIR, template_name)
     if not os.path.exists(path):
         return jsonify({'success': False, 'error': 'Шаблон документа не найден на сервере'})
