@@ -1076,10 +1076,9 @@ function addDocBikes(bucket) {
         }
         var list = docBikes[bucket];
         (data.bikes || []).forEach(function(bike) {
+            var key = [bike.frame || '', bike.gos || '', bike.iot || ''].join('|').toLowerCase();
             var same = list.some(function(item) {
-                if (bike.iot && item.iot === bike.iot) return true;
-                if (bike.frame && item.frame === bike.frame) return true;
-                return false;
+                return [item.frame || '', item.gos || '', item.iot || ''].join('|').toLowerCase() === key;
             });
             if (!same) {
                 list.push({
@@ -1230,8 +1229,11 @@ function closeCreateTicket() {
 
 function toggleCustomType() {
     var chosen = document.querySelector('input[name="createType"]:checked');
-    var field = document.getElementById('createCustom');
-    field.style.display = chosen && chosen.value === 'Свой вариант' ? 'block' : 'none';
+    var type = chosen ? chosen.value : '';
+    var supply = type === 'Аккумуляторная батарея' || type === 'Зарядное устройство';
+    document.getElementById('createCustom').style.display = type === 'Свой вариант' ? 'block' : 'none';
+    document.getElementById('createGosWrap').style.display = supply ? 'none' : 'block';
+    document.getElementById('createQtyWrap').style.display = supply ? 'block' : 'none';
 }
 
 function submitCreateTicket() {
@@ -1241,7 +1243,8 @@ function submitCreateTicket() {
         type: chosen ? chosen.value : '',
         custom_type: document.getElementById('createCustom').value.trim(),
         desc: document.getElementById('createDesc').value.trim(),
-        gos: document.getElementById('createGos').value.trim()
+        gos: document.getElementById('createGos').value.trim(),
+        qty: document.getElementById('createQty').value.trim()
     };
     fetch('/api/admin_ticket', {
         method: 'POST',
@@ -1265,6 +1268,7 @@ function submitCreateTicket() {
         document.getElementById('createDarks').value = '';
         document.getElementById('createDesc').value = '';
         document.getElementById('createGos').value = '';
+        document.getElementById('createQty').value = '';
         document.getElementById('createCustom').value = '';
         showToastModern('Заявка создана', 'success');
         renderCurrentTab();

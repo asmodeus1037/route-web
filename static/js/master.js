@@ -79,6 +79,8 @@ function mountMasterChrome() {
     sheet.className = 'more-sheet';
     sheet.hidden = true;
     sheet.innerHTML = ''
+        + '<a href="' + base + '/stats">Статистика</a>'
+        + '<a href="' + base + '/report">Ежедневный отчёт</a>'
         + '<a href="' + base + '/text_plan">План</a>'
         + '<a href="' + base + '/history">История</a>'
         + '<button type="button" class="sheet-out">Выйти</button>';

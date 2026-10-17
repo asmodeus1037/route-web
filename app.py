@@ -6,7 +6,7 @@ import time
 import threading
 import requests
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session, send_from_directory, send_file
-from datetime import datetime
+from datetime import datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import urllib.parse
@@ -1527,6 +1527,157 @@ def append_master_history(master, action, data):
     })
     write_cache(f"history_{master}.json", {'items': items[-300:]})
 
+SHIFT_REPORTS_FILE = 'shift_reports.json'
+SHIFT_SEEN_FILE = 'shift_seen.json'
+SHIFT_STATUSES = {
+    'done': 'Все запланированные выезды выполнены',
+    'partial': 'Выполнено частично',
+    'failed': 'Не выполнен',
+}
+
+def shift_report_items():
+    raw = read_cache(SHIFT_REPORTS_FILE) or {}
+    items = raw.get('items') if isinstance(raw, dict) else raw
+    return items if isinstance(items, list) else []
+
+def save_shift_report_item(item):
+    items = [row for row in shift_report_items() if not (row.get('master') == item.get('master') and row.get('date') == item.get('date'))]
+    items.append(item)
+    write_cache(SHIFT_REPORTS_FILE, {'items': items[-1000:]})
+
+def shift_seen_map():
+    raw = read_cache(SHIFT_SEEN_FILE) or {}
+    return raw if isinstance(raw, dict) else {}
+
+def mark_shift_seen(name):
+    data = shift_seen_map()
+    days = [day for day in (data.get(name) or []) if isinstance(day, str)]
+    today = get_msk_now().date().isoformat()
+    if today not in days:
+        days.append(today)
+    data[name] = days[-90:]
+    write_cache(SHIFT_SEEN_FILE, data)
+
+def missing_shift_day(name):
+    today = get_msk_now().date()
+    reported = {row.get('date') for row in shift_report_items() if row.get('master') == name}
+    missing = []
+    for day in shift_seen_map().get(name) or []:
+        try:
+            parsed = datetime.strptime(day, '%Y-%m-%d').date()
+        except ValueError:
+            continue
+        if parsed < today and day not in reported:
+            missing.append(parsed)
+    return min(missing) if missing else None
+
+def history_rows(master):
+    raw = read_cache(f'history_{master}.json') or {}
+    if isinstance(raw, dict):
+        raw = raw.get('items') or raw.get('history') or []
+    return raw if isinstance(raw, list) else []
+
+def history_stamp(item):
+    text = str((item or {}).get('timestamp') or '')[:19]
+    try:
+        return datetime.strptime(text, '%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        return None
+
+def closed_on_day(master, day):
+    count = 0
+    for item in history_rows(master):
+        stamp = history_stamp(item)
+        if stamp and stamp.date().isoformat() == day:
+            count += 1
+    return count
+
+def master_name_list():
+    names = []
+    for item in MASTER_CREDENTIALS.values():
+        if item.get('role') == 'master' and item.get('name') not in names:
+            names.append(item['name'])
+    return names
+
+def stats_bundle(only_name=None):
+    now = get_msk_now().replace(tzinfo=None)
+    week = now - timedelta(days=7)
+    month = now - timedelta(days=30)
+    try:
+        averages = db.close_hours(60)
+    except Exception:
+        averages = {}
+    people = []
+    names = [only_name] if only_name else master_name_list()
+    for name in names:
+        week_count = 0
+        month_count = 0
+        for item in history_rows(name):
+            stamp = history_stamp(item)
+            if not stamp:
+                continue
+            if stamp >= month:
+                month_count += 1
+            if stamp >= week:
+                week_count += 1
+        open_count = 0
+        try:
+            _, tickets, _ = master_groups(name)
+            open_count = sum(1 for ticket in tickets if is_active_status(ticket.get('status')))
+        except Exception:
+            open_count = 0
+        people.append({
+            'name': name,
+            'open': open_count,
+            'week': week_count,
+            'month': month_count,
+            'avg_hours': averages.get(name),
+            'rating': None,
+        })
+    known = [person['avg_hours'] for person in people if person.get('avg_hours') is not None]
+    if not known:
+        known = list(averages.values())
+    overall = round(sum(known) / len(known), 1) if known else None
+    return {'people': people, 'overall_hours': overall, 'reports': shift_report_items()}
+
+def append_shift_sheet(item):
+    book = get_sheet_client()
+    title = 'Ежедневный отчет'
+    try:
+        sheet = book.worksheet(title)
+    except Exception:
+        sheet = book.add_worksheet(title, rows=2000, cols=10)
+        sheet.update(
+            values=[['Дата', 'Мастер', 'Начало', 'Конец', 'Пробег', 'Доп. расходы', 'Статус', 'Комментарий', 'Закрыто заявок', 'Записано']],
+            range_name='A1:J1',
+        )
+    row = [[
+        item.get('date_ru') or item.get('date') or '',
+        item.get('master') or '',
+        item.get('start') or '',
+        item.get('end') or '',
+        item.get('mileage') or '',
+        item.get('expenses') or '',
+        item.get('status_label') or '',
+        item.get('comment') or '',
+        item.get('closed_count') or 0,
+        item.get('saved_at') or '',
+    ]]
+    column = sheet.col_values(1)
+    start = len(column) + 1
+    for index, value in enumerate(column, start=1):
+        if index > 1 and not str(value).strip():
+            start = index
+            break
+    sheet.update(values=row, range_name=f'A{start}:J{start}', value_input_option='USER_ENTERED')
+
+def guard_shift(name):
+    missing = missing_shift_day(name)
+    if missing:
+        return redirect(url_for('master_report', name=name, day=missing.isoformat()))
+    mark_shift_seen(name)
+    return None
+
 TRUNK_FILE = os.path.join(CACHE_DIR, "trunks.json")
 PARTS_QUEUE_FILE = os.path.join(CACHE_DIR, "parts_queue.json")
 _trunk_lock = threading.Lock()
@@ -2180,6 +2331,7 @@ def api_admin_ticket():
     custom = str(data.get('custom_type') or '').strip()
     desc = str(data.get('desc') or '').strip()
     gos = str(data.get('gos') or '').strip().upper()
+    qty = str(data.get('qty') or '').strip()
     if bike_type == 'Свой вариант':
         bike_type = custom
     if not darks:
@@ -2188,7 +2340,13 @@ def api_admin_ticket():
         return jsonify({'success': False, 'error': 'Укажите тип техники'})
     if not desc:
         return jsonify({'success': False, 'error': 'Опишите проблему'})
-    if bike_type == 'Электровелосипед' and not gos:
+    supply = bike_type in ('Аккумуляторная батарея', 'Зарядное устройство')
+    if supply:
+        if not qty.isdigit() or int(qty) < 1:
+            return jsonify({'success': False, 'error': 'Укажите количество'})
+        gos = ''
+        desc = f'{int(qty)} шт. {desc}'.strip()
+    elif bike_type == 'Электровелосипед' and not gos:
         return jsonify({'success': False, 'error': 'Укажите госномер'})
     if not darks_ref:
         try:
@@ -2393,7 +2551,11 @@ def parse_bike_lines(text, items):
         if error:
             missing.append(error)
             continue
-        key = (bike.get('iot') or '').lower() or normalize_gos(bike.get('gos')) or (bike.get('frame') or '').lower()
+        key = '|'.join([
+            (bike.get('frame') or '').strip().lower(),
+            normalize_gos(bike.get('gos')),
+            (bike.get('iot') or '').strip().lower(),
+        ])
         if key in seen:
             continue
         seen.add(key)
@@ -2415,7 +2577,7 @@ def bikes_from_request(data, list_key, lines_key, catalog):
             }
             if not bike['frame'] and not bike['gos'] and not bike['iot']:
                 continue
-            key = bike['iot'].lower() or normalize_gos(bike['gos']) or bike['frame'].lower()
+            key = '|'.join([bike['frame'].lower(), normalize_gos(bike['gos']), bike['iot'].lower()])
             if key in seen:
                 continue
             seen.add(key)
@@ -3106,6 +3268,10 @@ def api_build_route_for_master():
     master = request.args.get('master', '')
     if not master:
         return 'Нет мастера', 400
+    if session.get('role') != 'admin' and session.get('master_name') == master:
+        blocked = guard_shift(master)
+        if blocked:
+            return blocked
     
     darks_ref = load_darks_reference()
     
@@ -3183,11 +3349,130 @@ def master_groups(name):
             })
     return groups, master_tickets, cache_data.get('updated_at', '')
 
+@app.route('/admin/stats')
+@login_required
+def admin_stats():
+    if session.get('role') != 'admin':
+        return redirect(url_for('login_page'))
+    bundle = stats_bundle()
+    reports = sorted(bundle['reports'], key=lambda row: (row.get('date') or '', row.get('master') or ''), reverse=True)
+    expenses = [row for row in reports if (row.get('expenses') or '').strip()]
+    return render_template(
+        'admin_stats.html',
+        people=bundle['people'],
+        overall=bundle['overall_hours'],
+        reports=reports[:80],
+        expenses=expenses[:80],
+        now=get_msk_now().strftime('%d.%m.%Y %H:%M'),
+    )
+
+@app.route('/master/<name>/stats')
+@login_required
+def master_stats(name):
+    if session.get('master_name') != name:
+        return redirect(url_for('login_page'))
+    blocked = guard_shift(name)
+    if blocked:
+        return blocked
+    bundle = stats_bundle(name)
+    person = bundle['people'][0] if bundle['people'] else {'name': name, 'open': 0, 'week': 0, 'month': 0, 'avg_hours': None, 'rating': None}
+    return render_template('master_stats.html', name=name, person=person, overall=bundle['overall_hours'])
+
+@app.route('/master/<name>/report')
+@login_required
+def master_report(name):
+    if session.get('master_name') != name:
+        return redirect(url_for('login_page'))
+    day_text = (request.args.get('day') or '').strip()
+    missing = missing_shift_day(name)
+    if missing and day_text != missing.isoformat():
+        return redirect(url_for('master_report', name=name, day=missing.isoformat()))
+    if day_text:
+        try:
+            day = datetime.strptime(day_text, '%Y-%m-%d').date()
+        except ValueError:
+            day = get_msk_now().date()
+    else:
+        day = get_msk_now().date()
+    forced = bool(missing and missing.isoformat() == day.isoformat())
+    return render_template(
+        'master_report.html',
+        name=name,
+        day=day.isoformat(),
+        day_ru=day.strftime('%d.%m.%Y'),
+        forced=forced,
+        closed_count=closed_on_day(name, day.isoformat()),
+    )
+
+@app.route('/master/<name>/report', methods=['POST'])
+@login_required
+def master_report_save(name):
+    if session.get('master_name') != name:
+        return jsonify({'success': False, 'error': 'Доступ запрещён'}), 403
+    data = request.json or {}
+    day_text = (data.get('date') or '').strip()
+    try:
+        day = datetime.strptime(day_text, '%Y-%m-%d').date()
+    except ValueError:
+        return jsonify({'success': False, 'error': 'Не понял дату смены'})
+    missing = missing_shift_day(name)
+    if missing and day != missing:
+        return jsonify({'success': False, 'error': 'Сначала закройте отчёт за ' + missing.strftime('%d.%m.%Y')})
+    start = (data.get('start') or '').strip()
+    end = (data.get('end') or '').strip()
+    status = (data.get('status') or '').strip()
+    comment = (data.get('comment') or '').strip()
+    mileage = (data.get('mileage') or '').strip()
+    expenses = (data.get('expenses') or '').strip()
+    if not re.fullmatch(r'\d{2}:\d{2}', start) or not re.fullmatch(r'\d{2}:\d{2}', end):
+        return jsonify({'success': False, 'error': 'Укажите время начала и конца смены'})
+    if status not in SHIFT_STATUSES:
+        return jsonify({'success': False, 'error': 'Выберите статус смены'})
+    if status != 'done' and not comment:
+        return jsonify({'success': False, 'error': 'Напишите комментарий, почему смена закрыта не полностью'})
+    if not mileage or mileage.lower() == 'нет':
+        mileage = 'Нет'
+    item = {
+        'date': day.isoformat(),
+        'date_ru': day.strftime('%d.%m.%Y'),
+        'master': name,
+        'start': start,
+        'end': end,
+        'mileage': mileage,
+        'expenses': expenses,
+        'status': status,
+        'status_label': SHIFT_STATUSES[status],
+        'comment': comment,
+        'closed_count': closed_on_day(name, day.isoformat()),
+        'saved_at': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
+    }
+    save_shift_report_item(item)
+    db_ok = False
+    try:
+        db_ok = db.save_shift_report(item)
+    except Exception as exc:
+        logger.warning(f'Отчёт в базу: {exc}')
+    sheet_ok = True
+    try:
+        append_shift_sheet(item)
+    except Exception as exc:
+        sheet_ok = False
+        logger.warning(f'Отчёт в таблицу: {exc}')
+    note = ''
+    if not sheet_ok:
+        note = 'Отчёт принят. В таблицу Excel сейчас не записался, копия в базе сайта есть.'
+    elif not db_ok:
+        note = 'Отчёт принят и записан в таблицу.'
+    return jsonify({'success': True, 'message': note or 'Отчёт сохранён', 'next': url_for('master_overview', name=name)})
+
 @app.route('/master/<name>')
 @login_required
 def master_overview(name):
     if session.get('master_name') != name:
         return redirect(url_for('login_page'))
+    blocked = guard_shift(name)
+    if blocked:
+        return blocked
     groups, master_tickets, updated_at = master_groups(name)
     for t in master_tickets:
         t['hours_since'] = ticket_hours(t)
@@ -3223,6 +3508,9 @@ def api_master_home(name):
 def master_darks(name, darks_number):
     if session.get('master_name') != name:
         return redirect(url_for('login_page'))
+    blocked = guard_shift(name)
+    if blocked:
+        return blocked
     cache_data = get_master_cache(name)
     if cache_data:
         all_tickets = cache_data.get('tickets', [])
@@ -3266,6 +3554,9 @@ def master_darks(name, darks_number):
 def master_text_plan(name):
     if session.get('master_name') != name:
         return redirect(url_for('login_page'))
+    blocked = guard_shift(name)
+    if blocked:
+        return blocked
     cache_data = get_master_cache(name)
     if cache_data:
         master_tickets = cache_data.get('tickets', [])
@@ -3288,6 +3579,9 @@ def master_text_plan(name):
 def master_history(name):
     if session.get('master_name') != name:
         return redirect(url_for('login_page'))
+    blocked = guard_shift(name)
+    if blocked:
+        return blocked
     return render_template('master_history.html', name=name, now=get_msk_now().strftime('%H:%M:%S'))
 
 @app.route('/api/master_history/<name>')
@@ -3315,6 +3609,9 @@ def api_master_trunk(name):
 def master_trunk(name):
     if session.get('master_name') != name:
         return redirect(url_for('login_page'))
+    blocked = guard_shift(name)
+    if blocked:
+        return blocked
     notice = ''
     error = ''
     if request.method == 'POST':

@@ -464,6 +464,25 @@ def _ensure_schema(conn):
                 price INTEGER NOT NULL
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS shift_reports (
+                id BIGSERIAL PRIMARY KEY,
+                master TEXT NOT NULL,
+                shift_date DATE NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                mileage TEXT,
+                expenses TEXT,
+                status TEXT,
+                comment TEXT,
+                closed_count INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
+        cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS shift_reports_master_day
+            ON shift_reports (master, shift_date)
+        """)
         if _catalog:
             execute_values(
                 cur,
@@ -474,6 +493,107 @@ def _ensure_schema(conn):
                 _unique_last(_catalog, 0),
             )
     conn.commit()
+
+
+def save_shift_report(report):
+    """Сразу пишет отчёт смены. Если базы нет, сайт всё равно хранит свою копию."""
+    if not _state.get('configured') or psycopg2 is None:
+        return False
+    conn = None
+    try:
+        conn = _connect()
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO shift_reports (
+                    master, shift_date, started_at, finished_at, mileage,
+                    expenses, status, comment, closed_count
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (master, shift_date) DO UPDATE SET
+                    started_at = EXCLUDED.started_at,
+                    finished_at = EXCLUDED.finished_at,
+                    mileage = EXCLUDED.mileage,
+                    expenses = EXCLUDED.expenses,
+                    status = EXCLUDED.status,
+                    comment = EXCLUDED.comment,
+                    closed_count = EXCLUDED.closed_count,
+                    created_at = now()
+                """,
+                (
+                    report.get('master') or '',
+                    report.get('date') or '',
+                    report.get('start') or '',
+                    report.get('end') or '',
+                    report.get('mileage') or '',
+                    report.get('expenses') or '',
+                    report.get('status') or '',
+                    report.get('comment') or '',
+                    int(report.get('closed_count') or 0),
+                ),
+            )
+        conn.commit()
+        return True
+    except Exception as exc:
+        logger.warning('Отчёт смены в базу не записался: %s', exc)
+        if conn is not None:
+            conn.rollback()
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def close_hours(days=60):
+    """Среднее время от создания заявки до статуса «выполнено», часы."""
+    if not _state.get('configured') or psycopg2 is None:
+        return {}
+    conn = None
+    try:
+        conn = _connect()
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COALESCE(NULLIF(w.master, ''), NULLIF(t.master, ''), ''),
+                       w.created_at,
+                       t.created_at
+                FROM work_log w
+                LEFT JOIN tickets t ON t.uid = w.uid
+                WHERE w.created_at > now() - make_interval(days => %s)
+                  AND w.new_status = 'done'
+                """,
+                (int(days),),
+            )
+            fetched = cur.fetchall()
+        conn.commit()
+    except Exception as exc:
+        logger.warning('Среднее время из базы: %s', exc)
+        if conn is not None:
+            conn.rollback()
+        return {}
+    finally:
+        if conn is not None:
+            conn.close()
+    buckets = {}
+    for master, closed_at, opened in fetched:
+        master = (master or '').strip()
+        if not master or closed_at is None or not opened:
+            continue
+        try:
+            opened_at = datetime.strptime(str(opened)[:19], '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            continue
+        closed_naive = closed_at.replace(tzinfo=None) if getattr(closed_at, 'tzinfo', None) else closed_at
+        hours = (closed_naive - opened_at).total_seconds() / 3600
+        if hours < 0 or hours > 24 * 21:
+            continue
+        bucket = buckets.setdefault(master, [])
+        bucket.append(hours)
+    result = {}
+    for master, values in buckets.items():
+        result[master] = round(sum(values) / len(values), 1)
+    return result
 
 
 def _unique_last(rows, indexes=0):

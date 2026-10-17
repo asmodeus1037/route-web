@@ -52,6 +52,27 @@ body {
     padding-right: 80px;
 }
 
+.home-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin: 0 0 14px;
+}
+.home-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 46px;
+    padding: 8px;
+    border-radius: 14px;
+    background: #fff;
+    border: 1px solid #fecdd3;
+    color: #9f1239;
+    font-weight: 800;
+    text-align: center;
+    text-decoration: none;
+}
+
 h1 {
     font-size: 22px;
     margin: 14px 0 8px;

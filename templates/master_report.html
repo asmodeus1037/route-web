@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Отчёт за смену</title>
+    <link rel="stylesheet" href="/static/css/master.css?v=15">
+    <style>
+        .report { display: grid; gap: 12px; }
+        .report label { font-weight: 800; display: block; margin-bottom: 6px; }
+        .report input, .report textarea {
+            width: 100%; box-sizing: border-box; border: 1px solid #e2e8f0; border-radius: 12px;
+            padding: 12px; font: inherit; background: #fff;
+        }
+        .hint { color: #64748b; font-size: 13px; margin-top: 4px; }
+        .status { display: grid; gap: 8px; }
+        .status label {
+            display: flex; gap: 10px; align-items: flex-start; background: #fff;
+            border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; font-weight: 700;
+        }
+        .status input { width: 18px; height: 18px; margin-top: 2px; flex: 0 0 18px; }
+        .send {
+            border: 0; border-radius: 14px; background: #e11d48; color: #fff;
+            font-weight: 800; min-height: 48px; font-size: 16px;
+        }
+        .banner { background: #fff7ed; color: #9a3412; border-radius: 12px; padding: 12px; font-weight: 700; }
+        .out { float: right; color: #64748b; font-weight: 700; text-decoration: none; }
+    </style>
+</head>
+<body data-master="{{ name }}">
+    <a class="out" href="/logout" onclick="localStorage.removeItem('master_login');">Выйти</a>
+    <h1>Отчёт за {{ day_ru }}</h1>
+    {% if forced %}
+    <p class="banner">Смена не закрыта. Маршрут откроется после этого отчёта.</p>
+    {% endif %}
+    <p class="hint">За этот день в истории закрыто заявок: {{ closed_count }}</p>
+    <form class="report" id="shiftForm">
+        <div>
+            <label>Время выхода на смену</label>
+            <input name="start" type="time" required>
+        </div>
+        <div>
+            <label>Время окончания смены</label>
+            <input name="end" type="time" required>
+        </div>
+        <div>
+            <label>Пробег за день, своё авто</label>
+            <input name="mileage" inputmode="numeric" placeholder="Например 98">
+            <p class="hint">Если своей машины не было, оставьте пустым или напишите «Нет».</p>
+        </div>
+        <div>
+            <label>Дополнительные расходы</label>
+            <textarea name="expenses" rows="3" placeholder="500 руб. парковка, 500 руб. крепёж"></textarea>
+            <p class="hint">Если расходов не было, оставьте пустым.</p>
+        </div>
+        <div>
+            <label>Статус маршрута</label>
+            <div class="status">
+                <label><input type="radio" name="status" value="done" checked> Все запланированные выезды выполнены</label>
+                <label><input type="radio" name="status" value="partial"> Выполнено частично, нужен комментарий</label>
+                <label><input type="radio" name="status" value="failed"> Не выполнен, нужен комментарий</label>
+            </div>
+        </div>
+        <div>
+            <label>Комментарий к рабочему дню</label>
+            <textarea name="comment" rows="4" placeholder="Что не успели, проблемы, простой"></textarea>
+        </div>
+        <button class="send" type="submit">Отправить</button>
+    </form>
+    <script>
+        document.getElementById('shiftForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+            var form = new FormData(event.target);
+            var button = event.target.querySelector('button');
+            button.disabled = true;
+            fetch(window.location.pathname, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    date: {{ day|tojson }},
+                    start: form.get('start') || '',
+                    end: form.get('end') || '',
+                    mileage: form.get('mileage') || '',
+                    expenses: form.get('expenses') || '',
+                    status: form.get('status') || '',
+                    comment: form.get('comment') || ''
+                })
+            }).then(function(response) { return response.json(); }).then(function(data) {
+                button.disabled = false;
+                if (!data.success) {
+                    alert(data.error || 'Не сохранилось');
+                    return;
+                }
+                if (data.message) alert(data.message);
+                window.location.href = data.next || '/master/{{ name }}';
+            }).catch(function() {
+                button.disabled = false;
+                alert('Нет сети');
+            });
+        });
+    </script>
+</body>
+</html>
