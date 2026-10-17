@@ -25,9 +25,11 @@
         }
         .banner { background: #fff7ed; color: #9a3412; border-radius: 12px; padding: 12px; font-weight: 700; }
         .out { float: right; color: #64748b; font-weight: 700; text-decoration: none; }
+        .back { color: #9f1239; font-weight: 800; text-decoration: none; }
     </style>
 </head>
 <body data-master="{{ name }}">
+    <a class="back" href="/master/{{ name }}">← Назад</a>
     <a class="out" href="/logout" onclick="localStorage.removeItem('master_login');">Выйти</a>
     <h1>Отчёт за {{ day_ru }}</h1>
     {% if forced %}
@@ -37,11 +39,11 @@
     <form class="report" id="shiftForm">
         <div>
             <label>Время выхода на смену</label>
-            <input name="start" type="time" required>
+            <input name="start" type="time" value="10:00" required>
         </div>
         <div>
             <label>Время окончания смены</label>
-            <input name="end" type="time" required>
+            <input name="end" type="time" value="20:00" required>
         </div>
         <div>
             <label>Пробег за день, своё авто</label>

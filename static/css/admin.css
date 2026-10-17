@@ -218,9 +218,15 @@ h1 {
     width: 100%;
 }
 
+.top-actions a,
+.top-actions a.btn,
 .top-actions .btn {
+    text-decoration: none;
     padding: 8px 14px;
-    font-size: 13px;
+    font-size: 14px;
+    font-weight: 700;
+    font-family: inherit;
+    line-height: 1.2;
     border-radius: 10px;
 }
 
@@ -1085,9 +1091,11 @@ h1 {
         min-width: 100px;
     }
     
-    .top-actions .btn {
-        font-size: 10px;
-        padding: 4px 10px;
+    .top-actions .btn,
+    .top-actions a.btn {
+        font-size: 14px;
+        padding: 8px 14px;
+        text-decoration: none;
     }
 }
 

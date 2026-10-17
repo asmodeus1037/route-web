@@ -423,6 +423,7 @@ def load_darks_reference(force=False):
                     'direction': cell(i_direction),
                     'coords': cell(i_coords),
                     'curators': cell(4),
+                    'curator_ids': cell(6),
                     'master': cell(i_master),
                     'master_tg': cell(i_tg),
                 }
@@ -1514,8 +1515,16 @@ def append_master_history(master, action, data):
     detail = data.get('detail') or data.get('parts') or data.get('reason') or ''
     if detail == 'Отказ от эвакуации':
         labels['done'] = 'Отказ от эвакуации'
+    hours = None
+    ticket = find_cached_ticket(data.get('uid')) if data.get('uid') else None
+    if ticket:
+        try:
+            hours = round(float(ticket_hours(ticket)), 1)
+        except Exception:
+            hours = None
     items.append({
         'timestamp': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
+        'hours': hours,
         'action': {
             'action': action,
             'label': 'Отказ от эвакуации' if detail == 'Отказ от эвакуации' else labels.get(action, 'Отметка'),
@@ -1599,6 +1608,24 @@ def master_name_list():
             names.append(item['name'])
     return names
 
+def history_kind(item):
+    action = (item or {}).get('action') or {}
+    if isinstance(action, dict):
+        code = str(action.get('action') or '')
+        label = str(action.get('label') or '').lower()
+    else:
+        code = ''
+        label = str(action).lower()
+    if code == 'fail' or 'не было' in label or 'отсутств' in label:
+        return 'missing'
+    if code == 'evacuation' or 'эвакуа' in label:
+        return 'evac'
+    if code in ('evacuation_and_replace', 'transit_replace', 'replace_yes') or 'замен' in label:
+        return 'replace'
+    if code == 'done' or 'выполн' in label:
+        return 'done'
+    return 'other'
+
 def stats_bundle(only_name=None):
     now = get_msk_now().replace(tzinfo=None)
     week = now - timedelta(days=7)
@@ -1609,34 +1636,56 @@ def stats_bundle(only_name=None):
         averages = {}
     people = []
     names = [only_name] if only_name else master_name_list()
+    local_hours = {}
     for name in names:
-        week_count = 0
-        month_count = 0
+        week_count = month_count = evac_count = missing_count = replace_count = 0
+        hours = []
         for item in history_rows(name):
             stamp = history_stamp(item)
-            if not stamp:
+            if not stamp or stamp < month:
                 continue
-            if stamp >= month:
-                month_count += 1
+            month_count += 1
             if stamp >= week:
                 week_count += 1
+            kind = history_kind(item)
+            if kind == 'evac':
+                evac_count += 1
+            elif kind == 'missing':
+                missing_count += 1
+            elif kind == 'replace':
+                replace_count += 1
+            if item.get('hours') not in (None, ''):
+                try:
+                    value = float(item.get('hours'))
+                except (TypeError, ValueError):
+                    value = None
+                if value is not None and 0 <= value <= 24 * 21:
+                    hours.append(value)
+        if hours:
+            local_hours[name] = round(sum(hours) / len(hours), 1)
         open_count = 0
         try:
             _, tickets, _ = master_groups(name)
             open_count = sum(1 for ticket in tickets if is_active_status(ticket.get('status')))
         except Exception:
             open_count = 0
+        avg = averages.get(name)
+        if avg is None:
+            avg = local_hours.get(name)
         people.append({
             'name': name,
             'open': open_count,
             'week': week_count,
             'month': month_count,
-            'avg_hours': averages.get(name),
+            'evac': evac_count,
+            'missing': missing_count,
+            'replace': replace_count,
+            'avg_hours': avg,
             'rating': None,
         })
     known = [person['avg_hours'] for person in people if person.get('avg_hours') is not None]
     if not known:
-        known = list(averages.values())
+        known = list(averages.values()) or list(local_hours.values())
     overall = round(sum(known) / len(known), 1) if known else None
     return {'people': people, 'overall_hours': overall, 'reports': shift_report_items()}
 
@@ -2081,6 +2130,32 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def curator_chat_ids():
+    found = []
+    seen = set()
+    for info in (load_darks_reference() or {}).values():
+        raw = info.get('curator_ids') or ''
+        for part in re.split(r'[,;\s]+', str(raw)):
+            token = part.strip()
+            if token.isdigit() and token not in seen:
+                seen.add(token)
+                found.append(token)
+    return found
+
+def send_via_master_notify(chat_id, text):
+    response = requests.post(
+        f'{BOT_API_URL}/notify_master',
+        json={'chat_id': chat_id, 'text': text},
+        timeout=20,
+    )
+    if response.status_code != 200:
+        return False
+    try:
+        body = response.json()
+    except Exception:
+        return False
+    return bool(body.get('success'))
+
 @app.route('/api/broadcast_curators', methods=['POST'])
 @login_required
 def api_broadcast_curators():
@@ -2095,18 +2170,28 @@ def api_broadcast_curators():
             json={'text': text},
             timeout=40,
         )
-        if response.status_code == 404:
-            return jsonify({'success': False, 'error': 'На боте ещё нет рассылки. Нужно залить обновление route-bot.'})
+        body = {}
         try:
             body = response.json() if response.content else {}
         except Exception:
             body = {}
-        if response.status_code != 200 or not body.get('success'):
-            return jsonify({'success': False, 'error': body.get('error') or 'Бот не принял сообщение'})
-        return jsonify({'success': True, 'count': body.get('count', 0)})
-    except Exception as e:
-        logger.warning(f'Рассылка кураторам не ушла: {e}')
-        return jsonify({'success': False, 'error': 'Бот не ответил'})
+        if response.status_code == 200 and body.get('success'):
+            return jsonify({'success': True, 'count': body.get('count', 0)})
+    except Exception as exc:
+        logger.warning(f'Общая рассылка бота не ответила: {exc}')
+    ids = curator_chat_ids()
+    if not ids:
+        return jsonify({'success': False, 'error': 'В столбце G листа Дарксторы нет Telegram ID кураторов'})
+    sent = 0
+    for chat_id in ids:
+        try:
+            if send_via_master_notify(chat_id, text):
+                sent += 1
+        except Exception as exc:
+            logger.warning(f'Не ушло куратору {chat_id}: {exc}')
+    if not sent:
+        return jsonify({'success': False, 'error': 'Сообщение никому не ушло'})
+    return jsonify({'success': True, 'count': sent})
 
 def generate_curator_message(tickets_data):
     now = get_msk_now().strftime('%d.%m.%Y %H:%M')
@@ -3282,27 +3367,60 @@ def api_build_route_for_master():
         tickets = get_tickets_from_sheets()
         master_tickets = [t for t in tickets if t.get('master') == master and is_active_status(t.get('status'))]
     
-    coords_set = set()
-    for t in master_tickets:
-        darks_num = t.get('darks')
-        if darks_num and darks_num in darks_ref:
-            coords = darks_ref[darks_num].get('coords', '')
-            if coords:
-                coords_set.add(coords)
-    
-    coords_list = list(coords_set)
+    ordered = []
+    seen = set()
+    for ticket in master_tickets:
+        darks_num = str(ticket.get('darks') or '')
+        if not darks_num or darks_num in seen or darks_num not in darks_ref:
+            continue
+        coords = (darks_ref[darks_num].get('coords') or '').strip()
+        if coords:
+            seen.add(darks_num)
+            ordered.append(coords)
+    coords_list = ordered
     if not coords_list:
         return 'Нет координат', 400
-    
+
+    def lat_lon(value):
+        parts = [part.strip() for part in str(value).replace(';', ',').split(',') if part.strip()]
+        if len(parts) < 2:
+            return None
+        try:
+            first = float(parts[0])
+            second = float(parts[1])
+        except ValueError:
+            return None
+        if abs(first) > 50 and abs(second) < 50:
+            return first, second
+        if abs(second) > 50 and abs(first) < 50:
+            return second, first
+        return first, second
+
+    points = []
+    for value in [START_COORDS] + coords_list:
+        point = lat_lon(value)
+        if point and point not in points:
+            points.append(point)
+    if len(points) < 2:
+        return 'Не хватает координат для маршрута', 400
     user_agent = request.headers.get('User-Agent', '').lower()
     is_mobile = any(x in user_agent for x in ['android', 'iphone', 'ipad', 'mobile'])
-    
     if is_mobile:
-        coords_list_str = '~'.join([START_COORDS] + coords_list)
-        url = f'yandexnavi://build_route_on_map?lat_lon={coords_list_str}'
+        start = points[0]
+        finish = points[-1]
+        vias = points[1:-1][:20]
+        query = [
+            f'lat_from={start[0]}',
+            f'lon_from={start[1]}',
+            f'lat_to={finish[0]}',
+            f'lon_to={finish[1]}',
+        ]
+        for index, point in enumerate(vias):
+            query.append(f'lat_via_{index}={point[0]}')
+            query.append(f'lon_via_{index}={point[1]}')
+        url = 'yandexnavi://build_route_on_map?' + '&'.join(query)
     else:
-        points = [START_COORDS] + coords_list
-        url = 'https://yandex.ru/maps/?rtext=' + '~'.join(points)
+        url = 'https://yandex.ru/maps/?rtext=' + '~'.join(f'{lat},{lon}' for lat, lon in points) + '&rtt=auto'
     return redirect(url)
 
 # ============================================================

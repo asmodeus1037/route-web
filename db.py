@@ -561,7 +561,7 @@ def close_hours(days=60):
                 FROM work_log w
                 LEFT JOIN tickets t ON t.uid = w.uid
                 WHERE w.created_at > now() - make_interval(days => %s)
-                  AND w.new_status = 'done'
+                  AND (w.new_status = 'done' OR w.action = 'done')
                 """,
                 (int(days),),
             )

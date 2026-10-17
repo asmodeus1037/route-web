@@ -23,14 +23,14 @@
     <div class="wrap">
         <a class="back" href="/admin">← К заявкам</a>
         <h1>Статистика</h1>
-        <p class="muted">Общее среднее время закрытия: {% if overall is not none %}{{ overall }} ч{% else %}пока нет закрытий в базе{% endif %}. Оценка появится, когда кураторы начнут ставить её в боте. {{ now }}</p>
+        <p class="muted">Общее среднее: {% if overall is not none %}{{ overall }} ч{% else %}пока нет{% endif %}. Это часы от создания заявки до «Выполнено», по базе за 60 дней. Эвакуации, «вело не было» и замены — за 30 дней. Оценка появится из бота. {{ now }}</p>
         <div class="switch">
             <button type="button" class="on" onclick="showStats('masters', this)">Мастера</button>
             <button type="button" onclick="showStats('expenses', this)">Доп. расходы</button>
         </div>
         <div id="masters">
             <table>
-                <tr><th>Мастер</th><th>В работе</th><th>7 дней</th><th>30 дней</th><th>Среднее время</th><th>Оценка</th></tr>
+                <tr><th>Мастер</th><th>В работе</th><th>7 дней</th><th>30 дней</th><th>Среднее</th><th>Эвакуация</th><th>Вело не было</th><th>Замены</th><th>Оценка</th></tr>
                 {% for person in people %}
                 <tr>
                     <td>{{ person.name }}</td>
@@ -38,6 +38,9 @@
                     <td>{{ person.week }}</td>
                     <td>{{ person.month }}</td>
                     <td>{% if person.avg_hours is not none %}{{ person.avg_hours }} ч{% else %}—{% endif %}</td>
+                    <td>{{ person.evac }}</td>
+                    <td>{{ person.missing }}</td>
+                    <td>{{ person.replace }}</td>
                     <td>нет оценок</td>
                 </tr>
                 {% endfor %}

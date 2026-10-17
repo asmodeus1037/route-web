@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Админ-панель</title>
     <link rel="manifest" href="/manifest.json">
-    <link rel="stylesheet" href="/static/css/admin.css?v=26">
+    <link rel="stylesheet" href="/static/css/admin.css?v=27">
     <style>
         .origin-badge, .supplier-badge { display:inline-block; margin:0 6px 0 0; padding:2px 8px; border-radius:8px; font-size:12px; font-weight:800; vertical-align:middle; }
         .origin-site { background:#dbeafe; color:#1d4ed8; }
@@ -47,7 +47,12 @@
             body { padding-bottom: 24px; }
             .tabs { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
             .tab-btn { flex: 0 0 auto; font-size: 14px !important; min-height: 42px; }
-            .top-actions .btn { font-size: 14px !important; min-height: 42px; }
+            .top-actions a, .top-actions a.btn, .top-actions .btn {
+                font-size: 14px !important;
+                font-weight: 700 !important;
+                text-decoration: none !important;
+                min-height: 42px;
+            }
             .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
             .ticket-row {
                 display: flex !important;
