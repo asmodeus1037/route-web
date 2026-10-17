@@ -60,6 +60,7 @@ PARTS_SET = set(PARTS_PRICE)
 CACHE_TTL = 300
 CACHE_DIR = "/data/cache"
 BOT_API_URL = "https://route-bot-dzufear.waw0.amvera.tech"
+BOT_HOOK_KEY = os.environ.get("BOT_HOOK_KEY", "velobot-route")
 XDEVICE_URL = "https://app.xdevice.ru/api/v1/objects"
 XDEVICE_TTL = 3600
 
@@ -311,6 +312,10 @@ def apply_pending_queue(tickets):
             if data.get('note'):
                 ticket['note'] = data.get('note')
         elif kind == 'status_update':
+            if data.get('note_only'):
+                if data.get('note'):
+                    ticket['note'] = data.get('note')
+                continue
             new_status = data.get('new_status') or 'pending'
             ticket['status'] = new_status
             ticket['is_done'] = new_status == 'done'
@@ -707,14 +712,19 @@ def evacuation_reason(ticket):
                 return text
     return ((ticket or {}).get('desc') or '').strip()
 
-def notify_dark_event(darks, text):
+def notify_dark_event(darks, text, uid='', event=''):
     if not darks or not text:
         return
     def run():
         try:
             requests.post(
                 f'{BOT_API_URL}/notify_event',
-                json={'darks': str(darks), 'text': text},
+                json={
+                    'darks': str(darks),
+                    'text': text,
+                    'uid': uid or '',
+                    'event': event or '',
+                },
                 timeout=8,
             )
         except Exception as e:
@@ -1380,7 +1390,7 @@ def mark_bike_missing(uid, actor_name):
             'skip_report': False
         }
     })
-    notify_dark_event((ticket or {}).get('darks', ''), f'⏹️ {ticket_label(ticket)} нет вело на дарксторе, заявка перенесена')
+    notify_dark_event((ticket or {}).get('darks', ''), f'⏹️ {ticket_label(ticket)} нет вело на дарксторе, заявка перенесена', uid, 'missing')
     return note
 
 def apply_queue_to_sheets(tasks):
@@ -1391,7 +1401,7 @@ def apply_queue_to_sheets(tasks):
             continue
         updates = buckets[source]
         uid = task.get('uid')
-        row_idx = get_ticket_row_by_uid(uid)
+        row_idx = task.get('row_index') or get_ticket_row_by_uid(uid)
         if not row_idx:
             found = find_uid_in_sheets(uid)
             if not found or found.get('source') != source:
@@ -1426,9 +1436,12 @@ def apply_queue_to_sheets(tasks):
             updates.append({'range': f'H{row_idx}', 'values': [['🔵 Доделать']]})
             updates.append({'range': f'J{row_idx}', 'values': [[data.get('reason') or 'Куратор не предоставил']]})
         elif task_type == 'status_update':
-            updates.append({'range': f'H{row_idx}', 'values': [[data.get('status') or '🟡 В работе']]})
+            if not data.get('note_only'):
+                updates.append({'range': f'H{row_idx}', 'values': [[data.get('status') or '🟡 В работе']]})
             if data.get('note'):
                 updates.append({'range': f'J{row_idx}', 'values': [[data.get('note')]]})
+            if data.get('write_master'):
+                updates.append({'range': f'G{row_idx}', 'values': [[data.get('master') or '']]})
     import_updates = []
     for task in tasks:
         if task.get('source') != 'Импорт М4':
@@ -1467,8 +1480,12 @@ def apply_queue_to_sheets(tasks):
         elif task_type == 'replace_no':
             sheet_status, sheet_note = 'Доделать', data.get('reason') or 'Куратор не предоставил'
         elif task_type == 'status_update':
-            sheet_status = status_map_import.get(data.get('status'), 'В работе')
             sheet_note = data.get('note') or ''
+            if data.get('note_only'):
+                if sheet_note:
+                    import_updates.append({'range': f'M{row_idx}', 'values': [[sheet_note]]})
+                continue
+            sheet_status = status_map_import.get(data.get('status'), 'В работе')
             clear_master = data.get('status') == '⏹️ Обработано'
         else:
             continue
@@ -2251,6 +2268,124 @@ def api_bike_location():
         'at': when,
         'url': f'https://yandex.ru/maps/?ll={lon},{lat}&pt={lon},{lat}&z=16&l=map',
     })
+
+def bot_hook_ok():
+    return request.headers.get('X-Bot-Key') == BOT_HOOK_KEY
+
+def dispute_actor(note):
+    for line in reversed((note or '').splitlines()):
+        if ',' not in line:
+            continue
+        name = line.rsplit(',', 1)[-1].strip()
+        if name in MASTERS:
+            return name
+    return ''
+
+@app.route('/api/bot_map')
+def api_bot_map():
+    if not bot_hook_ok():
+        return jsonify({'success': False, 'error': 'Нет доступа'}), 403
+    iot = resolve_ticket_iot(
+        request.args.get('iot', ''),
+        request.args.get('darks', ''),
+        request.args.get('gos', ''),
+    )
+    if not normalize_iot(iot):
+        return jsonify({'success': False, 'error': 'Нет IoT'})
+    point = lookup_bike_point(iot)
+    if not point or point.get('lat') is None or point.get('lon') is None:
+        return jsonify({'success': False, 'error': 'Нет точки'})
+    lat = point['lat']
+    lon = point['lon']
+    when = ''
+    if point.get('at'):
+        try:
+            when = datetime.fromtimestamp(point['at'] / 1000, MSK).strftime('%d.%m %H:%M')
+        except Exception:
+            when = ''
+    return jsonify({
+        'success': True,
+        'at': when,
+        'url': f'https://yandex.ru/maps/?ll={lon},{lat}&pt={lon},{lat}&z=16&l=map',
+    })
+
+@app.route('/api/curator_dispute', methods=['POST'])
+def api_curator_dispute():
+    if not bot_hook_ok():
+        return jsonify({'success': False, 'error': 'Нет доступа'}), 403
+    data = request.json or {}
+    uid = (data.get('uid') or '').strip()
+    text = (data.get('text') or '').strip()
+    event = (data.get('event') or '').strip()
+    darks = str(data.get('darks') or '').strip()
+    if not uid or len(text) < 3:
+        return jsonify({'success': False, 'error': 'Нет текста'})
+    ticket = find_cached_ticket(uid)
+    if not ticket:
+        return jsonify({'success': False, 'error': 'Заявка не найдена'}), 404
+    if darks and str(ticket.get('darks') or '') != darks:
+        return jsonify({'success': False, 'error': 'Чужая точка'}), 403
+    moment = get_msk_now().strftime('%d.%m %H:%M')
+    previous = (ticket.get('note') or '').strip()
+    repeat = 'Оспорено куратором' in previous or 'Повторный спор' in previous
+    replaced = event == 'replaced'
+    label = ticket_label(ticket)
+    source = ticket.get('source') or source_of(uid)
+    if source not in ('Заявки', 'Заявки бот', 'Импорт М4'):
+        source = 'Заявки'
+    row_index = ticket.get('row_index')
+    if repeat or replaced:
+        line = f"Повторный спор {moment}: {text}" if repeat else f"Оспорено куратором {moment}: {text}"
+        note = f'{previous}\n{line}'.strip() if previous else line
+        kept = {
+            'done': '✅ Выполнено',
+            'processed': '⏹️ Обработано',
+            'evacuation': '🔧 Эвакуация',
+            'todo': '🔵 Доделать',
+        }.get(ticket.get('status'), '✅ Выполнено')
+        update_ticket_in_admin_cache(uid, ticket.get('status') or 'done', note)
+        add_to_queue({
+            'uid': uid,
+            'source': source,
+            'row_index': row_index,
+            'type': 'status_update',
+            'data': {
+                'status': kept,
+                'new_status': ticket.get('status') or 'done',
+                'note': note,
+                'skip_report': True,
+            },
+        })
+        return jsonify({'success': True, 'reopened': False})
+    line = f"Оспорено куратором {moment}: {text}"
+    note = f'{previous}\n{line}'.strip() if previous else line
+    master = (ticket.get('master') or '').strip() or dispute_actor(previous)
+    extra = {'evac_reason': '', 'is_done': False, 'is_active': True}
+    if master:
+        extra['master'] = master
+    update_ticket_in_admin_cache(uid, 'pending', note, extra=extra)
+    refresh_master_caches_from_admin()
+    add_to_queue({
+        'uid': uid,
+        'source': source,
+        'row_index': row_index,
+        'type': 'status_update',
+        'data': {
+            'status': '🟡 В работе',
+            'new_status': 'pending',
+            'note': note,
+            'skip_report': True,
+            'master': master,
+            'write_master': bool(master),
+        },
+    })
+    if master:
+        for chat_id in master_chat_ids(master):
+            try:
+                send_via_master_notify(chat_id, f'Куратор не принял {label}: {text}')
+            except Exception as exc:
+                logger.warning(f'Не ушло мастеру о споре: {exc}')
+    return jsonify({'success': True, 'reopened': True})
 
 def send_bike_command(object_id, command):
     token = xdevice_token()
@@ -3845,9 +3980,9 @@ def master_done(name, darks_number, uid):
     })
     label = ticket_label(ticket)
     if parts == 'Отказ от эвакуации':
-        notify_dark_event(darks_number, f'{label} отказ от эвакуации')
+        notify_dark_event(darks_number, f'{label} отказ от эвакуации', uid, 'refuse')
     else:
-        notify_dark_event(darks_number, f'✅ {label} заявка выполнена')
+        notify_dark_event(darks_number, f'✅ {label} заявка выполнена', uid, 'done')
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/fail/<uid>')
@@ -3882,7 +4017,7 @@ def master_evacuation(name, darks_number, uid):
         'data': {'reason': reason, 'note': note, 'master': name, 'darks_number': darks_number, 'gos': ticket.get('gos', '')}
     })
     label = ticket_label(find_cached_ticket(uid) or {'gos': request.form.get('gos', '')})
-    notify_dark_event(darks_number, f'🔧 {label} нужно эвакуировать: {reason.strip()}')
+    notify_dark_event(darks_number, f'🔧 {label} нужно эвакуировать: {reason.strip()}', uid, 'evacuation')
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/taken_no_replace/<uid>', methods=['POST'])
@@ -4233,7 +4368,7 @@ def master_evacuation_replace():
         
         update_ticket_in_admin_cache(uid, 'done', 'Заменен при эвакуации', '✅ Выполнено')
         update_status_in_google_sheets(uid, '✅ Выполнено', 'Заменен при эвакуации')
-        notify_dark_event(darks_number, f'✅ {old_data.get("gos") or ticket_label(ticket)} заменен и готов к эксплуатации')
+        notify_dark_event(darks_number, f'✅ {old_data.get("gos") or ticket_label(ticket)} заменен и готов к эксплуатации', uid, 'replaced')
         
         add_to_queue({
             'uid': uid,

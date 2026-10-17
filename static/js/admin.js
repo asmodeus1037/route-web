@@ -1438,6 +1438,16 @@ function renderTicketsGrouped(tickets, containerId) {
             if (t.contact) {
                 html += '<span class="who">отправил: ' + String(t.contact).replace(/[&<>]/g, '') + '</span>';
             }
+            if (t.note && (String(t.note).indexOf('Оспорено куратором') !== -1 || String(t.note).indexOf('Повторный спор') !== -1)) {
+                var disputeLines = String(t.note).split('\n');
+                var disputeText = '';
+                for (var di = 0; di < disputeLines.length; di++) {
+                    if (disputeLines[di].indexOf('Оспорено') !== -1 || disputeLines[di].indexOf('Повторный спор') !== -1) {
+                        disputeText = disputeLines[di];
+                    }
+                }
+                html += '<span class="who" style="display:block;color:#b45309;">' + disputeText.replace(/[&<>]/g, '') + '</span>';
+            }
             html += '</span>';
             html += '<span class="type-badge">' + typeDisplay + '</span>';
             html += '<span class="field"><span class="field-label">Мастер</span><select class="master-select" data-uid="' + t.uid + '" data-source="' + t.source + '" onchange="onMasterChange(this)"><option value="">—</option>';
