@@ -27,7 +27,7 @@
         .row-menu .menu-pop { display: none; position: absolute; right: 0; top: 36px; z-index: 30; background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; box-shadow: 0 8px 24px rgba(15,23,42,.12); padding: 6px; }
         .row-menu.open .menu-pop { display: block; }
         .bike-search { background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:16px; }
-        .bike-search input, .create-form input, .create-form textarea, .create-form select { width:100%; box-sizing:border-box; border:1px solid #cbd5e1; border-radius:10px; padding:10px 12px; font:inherit; }
+        .bike-search input, .create-form input, .create-form textarea { width:100%; box-sizing:border-box; border:1px solid #cbd5e1; border-radius:10px; padding:10px 12px; font:inherit; }
         .bike-card { border:1px solid #e2e8f0; border-radius:12px; padding:12px; margin-top:10px; }
         .create-form label { display:block; font-weight:800; margin:12px 0 6px; }
         .create-form .choices { display:grid; gap:6px; }
@@ -91,8 +91,6 @@
             <span class="action-label">Смотреть</span>
             <a class="btn btn-view" href="/admin/trunks">Багажники мастеров</a>
             <button class="btn btn-view" onclick="showRoutes()">Просмотр маршрутов</button>
-            <button class="btn btn-view" type="button" onclick="openBikeSearch()">Поиск вело</button>
-            <button class="btn btn-view" type="button" onclick="openDocs()">Документы</button>
         </div>
         <div class="action-group">
             <span class="action-label">Мастера</span>
@@ -139,6 +137,7 @@
         <button class="tab-btn" data-tab="tab-3">📍 Напр 3 <span class="count">({{ directions.get('Напр 3', {}).get('active_count', 0) }})</span></button>
         <button class="tab-btn" data-tab="tab-4">📍 Напр 4 <span class="count">({{ directions.get('Напр 4', {}).get('active_count', 0) }})</span></button>
         <button class="tab-btn" data-tab="tab-5">📍 Без направления <span class="count">({{ directions.get('Без направления', {}).get('active_count', 0) }})</span></button>
+        <button class="tab-btn" data-tab="tab-search">Поиск вело</button>
     </div>
     
     <div class="filters">
@@ -199,6 +198,17 @@
         </div>
         <div class="tab-content" id="tab-5">
             <div id="renderDir5"></div>
+        </div>
+        <div class="tab-content" id="tab-search">
+            <div class="bike-search">
+                <h3 style="margin:0 0 6px;">Поиск велосипеда</h3>
+                <p style="color:#64748b;margin:0 0 12px;">Введите госномер, номер IoT или серийный номер. Остальные данные подставятся сами.</p>
+                <div style="display:flex;gap:8px;">
+                    <input id="bikeQuery" placeholder="РЕ111Р, 25-9194 или номер рамы" onkeydown="if (event.key==='Enter') searchBike()">
+                    <button class="btn btn-view" type="button" onclick="searchBike()">Найти</button>
+                </div>
+                <div id="bikeSearchResult"></div>
+            </div>
         </div>
     </div>
 </div>
@@ -295,59 +305,6 @@
     </div>
 </div>
 
-<!-- Поиск велосипеда -->
-<div class="modal" id="bikeSearchModal">
-    <div class="modal-content">
-        <button class="close-btn" onclick="closeBikeSearch()">×</button>
-        <h3>Поиск велосипеда</h3>
-        <p style="color:#64748b;margin:0 0 12px;">Госномер, номер IoT или серийный номер.</p>
-        <div style="display:flex;gap:8px;">
-            <input id="bikeQuery" placeholder="РЕ111Р или 25-9194" onkeydown="if (event.key==='Enter') searchBike()">
-            <button class="btn btn-view" type="button" onclick="searchBike()">Найти</button>
-        </div>
-        <div id="bikeSearchResult"></div>
-    </div>
-</div>
-
-<!-- Документы -->
-<div class="modal" id="docsModal">
-    <div class="modal-content">
-        <button class="close-btn" onclick="closeDocs()">×</button>
-        <h3>Документ</h3>
-        <div class="create-form">
-            <label>Тип</label>
-            <select id="docKind" onchange="toggleDocKind()">
-                <option value="postavka">Поставка</option>
-                <option value="vyvoz">Вывоз</option>
-                <option value="zamena">Замена</option>
-                <option value="sverka">Сверка</option>
-            </select>
-            <label>Дата</label>
-            <input id="docDate" placeholder="14.10.2026">
-            <label>Номер даркстора</label>
-            <input id="docDarks" placeholder="4824">
-            <div id="docFullBox">
-                <label><input id="docFull" type="checkbox" checked onchange="toggleDocKind()"> Комплект полный, по 2 АКБ на велосипед</label>
-                <input id="docAkb" type="number" min="0" placeholder="Сколько АКБ указать" style="display:none;margin-top:8px;">
-            </div>
-            <div id="docOneList">
-                <label>Велосипеды, каждый с новой строки</label>
-                <textarea id="docLines" rows="6" placeholder="РЕ111Р"></textarea>
-            </div>
-            <div id="docTwoLists" style="display:none;">
-                <label>Забрали, каждый с новой строки</label>
-                <textarea id="docTake" rows="4" placeholder="РЕ111Р"></textarea>
-                <label>Поставили, каждый с новой строки</label>
-                <textarea id="docGive" rows="4" placeholder="РЕ222Р"></textarea>
-            </div>
-            <p style="color:#64748b;font-size:13px;">Скачается файл Word. PDF сохраняется у вас: открыть файл и выбрать «Сохранить как PDF». Номера сверяются с базой велосипедов.</p>
-        </div>
-        <div style="margin-top:12px;text-align:right;">
-            <button class="btn btn-success" type="button" onclick="submitDoc()">Скачать документ</button>
-        </div>
-    </div>
-</div>
-
 <!-- Контейнер для уведомлений -->
 <div id="toastContainer" class="toast-container"></div>
 
@@ -360,6 +317,6 @@
         now: '{{ now }}'
     };
 </script>
-<script src="/static/js/admin.js?v=24"></script>
+<script src="/static/js/admin.js?v=23"></script>
 </body>
 </html>
