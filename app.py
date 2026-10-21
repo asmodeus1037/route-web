@@ -73,6 +73,11 @@ IOT_BAG_FILE = "iot_bag.json"
 IOT_SOURCE_FILE = "iot_source.json"
 IOT_VEHICLES_FILE = "iot_vehicles.json"
 IOT_HISTORY_FILE = "iot_history.json"
+IOT_CURATORS_SHEET_ID = "17lzP6e2-8a9AfxuBEA98h-FcsOljeDW_gjOw5JK7Drg"
+IOT_CURATORS_FILE = "iot_curators.json"
+# Эти версии в маршрут не попадают. 156, 158 и 159 показываем.
+IOT_DONE_VERSIONS = {'3.0.5', '3.0.6', '160'}
+IOT_FLASHED_VERSION = '3.0.5'
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -104,6 +109,7 @@ flush_lock = threading.Lock()
 # Кэш в памяти для IOT (мгновенный доступ)
 _iot_source_memory = None
 _iot_vehicles_memory = None
+_iot_curators_memory = None
 
 # Глобальный gspread-клиент (переиспользование)
 _gspread_client = None
@@ -4567,10 +4573,12 @@ def load_iot_source(force_reload=False):
                     status_velo = row[7].strip() if len(row) > 7 else ''
                     status_iot = row[8].strip() if len(row) > 8 else ''
                     replaced_text = row[9].strip() if len(row) > 9 else ''
+                    firmware = row[5].strip() if len(row) > 5 else ''
                     iot_data[iot] = {
                         'status_velo': status_velo,
                         'status_iot': status_iot,
-                        'replaced_text': replaced_text
+                        'replaced_text': replaced_text,
+                        'firmware': firmware,
                     }
         
         cache_data = {
@@ -4584,6 +4592,18 @@ def load_iot_source(force_reload=False):
     except Exception as e:
         logger.error(f"Ошибка загрузки IOT Source: {e}")
         return {}
+
+
+def iot_needs_work(info):
+    """В аренде, столбец J пустой, версия не 3.0.5 / 3.0.6 / 160."""
+    if info.get('status_velo') != 'В аренде':
+        return False
+    if (info.get('replaced_text') or '').strip():
+        return False
+    version = (info.get('firmware') or '').strip()
+    if version in IOT_DONE_VERSIONS:
+        return False
+    return True
 
 
 def get_iot_source():
@@ -4651,9 +4671,55 @@ def get_iot_vehicles():
 
 def reset_iot_memory():
     """Сбрасывает кэш в памяти (при обновлении данных)"""
-    global _iot_source_memory, _iot_vehicles_memory
+    global _iot_source_memory, _iot_vehicles_memory, _iot_curators_memory
     _iot_source_memory = None
     _iot_vehicles_memory = None
+    _iot_curators_memory = None
+
+
+def parse_curator_contacts(cell):
+    found = []
+    for part in re.split(r'[,;\s]+', cell or ''):
+        token = part.strip()
+        if token.startswith('@') and len(token) > 1 and token not in found:
+            found.append(token)
+    return found
+
+
+def load_iot_curator_contacts(force_reload=False):
+    """Контакты кураторов из листа Дарксторы, столбец G. Кэш в памяти и в файле."""
+    global _iot_curators_memory
+    if not force_reload and _iot_curators_memory is not None:
+        return _iot_curators_memory
+    if not force_reload:
+        cache = read_cache(IOT_CURATORS_FILE)
+        if cache and isinstance(cache.get('curators'), dict):
+            _iot_curators_memory = cache['curators']
+            logger.info(f"✅ Контакты кураторов из кэша: {len(_iot_curators_memory)} точек")
+            return _iot_curators_memory
+    try:
+        sheet = get_iot_sheet_by_id(IOT_CURATORS_SHEET_ID, "Дарксторы")
+        rows = sheet.get_all_values()
+        curators = {}
+        for row in rows[1:]:
+            number = row[0].strip() if row else ''
+            if not number:
+                continue
+            curators[number] = parse_curator_contacts(row[6] if len(row) > 6 else '')
+        write_cache(IOT_CURATORS_FILE, {
+            'updated_at': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
+            'curators': curators,
+        })
+        _iot_curators_memory = curators
+        logger.info(f"✅ Контакты кураторов загружены: {len(curators)} точек")
+        return curators
+    except Exception as e:
+        logger.error(f"Ошибка загрузки контактов кураторов: {e}")
+        return _iot_curators_memory or {}
+
+
+def get_iot_curator_contacts():
+    return load_iot_curator_contacts(force_reload=False)
 
 
 def get_iot_bag():
@@ -4753,9 +4819,7 @@ def iot_main():
     
     darks_groups = {}
     for iot, info in source_data.items():
-        if (info.get('status_velo') == 'В аренде' 
-            and info.get('status_iot') == 'Требует перепрошивки'
-            and not info.get('replaced_text')):
+        if iot_needs_work(info):
             if iot in vehicles_data:
                 v = vehicles_data[iot]
                 darks = v.get('darks', 'без номера')
@@ -4775,6 +4839,9 @@ def iot_main():
     
     darks_list = list(darks_groups.values())
     darks_list.sort(key=lambda x: int(x['darks_number']) if x['darks_number'].isdigit() else 999999)
+    curators = get_iot_curator_contacts()
+    for group in darks_list:
+        group['curators'] = curators.get(str(group['darks_number']), [])
     
     return render_template('iot_main.html',
                           bag_items=bag_items,
@@ -4801,9 +4868,7 @@ def iot_darks(darks_number):
     vehicles = []
     address = ''
     for iot, info in source_data.items():
-        if (info.get('status_velo') == 'В аренде' 
-            and info.get('status_iot') == 'Требует перепрошивки'
-            and not info.get('replaced_text')):
+        if iot_needs_work(info):
             if iot in vehicles_data:
                 v = vehicles_data[iot]
                 if v.get('darks') == darks_number:
@@ -4814,7 +4879,8 @@ def iot_darks(darks_number):
                         'frame_number': v.get('frame_number', ''),
                         'gos': v.get('gos', ''),
                         'address': v.get('address', ''),
-                        'darks': v.get('darks', '')
+                        'darks': v.get('darks', ''),
+                        'firmware': info.get('firmware') or '',
                     })
     
     return render_template('iot_darks.html',
@@ -4823,6 +4889,7 @@ def iot_darks(darks_number):
                           vehicles=vehicles,
                           bag_items=bag_items,
                           bag_count=len(bag_items),
+                          curators=get_iot_curator_contacts().get(str(darks_number), []),
                           now=get_msk_now().strftime('%H:%M:%S'))
 
 
@@ -4980,13 +5047,20 @@ def api_iot_sync_source():
         # Принудительно тянем из Google Sheets
         source_data = load_iot_source(force_reload=True)
         vehicles_data = load_iot_vehicles(force_reload=True)
+        try:
+            curators = load_iot_curator_contacts(force_reload=True)
+        except Exception as cur_error:
+            logger.error(f"Контакты кураторов не обновились: {cur_error}")
+            curators = get_iot_curator_contacts()
         
-        logger.info(f"✅ Обновлено: IOT Source = {len(source_data)}, IOT Vehicles = {len(vehicles_data)}")
+        logger.info(f"✅ Обновлено: IOT Source = {len(source_data)}, IOT Vehicles = {len(vehicles_data)}, кураторы = {len(curators)}")
         
         return jsonify({
             'success': True,
+            'count': len(source_data),
             'source_count': len(source_data),
-            'vehicles_count': len(vehicles_data)
+            'vehicles_count': len(vehicles_data),
+            'curators_count': len(curators),
         })
     except Exception as e:
         logger.error(f"Ошибка синхронизации IOT: {e}")
@@ -5064,6 +5138,7 @@ def api_iot_replace():
         now = get_msk_now()
         history_data = get_iot_history()
         history_data['history'].append({
+            'type': 'replace',
             'date': now.strftime('%d.%m'),
             'time': now.strftime('%H:%M'),
             'old_iot': old_iot,
@@ -5087,6 +5162,80 @@ def api_iot_replace():
         logger.error(f"Ошибка замены IOT: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
+
+def mark_iot_flashed(old_iot):
+    """F → 3.0.5, I → ОК, J → дата прошивки. Багажник и корректировки не трогает."""
+    sheet = get_iot_sheet_by_id(IOT_SOURCE_SHEET_ID, "Все IoT")
+    rows = sheet.get_all_values()
+    now = get_msk_now()
+    text = f"{now.strftime('%d.%m')} прошит (IOT остался: {old_iot})"
+    for idx, row in enumerate(rows, start=1):
+        if not row or row[0].strip() != old_iot:
+            continue
+        sheet.batch_update([
+            {'range': f'F{idx}', 'values': [[IOT_FLASHED_VERSION]]},
+            {'range': f'I{idx}', 'values': [['ОК']]},
+            {'range': f'J{idx}', 'values': [[text]]},
+        ])
+        logger.info(f"✅ Прошивка записана для {old_iot}: {IOT_FLASHED_VERSION}, {text}")
+        return text
+    logger.warning(f"⚠️ IOT {old_iot} не найден в листе 'Все IoT'")
+    return ''
+
+
+@app.route('/api/iot/flash', methods=['POST'])
+@login_required
+def api_iot_flash():
+    """Прошивка IOT на велосипеде: модуль не снимается."""
+    if session.get('role') != 'iot':
+        return jsonify({'success': False, 'error': 'Доступ запрещён'})
+    try:
+        data = request.json or {}
+        old_iot = (data.get('old_iot') or '').strip()
+        frame_number = (data.get('frame_number') or '').strip()
+        gos = (data.get('gos') or '').strip()
+        darks = (data.get('darks') or '').strip()
+        address = (data.get('address') or '').strip()
+        if not old_iot:
+            return jsonify({'success': False, 'error': 'Не указан IOT'})
+        text = mark_iot_flashed(old_iot)
+        if not text:
+            return jsonify({'success': False, 'error': f'IOT {old_iot} не найден в таблице'})
+        global _iot_source_memory
+        if _iot_source_memory is None:
+            load_iot_source(force_reload=False)
+        if _iot_source_memory is not None:
+            current = _iot_source_memory.get(old_iot) or {}
+            current['firmware'] = IOT_FLASHED_VERSION
+            current['status_iot'] = 'ОК'
+            current['replaced_text'] = text
+            _iot_source_memory[old_iot] = current
+            write_cache(IOT_SOURCE_FILE, {
+                'updated_at': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
+                'iot_list': _iot_source_memory,
+            })
+        now = get_msk_now()
+        history_data = get_iot_history()
+        history_data['history'].append({
+            'type': 'flash',
+            'date': now.strftime('%d.%m'),
+            'time': now.strftime('%H:%M'),
+            'old_iot': old_iot,
+            'new_iot': None,
+            'frame_number': frame_number,
+            'gos': gos,
+            'darks': darks,
+            'address': address,
+            'timestamp': now.strftime('%Y-%m-%d %H:%M:%S'),
+        })
+        save_iot_history(history_data)
+        logger.info(f"✅ IOT прошит: {old_iot} (рама {frame_number})")
+        return jsonify({'success': True, 'message': 'IOT успешно прошит'})
+    except Exception as e:
+        logger.error(f"Ошибка прошивки IOT: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
 # ============================================================
 # ЗАПУСК
 # ============================================================
@@ -5109,6 +5258,7 @@ if __name__ == "__main__":
         try:
             load_iot_source(force_reload=True)
             load_iot_vehicles(force_reload=True)
+            load_iot_curator_contacts(force_reload=True)
             logger.info("   ✅ IOT кэши созданы")
         except Exception as e:
             logger.error(f"   ❌ Ошибка создания IOT кэшей: {e}")

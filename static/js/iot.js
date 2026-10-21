@@ -79,14 +79,12 @@ async function loadBag() {
         
         var data = await response.json();
         
-      if (data.success) {
-    showToast('✅ IOT заменён: ' + replaceTarget.old_iot + ' → ' + replaceTarget.new_iot, false);
-    closeReplaceModal();
-    // Принудительная перезагрузка после замены
-    setTimeout(function() { location.reload(); }, 800);
-} else {
-    showToast('❌ Ошибка: ' + (data.error || 'Неизвестная'), true);
-}
+        if (data.success) {
+            closeBagModal();
+            showResult(data);
+        } else {
+            showToast('❌ Ошибка: ' + (data.error || 'Неизвестная'), true);
+        }
     } catch (error) {
         console.error('Ошибка загрузки багажника:', error);
         showToast('❌ Ошибка соединения', true);
@@ -225,6 +223,65 @@ function openReplaceModal(oldIot, frameNumber, gos, address, darks) {
 function closeReplaceModal() {
     var modal = document.getElementById('replaceModal');
     if (modal) modal.classList.remove('active');
+}
+
+var flashTarget = { old_iot: null, frame_number: null, gos: null, darks: null, address: null };
+
+function openFlashModal(oldIot, frameNumber, gos, darks, address) {
+    flashTarget = {
+        old_iot: oldIot,
+        frame_number: frameNumber,
+        gos: gos,
+        darks: darks,
+        address: address
+    };
+    var modal = document.getElementById('flashModal');
+    var content = document.getElementById('flashContent');
+    if (!modal || !content) return;
+    var html = '';
+    html += '<div class="replace-info">';
+    html += '<div class="replace-info-row"><span class="label">Номер рамы:</span><span class="value">' + (frameNumber || '—') + '</span></div>';
+    html += '<div class="replace-info-row"><span class="label">Гос номер:</span><span class="value">' + (gos || '—') + '</span></div>';
+    html += '<div class="replace-info-row"><span class="label">Даркстор:</span><span class="value">' + (darks || '—') + '</span></div>';
+    html += '<div class="replace-info-row"><span class="label">IOT:</span><span class="value">' + oldIot + '</span></div>';
+    html += '</div>';
+    content.innerHTML = html;
+    modal.classList.add('active');
+}
+
+function closeFlashModal() {
+    var modal = document.getElementById('flashModal');
+    if (modal) modal.classList.remove('active');
+}
+
+async function confirmFlash() {
+    if (!flashTarget.old_iot) {
+        showToast('❌ Не указан IOT', true);
+        return;
+    }
+    try {
+        var response = await fetch('/api/iot/flash', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                old_iot: flashTarget.old_iot,
+                frame_number: flashTarget.frame_number,
+                gos: flashTarget.gos,
+                darks: flashTarget.darks,
+                address: flashTarget.address
+            })
+        });
+        var data = await response.json();
+        if (data.success) {
+            showToast('✅ IOT прошит', false);
+            closeFlashModal();
+            setTimeout(function() { location.reload(); }, 800);
+        } else {
+            showToast('❌ Ошибка: ' + (data.error || 'Неизвестная'), true);
+        }
+    } catch (error) {
+        showToast('❌ Ошибка соединения', true);
+    }
 }
 
 async function confirmReplace() {

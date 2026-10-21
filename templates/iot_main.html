@@ -17,7 +17,7 @@
 
     <div class="sub-title">
         <span>📦 В багажнике: <strong>{{ bag_count }}</strong> IOT</span>
-        <span>✅ Заменено сегодня: <strong>{{ replaced_today }}</strong></span>
+        <span>✅ Сделано сегодня: <strong>{{ replaced_today }}</strong></span>
         <span>🕒 {{ now }}</span>
     </div>
 
@@ -56,6 +56,16 @@
             <div class="number">#{{ group.darks_number }}</div>
             <div class="stats">
                 <span class="pending-count">🚲 {{ group.vehicles_count }} вело</span>
+            </div>
+            <div class="curator-line" onclick="event.stopPropagation();">
+                {% if group.curators %}
+                📞 Кураторы:
+                {% for name in group.curators %}
+                <a class="curator-link" href="https://t.me/{{ name[1:] }}" target="_blank" rel="noopener">{{ name }}</a>{% if not loop.last %}, {% endif %}
+                {% endfor %}
+                {% else %}
+                <span class="curator-empty">📞 Куратор не указан</span>
+                {% endif %}
             </div>
             <div style="margin-top:8px;">
                 {% for v in group.preview %}

@@ -10,7 +10,7 @@
 </head>
 <body>
     <div class="header">
-        <h1>📜 История замен IOT</h1>
+        <h1>📜 История IOT</h1>
         <a href="/logout" class="logout-btn" onclick="logout(event)">🚪 Выйти</a>
     </div>
 
@@ -20,18 +20,23 @@
         {% if history_by_darks %}
             {% for darks, items in history_by_darks.items() %}
             <div class="history-group">
-                <div class="history-group-title">📍 Даркстор #{{ darks }} ({{ items|length }} замен)</div>
+                <div class="history-group-title">📍 Даркстор #{{ darks }} ({{ items|length }})</div>
                 {% for item in items %}
                 <div class="history-item">
                     <div class="history-time">{{ item.date }} · {{ item.time }}</div>
+                    <div class="history-kind">{% if item.type == 'flash' %}🟢 ПРОШИТ{% else %}🔧 ЗАМЕНА{% endif %}</div>
                     <div class="history-info">
                         <div><strong>Рама:</strong> {{ item.frame_number }}</div>
                         <div><strong>Гос:</strong> {{ item.gos }}</div>
                     </div>
                     <div class="history-iot">
+                        {% if item.type == 'flash' %}
+                        <span class="new-iot">🟢 {{ item.old_iot }} остался на велосипеде</span>
+                        {% else %}
                         <span class="old-iot">🔴 {{ item.old_iot }}</span>
                         <span class="arrow">→</span>
                         <span class="new-iot">🟢 {{ item.new_iot }}</span>
+                        {% endif %}
                     </div>
                 </div>
                 {% endfor %}

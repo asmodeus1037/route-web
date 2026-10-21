@@ -23,6 +23,16 @@
     <div class="bag-mini">
         📦 В багажнике: <strong>{{ bag_count }}</strong> IOT
     </div>
+    <div class="curator-line">
+        {% if curators %}
+        📞 Кураторы:
+        {% for name in curators %}
+        <a class="curator-link" href="https://t.me/{{ name[1:] }}" target="_blank" rel="noopener">{{ name }}</a>{% if not loop.last %}, {% endif %}
+        {% endfor %}
+        {% else %}
+        <span class="curator-empty">📞 Куратор не указан</span>
+        {% endif %}
+    </div>
 
     <div id="vehicles-container">
         {% for v in vehicles %}
@@ -34,6 +44,7 @@
 
             <div class="vehicle-info">
                 <div><strong>Рама:</strong> {{ v.frame_number }}</div>
+                <div><strong>Прошивка:</strong> {{ v.firmware or 'не указана' }}</div>
                 <div><strong>Адрес:</strong> {{ v.address }}</div>
                 <div><strong>Даркстор:</strong> {{ v.darks }}</div>
             </div>
@@ -43,6 +54,11 @@
                     🔴 Старый IOT: <strong>{{ v.old_iot }}</strong>
                     <small>(требует перепрошивки)</small>
                 </div>
+
+                <button class="btn btn-flash" type="button" onclick="openFlashModal('{{ v.old_iot }}', '{{ v.frame_number }}', '{{ v.gos }}', '{{ v.darks }}', '{{ v.address }}')">
+                    🟢 ПРОШИЛ IOT
+                </button>
+                <div class="iot-or">или заменить на другой</div>
 
                 <div class="iot-new">
                     <label>🟢 Новый IOT (из багажника):</label>
@@ -79,6 +95,19 @@
             <div style="margin-top:12px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
                 <button class="btn btn-secondary" onclick="closeReplaceModal()">Отмена</button>
                 <button class="btn btn-success" onclick="confirmReplace()">✅ Подтвердить замену</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="flashModal">
+        <div class="modal-content">
+            <button class="close-btn" onclick="closeFlashModal()">×</button>
+            <h3>🟢 Подтверждение прошивки</h3>
+            <div id="flashContent"></div>
+            <div class="replace-warning">⚠️ Пожалуйста, убедитесь, что прошивка IOT успешно завершена!</div>
+            <div style="margin-top:12px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
+                <button class="btn btn-secondary" type="button" onclick="closeFlashModal()">❌ Отмена</button>
+                <button class="btn btn-flash" type="button" onclick="confirmFlash()">✅ Прошивка успешна</button>
             </div>
         </div>
     </div>
