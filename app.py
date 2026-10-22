@@ -526,7 +526,30 @@ def xdevice_token():
     return ""
 
 def normalize_iot(value):
-    return re.sub(r'(?i)^iot\s*', '', str(value or '')).strip()
+    text = str(value or '').strip().lower().replace('ё', 'е')
+    text = text.replace('–', '-').replace('—', '-').replace('\xa0', ' ')
+    return re.sub(r'^iot[\s\-_]*', '', text).strip()
+
+def iot_tokens(value):
+    raw = str(value or '').strip().lower().replace('ё', 'е')
+    raw = raw.replace('–', '-').replace('—', '-').replace('\xa0', ' ')
+    tokens = []
+    if raw:
+        tokens.append(raw)
+    stripped = re.sub(r'^iot[\s\-_]*', '', raw).strip()
+    if stripped and stripped not in tokens:
+        tokens.append(stripped)
+    for match in re.findall(r'\d{2}\s*-\s*\d{3,6}', stripped or raw):
+        token = re.sub(r'\s+', '', match)
+        if token not in tokens:
+            tokens.append(token)
+    compact = re.sub(r'[^0-9a-zа-я]', '', stripped or raw)
+    if compact and compact not in tokens:
+        tokens.append(compact)
+    digits = re.sub(r'\D', '', stripped or raw)
+    if 4 <= len(digits) <= 12 and digits not in tokens:
+        tokens.append(digits)
+    return tokens
 
 def refresh_xdevice_points(force=False):
     global _xdevice_points, _xdevice_loaded_at, _xdevice_error
@@ -569,23 +592,19 @@ def refresh_xdevice_points(force=False):
                 "online": bool(state.get("online")) if isinstance(state, dict) else False,
                 "name": str(obj.get("name") or ""),
                 "at": (state.get("time") if isinstance(state, dict) else 0) or 0,
-                "object_id": str(obj.get("id") or ""),
+                "object_id": str(obj.get("id") or obj.get("_id") or ""),
                 "lock": bool(state.get("lock")) if isinstance(state, dict) else False,
             }
             if not point["object_id"] and lat is None:
                 continue
             keys = set()
-            name = normalize_iot(obj.get("name"))
-            if name:
-                keys.add(name.lower())
-                compact = re.sub(r'[^0-9a-zа-я]', '', name.lower())
-                if compact:
-                    keys.add(compact)
-            ident = str(obj.get("id") or "")
-            if ":" in ident:
-                tail = ident.split(":", 1)[1].lower()
-                keys.add(tail)
-                keys.add(re.sub(r'[^0-9a-zа-я]', '', tail))
+            for field in (obj.get("name"), obj.get("id"), obj.get("_id"), obj.get("description")):
+                keys.update(iot_tokens(field))
+            tags = obj.get("tags")
+            if isinstance(tags, list):
+                for tag in tags:
+                    if isinstance(tag, str):
+                        keys.update(iot_tokens(tag))
             for key in keys:
                 if key:
                     points[key] = point
@@ -644,6 +663,12 @@ def find_coords(node, depth=0):
                 lon = coord_number(value)
         if lat is not None and lon is not None:
             return lat, lon
+        coords = node.get("coordinates")
+        if isinstance(coords, (list, tuple)) and len(coords) >= 2 and not isinstance(coords[0], (list, dict)):
+            first = coord_number(coords[0])
+            second = coord_number(coords[1])
+            if first is not None and second is not None:
+                return second, first
         for value in node.values():
             lat, lon = find_coords(value, depth + 1)
             if lat is not None and lon is not None:
@@ -674,13 +699,14 @@ def fetch_object_coords(object_id):
 def lookup_bike_point(iot):
     ensure_xdevice_loop()
     refresh_xdevice_points(force=False)
-    key = normalize_iot(iot).lower()
-    if not key:
+    key = normalize_iot(iot)
+    if not key and not iot_tokens(iot):
         return None
-    point = _xdevice_points.get(key)
-    if point is None:
-        compact = re.sub(r'[^0-9a-zа-я]', '', key)
-        point = _xdevice_points.get(compact)
+    point = None
+    for token in iot_tokens(iot):
+        point = _xdevice_points.get(token)
+        if point:
+            break
     if point is None:
         return None
     if point.get('lat') is None or point.get('lon') is None:
@@ -2711,7 +2737,7 @@ def api_bike_power():
         point = lookup_bike_point(iot)
         object_id = (point or {}).get('object_id') or ''
     if not object_id:
-        return jsonify({'success': False, 'error': 'Этот IoT не найден у поставщика'})
+        return jsonify({'success': False, 'error': 'Модуль в списке IoT не сопоставился'})
     command = 'unlock' if action == 'on' else 'lock'
     ok, error = send_bike_command(object_id, command)
     if not ok:
@@ -2800,17 +2826,22 @@ def api_bike_search():
         kind = row[kind_i].strip() if len(row) > kind_i else ''
         company = row[company_i].strip() if len(row) > company_i else ''
         point = lookup_bike_point(iot) if normalize_iot(iot) else None
+        if not point and gos:
+            point = lookup_bike_point(gos)
+        if not point and serial:
+            point = lookup_bike_point(serial)
         url = ''
         online = False
         map_error = ''
-        if not normalize_iot(iot):
+        if not point and not _xdevice_points:
+            refresh_xdevice_points(force=True)
+            point = lookup_bike_point(iot) if normalize_iot(iot) else None
+            if not point and gos:
+                point = lookup_bike_point(gos)
+        if not normalize_iot(iot) and not point:
             map_error = 'В базе нет номера IoT, точку не к чему привязать'
         elif not point:
-            if not _xdevice_points:
-                refresh_xdevice_points(force=True)
-                point = lookup_bike_point(iot)
-            if not point:
-                map_error = _xdevice_error or 'Этот IoT не найден у поставщика'
+            map_error = _xdevice_error or 'Точки на карте сейчас нет'
         if point and point.get('lat') is not None and point.get('lon') is not None:
             lat = point['lat']
             lon = point['lon']
