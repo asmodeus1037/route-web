@@ -63,17 +63,18 @@
         </div>
         <h2 style="margin-top:22px;">Оценки кураторов</h2>
         <table>
-            <tr><th>Дата</th><th>Даркстор</th><th>Мастер</th><th>Оценка</th><th>Куратор</th></tr>
+            <tr><th>Дата</th><th>Даркстор</th><th>Мастер</th><th>Оценка</th><th>Комментарий</th><th>Куратор</th></tr>
             {% for row in ratings %}
             <tr>
                 <td>{{ row.date_ru or row.day }} {{ row.time }}</td>
                 <td>{{ row.darks }}</td>
                 <td>{{ row.master }}</td>
                 <td>{{ row.score }}</td>
+                <td>{{ row.comment or '—' }}</td>
                 <td>{{ row.curator }}</td>
             </tr>
             {% else %}
-            <tr><td colspan="5">Оценок пока нет. Бот спросит куратора, когда мастер закроет последнюю заявку на дарксторе.</td></tr>
+            <tr><td colspan="6">Оценок пока нет. Бот спросит куратора, когда мастер закроет последнюю заявку на дарксторе.</td></tr>
             {% endfor %}
         </table>
     </div>

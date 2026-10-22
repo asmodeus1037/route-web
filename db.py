@@ -85,6 +85,38 @@ def status():
         return dict(_state)
 
 
+def count_active_tickets():
+    """Сколько заявок в базе не со статусом «Выполнено». None — база не ответила."""
+    if not _state['configured'] or psycopg2 is None:
+        return None
+    url = _database_url()
+    if not url:
+        return None
+    conn = None
+    try:
+        conn = psycopg2.connect(url)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) FROM tickets
+                WHERE COALESCE(status, '') NOT IN ('done', 'Выполнено', '✅ Выполнено')
+            """)
+            count = int(cur.fetchone()[0])
+        with _lock:
+            _state['connected'] = True
+            _state['last_error'] = ''
+            _state['active'] = count
+        return count
+    except Exception as exc:
+        logger.warning(f'Не посчитал активные заявки: {exc}')
+        with _lock:
+            _state['connected'] = False
+            _state['last_error'] = str(exc)[:300]
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def mirror_event(task):
     """Любое нажатие мастера или админа: кто, что сделал, с какой заявкой."""
     if not _state['configured'] or not isinstance(task, dict) or not task.get('uid'):

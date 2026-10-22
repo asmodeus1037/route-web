@@ -1037,12 +1037,12 @@ def flush_rating_sheet():
     try:
         book = get_sheet_client()
         try:
-            sheet = book.worksheet('Оценки')
+            sheet = book.worksheet('Оценки кураторов')
         except Exception:
-            sheet = book.add_worksheet('Оценки', rows=2000, cols=6)
+            sheet = book.add_worksheet('Оценки кураторов', rows=2000, cols=8)
             sheet.update(
-                values=[['Дата', 'Время', 'Даркстор', 'Мастер', 'Оценка', 'Куратор']],
-                range_name='A1:F1',
+                values=[['Дата', 'Время', 'Даркстор', 'Адрес', 'Мастер', 'Оценка', 'Комментарий', 'Куратор']],
+                range_name='A1:H1',
             )
         rows = []
         for item in pending:
@@ -1055,8 +1055,10 @@ def flush_rating_sheet():
                 day,
                 item.get('time') or '',
                 item.get('darks') or '',
+                item.get('address') or '',
                 item.get('master') or '',
                 item.get('score') or '',
+                item.get('comment') or '',
                 item.get('curator') or '',
             ])
         sheet.append_rows(rows, value_input_option='RAW')
@@ -1084,54 +1086,90 @@ def master_rating_value(name):
         return None
     return round(sum(latest.values()) / len(latest), 1)
 
+def rating_same_person(row, token, chat_id, day, darks, master):
+    if (row.get('chat_id') or '') != chat_id:
+        return False
+    if row.get('token') == token:
+        return True
+    return (
+        row.get('day') == day
+        and str(row.get('darks')) == str(darks)
+        and row.get('master') == master
+    )
+
 @app.route('/api/service_rating', methods=['POST'])
 def api_service_rating():
     if not bot_hook_ok():
         return jsonify({'success': False, 'error': 'Нет доступа'}), 403
     body = request.json or {}
     token = (body.get('token') or '').strip()
+    comment = (body.get('comment') or '').strip()
+    comment_only = bool(body.get('comment_only'))
+    curator = (body.get('curator') or '').strip()
+    chat_id = str(body.get('chat_id') or '').strip()
     try:
         score = int(body.get('score') or 0)
     except (TypeError, ValueError):
         score = 0
-    if not token or score < 1 or score > 5:
+    if not token:
         return jsonify({'success': False, 'error': 'Нет оценки'})
-    curator = (body.get('curator') or '').strip()
-    chat_id = str(body.get('chat_id') or '').strip()
     with _rating_lock:
         stored = load_ratings()
         ask = (stored.get('asked') or {}).get(token)
         if not isinstance(ask, dict):
             return jsonify({'success': False, 'error': 'Запрос устарел'})
         now = get_msk_now()
-        item = {
-            'day': ask.get('day') or now.strftime('%Y-%m-%d'),
-            'time': now.strftime('%H:%M'),
-            'darks': ask.get('darks') or '',
-            'address': ask.get('address') or '',
-            'master': ask.get('master') or '',
-            'score': score,
-            'curator': curator or chat_id,
-            'chat_id': chat_id,
-            'date_ru': now.strftime('%d.%m.%Y'),
-        }
-        items = []
-        for row in stored.get('items') or []:
-            if (
-                row.get('day') == item['day']
-                and str(row.get('darks')) == str(item['darks'])
-                and row.get('master') == item['master']
-                and (row.get('chat_id') or '') == chat_id
-            ):
-                continue
-            items.append(row)
-        items.append(item)
-        stored['items'] = items[-500:]
-        stored.setdefault('sheet', []).append(item)
-        stored['sheet'] = stored['sheet'][-200:]
-        save_ratings(stored)
-    threading.Thread(target=flush_rating_sheet, daemon=True).start()
-    return jsonify({'success': True, 'score': score})
+        day = ask.get('day') or now.strftime('%Y-%m-%d')
+        darks = ask.get('darks') or ''
+        master = ask.get('master') or ''
+        items = list(stored.get('items') or [])
+        existing = None
+        for row in items:
+            if rating_same_person(row, token, chat_id, day, darks, master):
+                existing = row
+                break
+        if comment_only:
+            if not existing:
+                return jsonify({'success': False, 'error': 'Сначала поставьте оценку'})
+            if existing.get('comment'):
+                return jsonify({'success': False, 'error': 'Комментарий уже записан', 'already': True})
+            if len(comment) < 3:
+                return jsonify({'success': False, 'error': 'Напишите комментарий'})
+            existing['comment'] = comment
+            existing['curator'] = curator or existing.get('curator') or chat_id
+            stored.setdefault('sheet', []).append(dict(existing))
+            stored['sheet'] = stored['sheet'][-200:]
+            save_ratings(stored)
+            need_comment = False
+            score = existing.get('score') or score
+        else:
+            if score < 1 or score > 5:
+                return jsonify({'success': False, 'error': 'Нет оценки'})
+            if existing:
+                return jsonify({'success': False, 'error': 'Оценка уже принята', 'already': True})
+            item = {
+                'token': token,
+                'day': day,
+                'time': now.strftime('%H:%M'),
+                'darks': darks,
+                'address': ask.get('address') or '',
+                'master': master,
+                'score': score,
+                'comment': comment,
+                'curator': curator or chat_id,
+                'chat_id': chat_id,
+                'date_ru': now.strftime('%d.%m.%Y'),
+            }
+            items.append(item)
+            stored['items'] = items[-500:]
+            need_comment = score < 5
+            if not need_comment:
+                stored.setdefault('sheet', []).append(item)
+                stored['sheet'] = stored['sheet'][-200:]
+            save_ratings(stored)
+    if not need_comment:
+        threading.Thread(target=flush_rating_sheet, daemon=True).start()
+    return jsonify({'success': True, 'score': score, 'need_comment': need_comment})
 
 def supplier_of(gos_value):
     return (_bike_type_cache.get('supplier') or {}).get(normalize_gos(gos_value), '')
@@ -2791,6 +2829,38 @@ def api_bot_map():
         'url': f'https://yandex.ru/maps/?ll={lon},{lat}&pt={lon},{lat}&z=16&l=map',
     })
 
+def bike_map_url(iot, darks, gos):
+    iot = resolve_ticket_iot(iot, darks, gos)
+    if not normalize_iot(iot):
+        return ''
+    ensure_xdevice_loop()
+    refresh_xdevice_points(force=False)
+    point = None
+    for token in iot_tokens(iot):
+        point = _xdevice_points.get(token)
+        if point:
+            break
+    if not point or point.get('lat') is None or point.get('lon') is None:
+        return ''
+    lat = point['lat']
+    lon = point['lon']
+    return f'https://yandex.ru/maps/?ll={lon},{lat}&pt={lon},{lat}&z=16&l=map'
+
+@app.route('/api/bot_maps', methods=['POST'])
+def api_bot_maps():
+    if not bot_hook_ok():
+        return jsonify({'success': False, 'error': 'Нет доступа'}), 403
+    bikes = (request.json or {}).get('bikes') or []
+    maps = []
+    for item in bikes[:40]:
+        if not isinstance(item, dict):
+            continue
+        maps.append({
+            'gos': item.get('gos') or '',
+            'url': bike_map_url(item.get('iot') or '', item.get('darks') or '', item.get('gos') or ''),
+        })
+    return jsonify({'success': True, 'maps': maps})
+
 @app.route('/api/curator_dispute', methods=['POST'])
 def api_curator_dispute():
     if not bot_hook_ok():
@@ -3623,12 +3693,18 @@ def admin_panel():
             'address': (info or {}).get('address') or '',
         }
     state = db.status()
+    active = db.count_active_tickets() if state.get('configured') else None
+    state = db.status()
     if not state.get('configured'):
         db_line = 'База не настроена. Сайт работает через таблицу.'
     elif state.get('last_error'):
         db_line = 'База не отвечает: ' + str(state.get('last_error'))[:180]
     elif state.get('connected'):
-        db_line = f"База на связи. Заявок в ней: {state.get('tickets') or 0}. Последняя запись: {state.get('last_sync') or 'ещё не было'}."
+        if active is None:
+            active_text = 'активные заявки не посчитались'
+        else:
+            active_text = f'Активных заявок: {active} (все, кроме «Выполнено»)'
+        db_line = f"База на связи. {active_text}. Последняя запись: {state.get('last_sync') or 'ещё не было'}."
     else:
         db_line = 'База ещё не ответила. Если так и останется, на Amvera проверьте, что база запущена.'
     return render_template('admin.html',
