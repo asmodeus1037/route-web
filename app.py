@@ -330,6 +330,8 @@ def apply_pending_queue(tickets):
                 ticket['evac_reason'] = ''
             if new_status == 'processed':
                 ticket['master'] = ''
+            if data.get('write_master'):
+                ticket['master'] = data.get('master') or ''
             if data.get('note'):
                 ticket['note'] = data.get('note')
         elif kind == 'evacuation':
@@ -404,6 +406,103 @@ def same_master(left, right):
         return True
     return is_transit_master(left) and is_transit_master(right)
 
+RETIRED_MASTERS = {'антон', 'руслан'}
+
+def queue_clears_master(uid):
+    try:
+        tasks = read_queue().get('tasks') or []
+    except Exception:
+        return False
+    for task in tasks:
+        if task.get('uid') != uid:
+            continue
+        kind = task.get('type')
+        data = task.get('data') or {}
+        if kind in ('fail', 'evacuation'):
+            return True
+        if kind == 'assign' and not (data.get('master') or '').strip():
+            return True
+        if kind == 'status_update' and data.get('write_master') and not (data.get('master') or '').strip():
+            return True
+    return False
+
+def forget_retired_caches():
+    for name in ('Антон', 'Руслан'):
+        path = os.path.join(CACHE_DIR, f'master_{name}.json')
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception as exc:
+                logger.warning(f'Не удалился кэш {name}: {exc}')
+
+def cleared_master_uids():
+    data = read_cache('masters_cleared.json') or {}
+    return {key for key in data if key and key != 'updated_at'}
+
+def remember_master_cleared(uid):
+    uid = str(uid or '').strip()
+    if not uid:
+        return
+    data = read_cache('masters_cleared.json') or {}
+    data.pop('updated_at', None)
+    data[uid] = int(time.time())
+    write_cache('masters_cleared.json', data)
+
+def forget_master_cleared(uid):
+    uid = str(uid or '').strip()
+    if not uid:
+        return
+    data = read_cache('masters_cleared.json') or {}
+    if uid not in data:
+        return
+    data.pop(uid, None)
+    data.pop('updated_at', None)
+    write_cache('masters_cleared.json', data)
+
+def strip_cleared_masters(tickets):
+    blocked = cleared_master_uids()
+    if not blocked:
+        return tickets
+    for ticket in tickets or []:
+        if str(ticket.get('uid') or '') in blocked:
+            ticket['master'] = ''
+    return tickets
+
+def drop_retired_masters():
+    forget_retired_caches()
+    flag = os.path.join(CACHE_DIR, 'retired_masters_done.json')
+    if os.path.exists(flag):
+        return
+    tickets = list(_tickets_mem)
+    if not tickets:
+        return
+    changed = 0
+    for ticket in tickets:
+        if clean_name(ticket.get('master')) not in RETIRED_MASTERS:
+            continue
+        ticket['master'] = ''
+        ticket['_local_ts'] = time.time()
+        remember_master_cleared(ticket.get('uid'))
+        try:
+            db.mirror_ticket(ticket)
+        except Exception as exc:
+            logger.warning(f'База не сняла старого мастера: {exc}')
+        add_to_queue({
+            'uid': ticket.get('uid'),
+            'source': ticket.get('source') or 'Заявки',
+            'type': 'assign',
+            'data': {'master': ''},
+        })
+        changed += 1
+    if changed:
+        publish_caches(tickets)
+        logger.info(f'Сняты старые мастера Антон и Руслан: {changed}')
+    try:
+        with open(flag, 'w', encoding='utf-8') as handle:
+            handle.write(str(changed))
+    except Exception as exc:
+        logger.warning(f'Отметка о старых мастерах не сохранилась: {exc}')
+
 def column_index(header, needles, default):
     for index, title in enumerate(header or []):
         text = str(title or '').strip().lower().replace('\xa0', ' ')
@@ -446,6 +545,11 @@ def load_darks_reference(force=False):
                     'master': cell(i_master),
                     'master_tg': cell(i_tg),
                 }
+                ids_text = fresh[darks_num]['curator_ids']
+                for token in re.findall(r'\d{6,}', cell(4) + ' ' + cell(6)):
+                    if token not in ids_text:
+                        ids_text = (ids_text + ', ' + token).strip(', ')
+                fresh[darks_num]['curator_ids'] = ids_text
         if fresh:
             darks_ref = fresh
             _darks_loaded_at = time.time()
@@ -1268,6 +1372,7 @@ def store_ticket_memory(tickets, fresh=False):
     return _tickets_mem
 
 def publish_caches(tickets):
+    strip_cleared_masters(tickets)
     apply_pending_queue(tickets)
     enrich_tickets(tickets)
     save_admin_cache(tickets)
@@ -1287,6 +1392,7 @@ def _tickets_from_db(previous):
         ticket['is_active'] = is_active_status(ticket.get('status'))
     merge_local_tickets(previous, rows)
     apply_pending_queue(rows)
+    strip_cleared_masters(rows)
     enrich_tickets(rows)
     return rows
 
@@ -1314,6 +1420,7 @@ def get_tickets_from_sheets(force=False):
         tickets = _read_tickets_from_google()
         merge_local_tickets(previous, tickets)
         apply_pending_queue(tickets)
+        strip_cleared_masters(tickets)
         store_ticket_memory(tickets, fresh=True)
         db.mirror_tickets(_tickets_mem)
         logger.info(f'База недоступна, таблица прочитана: {len(tickets)} заявок')
@@ -1349,6 +1456,20 @@ def import_new_tickets_from_google():
                 continue
             sheet_master = (src.get('master') or '').strip()
             if sheet_master and not (ticket.get('master') or '').strip():
+                if str(ticket.get('uid') or '') in cleared_master_uids():
+                    continue
+                if ticket.get('status') in ('processed', 'fail', 'evacuation'):
+                    continue
+                note_low = (ticket.get('note') or '').lower()
+                if 'оспорено куратором' in note_low or 'вело отсутствует' in note_low:
+                    continue
+                stamp = ticket.get('_local_ts') or 0
+                if stamp and time.time() - stamp < 900:
+                    continue
+                if queue_clears_master(ticket.get('uid')):
+                    continue
+                if clean_name(sheet_master) in RETIRED_MASTERS:
+                    continue
                 ticket['master'] = sheet_master
                 ticket['_local_ts'] = time.time()
                 db.mirror_ticket(ticket)
@@ -1474,6 +1595,10 @@ def batch_update_masters(changes):
         if not uid:
             continue
         master = change.get('master') or ''
+        if str(master).strip():
+            forget_master_cleared(uid)
+        else:
+            remember_master_cleared(uid)
         source = change.get('source') or source_of(uid)
         found = False
         for ticket in _tickets_mem:
@@ -1528,6 +1653,7 @@ def clear_masters(master_name=None):
         grouped.setdefault(source, []).append({'range': f'{column}{row_idx}', 'values': [['']]})
         ticket['master'] = ''
         ticket['_local_ts'] = time.time()
+        remember_master_cleared(ticket.get('uid'))
         db.mirror_ticket(ticket)
         cleared += 1
     if grouped:
@@ -1594,11 +1720,19 @@ def update_status_in_google_sheets(uid, status, note=''):
         return False
 
 def find_uid_in_sheets(uid):
-    item = uid_index.get(uid) if uid else None
-    if not item:
+    if not uid:
         return None
-    ticket = item.get('ticket') or {}
-    return {'source': ticket.get('source') or 'Заявки', 'row_index': item.get('row_index')}
+    item = uid_index.get(uid)
+    if item and item.get('row_index'):
+        ticket = item.get('ticket') or {}
+        return {'source': ticket.get('source') or item.get('source') or 'Заявки', 'row_index': item.get('row_index')}
+    for ticket in list(_tickets_mem or []):
+        if ticket.get('uid') == uid and ticket.get('row_index'):
+            return {'source': ticket.get('source') or 'Заявки', 'row_index': ticket.get('row_index')}
+    cached = find_cached_ticket(uid)
+    if cached and cached.get('row_index'):
+        return {'source': cached.get('source') or 'Заявки', 'row_index': cached.get('row_index')}
+    return None
 
 # ============================================================
 # ОЧЕРЕДЬ ЗАДАЧ
@@ -1637,6 +1771,12 @@ def _save_queue(queue_data):
 
 def add_to_queue(task):
     with queue_lock:
+        if task.get('uid') and not task.get('row_index'):
+            found = find_uid_in_sheets(task.get('uid'))
+            if found:
+                task['row_index'] = found.get('row_index')
+                if not task.get('source'):
+                    task['source'] = found.get('source')
         queue_data = _load_queue()
         uid = task.get('uid')
         task['qid'] = f"{time.time():.6f}-{uid}"
@@ -1692,9 +1832,11 @@ def mark_bike_missing(uid, actor_name):
         'is_done': False,
         'is_active': True
     })
+    remember_master_cleared(uid)
     remove_ticket_from_master_cache(master_name, uid)
     if actor_name and actor_name != master_name:
         remove_ticket_from_master_cache(actor_name, uid)
+    refresh_master_caches_from_admin()
     add_to_queue({
         'uid': uid,
         'source': source_of(uid),
@@ -1715,6 +1857,7 @@ def mark_bike_missing(uid, actor_name):
     return note
 
 def apply_queue_to_sheets(tasks):
+    skipped = set()
     buckets = {'Заявки': [], 'Заявки бот': []}
     for task in tasks:
         source = task.get('source')
@@ -1726,6 +1869,9 @@ def apply_queue_to_sheets(tasks):
         if not row_idx:
             found = find_uid_in_sheets(uid)
             if not found or found.get('source') != source:
+                if task.get('qid'):
+                    skipped.add(task.get('qid'))
+                logger.warning(f'Очередь не нашла строку заявки {uid}, повторю позже')
                 continue
             row_idx = found['row_index']
         data = task.get('data') or {}
@@ -1768,10 +1914,13 @@ def apply_queue_to_sheets(tasks):
         if task.get('source') != 'Импорт М4':
             continue
         uid = task.get('uid')
-        row_idx = get_ticket_row_by_uid(uid)
+        row_idx = task.get('row_index') or get_ticket_row_by_uid(uid)
         if not row_idx:
             found = find_uid_in_sheets(uid)
             if not found or found.get('source') != 'Импорт М4':
+                if task.get('qid'):
+                    skipped.add(task.get('qid'))
+                logger.warning(f'Очередь не нашла строку импорта {uid}, повторю позже')
                 continue
             row_idx = found['row_index']
         data = task.get('data') or {}
@@ -1807,7 +1956,7 @@ def apply_queue_to_sheets(tasks):
                     import_updates.append({'range': f'M{row_idx}', 'values': [[sheet_note]]})
                 continue
             sheet_status = status_map_import.get(data.get('status'), 'В работе')
-            clear_master = data.get('status') == '⏹️ Обработано'
+            clear_master = data.get('status') == '⏹️ Обработано' or (data.get('write_master') and not (data.get('master') or '').strip())
         else:
             continue
         import_updates.append({'range': f'L{row_idx}', 'values': [[sheet_status]]})
@@ -1827,7 +1976,7 @@ def apply_queue_to_sheets(tasks):
         get_sheet_client().worksheet('Импорт М4').batch_update(import_updates)
         written += len(import_updates)
         logger.info(f"✅ Очередь записана в Импорт М4: {len(import_updates)} ячеек")
-    return written
+    return skipped
 
 def append_master_history(master, action, data):
     if not master:
@@ -2227,9 +2376,11 @@ def flush_queue():
             _save_queue(queue_data)
             taken = [dict(task) for task in tasks]
             taken_ids = {task['qid'] for task in taken}
-        apply_queue_to_sheets(taken)
+        skipped = apply_queue_to_sheets(taken) or set()
         report_tasks = []
         for task in taken:
+            if task.get('qid') in skipped:
+                continue
             data = task.get('data') or {}
             if data.get('skip_report') or task.get('type') == 'status_update':
                 continue
@@ -2242,7 +2393,7 @@ def flush_queue():
                 append_master_history(data.get('master'), task.get('type'), data)
         with queue_lock:
             queue_data = _load_queue()
-            queue_data['tasks'] = [task for task in (queue_data.get('tasks') or []) if task.get('qid') not in taken_ids]
+            queue_data['tasks'] = [task for task in (queue_data.get('tasks') or []) if task.get('qid') not in taken_ids or task.get('qid') in skipped]
             queue_data['last_sync'] = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
             _save_queue(queue_data)
         logger.info(f"✅ Очередь записана и очищена: {len(taken)}")
@@ -2346,6 +2497,7 @@ def process_queue_background():
     while True:
         try:
             time.sleep(10)
+            drop_retired_masters()
             flush_queue()
             if time.time() - _app_started_at < 30:
                 continue
@@ -2353,6 +2505,15 @@ def process_queue_background():
                 import_new_tickets_from_google()
         except Exception as e:
             logger.error(f"❌ Ошибка в фоновом процессе: {e}")
+
+_queue_thread_started = False
+
+def ensure_queue_thread():
+    global _queue_thread_started
+    if _queue_thread_started:
+        return
+    _queue_thread_started = True
+    threading.Thread(target=process_queue_background, daemon=True).start()
 
 # ============================================================
 # ОТПРАВКА УВЕДОМЛЕНИЙ
@@ -2681,10 +2842,15 @@ def api_curator_dispute():
     line = f"Оспорено куратором {moment}: {text}"
     note = f'{previous}\n{line}'.strip() if previous else line
     master = (ticket.get('master') or '').strip() or dispute_actor(previous)
-    extra = {'evac_reason': '', 'is_done': False, 'is_active': True}
+    update_ticket_in_admin_cache(uid, 'pending', note, extra={
+        'master': '',
+        'evac_reason': '',
+        'is_done': False,
+        'is_active': True,
+    })
+    remember_master_cleared(uid)
     if master:
-        extra['master'] = master
-    update_ticket_in_admin_cache(uid, 'pending', note, extra=extra)
+        remove_ticket_from_master_cache(master, uid)
     refresh_master_caches_from_admin()
     add_to_queue({
         'uid': uid,
@@ -2696,14 +2862,14 @@ def api_curator_dispute():
             'new_status': 'pending',
             'note': note,
             'skip_report': True,
-            'master': master,
-            'write_master': bool(master),
+            'master': '',
+            'write_master': True,
         },
     })
     if master:
         for chat_id in master_chat_ids(master):
             try:
-                send_via_master_notify(chat_id, f'Куратор не принял {label}: {text}')
+                send_via_master_notify(chat_id, f'Куратор не принял {label}. Заявка снята с вас: {text}')
             except Exception as exc:
                 logger.warning(f'Не ушло мастеру о споре: {exc}')
     return jsonify({'success': True, 'reopened': True})
@@ -3444,18 +3610,33 @@ def admin_panel():
         save_admin_cache(tickets)
         cache_data = get_admin_cache()
         directions = cache_data.get('directions', {})
-    load_darks_reference()
+    load_darks_reference(force=True)
     darks_people = {}
     for number, info in (darks_ref or {}).items():
+        names = ((info or {}).get('curators') or '').strip()
+        ids = ((info or {}).get('curator_ids') or '').strip()
+        shown = names
+        if ids and ids not in names:
+            shown = (names + ', ' + ids).strip(', ')
         darks_people[str(number)] = {
-            'curators': (info or {}).get('curators') or '',
+            'curators': shown,
             'address': (info or {}).get('address') or '',
         }
+    state = db.status()
+    if not state.get('configured'):
+        db_line = 'База не настроена. Сайт работает через таблицу.'
+    elif state.get('last_error'):
+        db_line = 'База не отвечает: ' + str(state.get('last_error'))[:180]
+    elif state.get('connected'):
+        db_line = f"База на связи. Заявок в ней: {state.get('tickets') or 0}. Последняя запись: {state.get('last_sync') or 'ещё не было'}."
+    else:
+        db_line = 'База ещё не ответила. Если так и останется, на Amvera проверьте, что база запущена.'
     return render_template('admin.html',
                           directions=directions,
                           masters=MASTERS,
                           darks_people=darks_people,
                           curator_sent=curator_sent_map(),
+                          db_line=db_line,
                           now=get_msk_now().strftime('%H:%M:%S'))
 
 # ============================================================
@@ -3705,6 +3886,7 @@ def queue_admin_status(uid, status_display, note='', skip_report=True, actor='А
             'is_done': False,
             'is_active': True,
         })
+        remember_master_cleared(uid)
         remove_ticket_from_master_cache((ticket or {}).get('master') or '', uid)
         add_to_queue({
             'uid': uid,
@@ -3715,7 +3897,8 @@ def queue_admin_status(uid, status_display, note='', skip_report=True, actor='А
                 'new_status': 'processed',
                 'note': note_text,
                 'skip_report': True,
-                'master': actor,
+                'master': '',
+                'write_master': True,
                 'timer_from': timer_from,
             }
         })
@@ -3732,7 +3915,7 @@ def queue_admin_status(uid, status_display, note='', skip_report=True, actor='А
         line = 'ЭВАКУАЦИЯ: ' + plain
         sheet_note = f'{previous}\n{line}'.strip() if previous else line
         cache_note = sheet_note
-        extra = {'evac_reason': plain}
+        extra = {'evac_reason': plain, 'master': ''}
     elif status_display == '🔵 Доделать':
         new_status = 'todo'
         text = (note or '').strip() or 'Доделать'
@@ -3753,16 +3936,22 @@ def queue_admin_status(uid, status_display, note='', skip_report=True, actor='А
     if uid in uid_index:
         source = (uid_index[uid].get('ticket') or {}).get('source') or 'Заявки'
     update_ticket_in_admin_cache(uid, new_status, cache_note, extra=extra)
+    data = {
+        'status': status_display,
+        'new_status': new_status,
+        'note': sheet_note,
+        'skip_report': skip_report,
+    }
+    if new_status == 'evacuation':
+        data['master'] = ''
+        data['write_master'] = True
+        remember_master_cleared(uid)
+        remove_ticket_from_master_cache(ticket.get('master') or '', uid)
     add_to_queue({
         'uid': uid,
         'source': source,
         'type': 'status_update',
-        'data': {
-            'status': status_display,
-            'new_status': new_status,
-            'note': sheet_note,
-            'skip_report': skip_report
-        }
+        'data': data,
     })
 
 @app.route('/api/update_status', methods=['POST'])
@@ -4414,7 +4603,9 @@ def master_evacuation(name, darks_number, uid):
     line = 'ЭВАКУАЦИЯ: ' + reason
     note = f'{previous}\n{line}'.strip() if previous else line
     update_ticket_in_admin_cache(uid, 'evacuation', note, extra={'evac_reason': reason, 'master': ''})
+    remember_master_cleared(uid)
     remove_ticket_from_master_cache(name, uid)
+    refresh_master_caches_from_admin()
     add_to_queue({
         'uid': uid,
         'source': source_of(uid),
@@ -5596,11 +5787,11 @@ def api_iot_flash():
 # ============================================================
 # ЗАПУСК
 # ============================================================
+ensure_queue_thread()
+
 if __name__ == "__main__":
     logger.info("🚀 Запуск приложения...")
-    
-    background_thread = threading.Thread(target=process_queue_background, daemon=True)
-    background_thread.start()
+    ensure_queue_thread()
     ensure_xdevice_loop()
     logger.info("🚀 Фоновый процесс обработки очереди запущен")
     

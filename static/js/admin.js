@@ -1305,7 +1305,7 @@ function sentMark(darks, ticketCount) {
     var mark = curatorSent[String(darks)];
     if (!mark || !mark.at) return '';
     var changed = mark.tickets && mark.tickets !== ticketCount;
-    var text = mark.sent ? ('Куратору отправлено ' + mark.at) : ('Куратору не ушло ' + mark.at + ', нет Telegram');
+    var text = mark.sent ? ('Куратору отправлено ' + mark.at) : ('Куратору не ушло ' + mark.at + ': бот не нашёл числовой Telegram ID');
     if (mark.sent && changed) text += ', список изменился';
     return '<div class="sent-mark' + (changed || !mark.sent ? ' warn' : '') + '">' + text + '</div>';
 }
