@@ -845,25 +845,30 @@ def load_ratings():
 def save_ratings(data):
     _write_json(RATINGS_FILE, data)
 
-def darks_has_open_work(darks):
+def master_open_at(master, darks):
+    left = []
     admin = get_admin_cache() or {}
     for direction in (admin.get('directions') or {}).values():
         for ticket in direction.get('tickets') or []:
             if str(ticket.get('darks')) != str(darks):
                 continue
-            if ticket.get('status') in ('pending', 'todo', 'fail'):
-                return True
-    return False
+            if not same_master(ticket.get('master'), master):
+                continue
+            if is_active_status(ticket.get('status')):
+                left.append(ticket.get('uid'))
+    return left
 
 def maybe_ask_rating(darks, master):
     if not darks or not master:
         return
     if clean_name(master) in ('iot-мастер', 'iot'):
         return
-    if darks_has_open_work(darks):
+    left = master_open_at(master, darks)
+    if left:
+        logger.info(f'Оценка ждёт: у {master} на дарксторе {darks} ещё {len(left)} заявок')
         return
     day = get_msk_now().strftime('%Y-%m-%d')
-    key = f'{day}|{darks}'
+    key = f'{day}|{darks}|{clean_name(master)}'
     info = (darks_ref or {}).get(str(darks)) or {}
     with _rating_lock:
         data = load_ratings()
@@ -895,9 +900,16 @@ def maybe_ask_rating(darks, master):
                     },
                     timeout=12,
                 )
-                ok = response.status_code == 200
+                body = {}
+                try:
+                    body = response.json() if response.content else {}
+                except Exception:
+                    body = {}
+                ok = response.status_code == 200 and int(body.get('count') or 0) > 0
                 if ok:
+                    logger.info(f'Оценка ушла куратору {darks}, мастер {master}, получателей {body.get("count")}')
                     break
+                logger.warning(f'Оценка не ушла: {response.status_code} {str(body)[:180]}')
             except Exception as exc:
                 logger.warning(f'Оценка не ушла: {exc}')
             time.sleep(2)
