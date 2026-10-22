@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Статистика</title>
-    <link rel="stylesheet" href="/static/css/master.css?v=15">
+    <link rel="stylesheet" href="/static/css/master.css?v=16">
     <style>
         .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         .stat-card { background: #fff; border-radius: 16px; padding: 14px; }
@@ -23,10 +23,10 @@
         <div class="stat-card"><span>Закрыто за 7 дней</span><b>{{ person.week }}</b></div>
         <div class="stat-card"><span>Закрыто за 30 дней</span><b>{{ person.month }}</b></div>
         <div class="stat-card"><span>Сейчас в маршруте</span><b>{{ person.open }}</b></div>
-        <div class="stat-card"><span>Эвакуация за 30 дней</span><b>{{ person.evac }}</b></div>
+        <div class="stat-card"><span>Поставлен статус «Эвакуация»</span><b>{{ person.evac }}</b></div>
         <div class="stat-card"><span>Вело не было за 30 дней</span><b>{{ person.missing }}</b></div>
-        <div class="stat-card"><span>Замены за 30 дней</span><b>{{ person.replace }}</b></div>
-        <div class="stat-card wide"><span>Ваша оценка</span><b>пока нет</b><span>Оценки кураторов за ремонт появятся здесь.</span></div>
+        <div class="stat-card"><span>Заменено велосипедов</span><b>{{ person.replace }}</b></div>
+        <div class="stat-card wide"><span>Ваша оценка</span><b>{% if person.rating is not none %}{{ person.rating }}{% else %}пока нет{% endif %}</b><span>Средняя оценка кураторов.</span></div>
     </div>
 </body>
 </html>

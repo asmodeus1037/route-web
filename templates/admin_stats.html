@@ -14,8 +14,8 @@
         .switch button { border: 1px solid #e2e8f0; background: #fff; border-radius: 999px; padding: 8px 14px; font-weight: 800; cursor: pointer; }
         .switch button.on { background: #0f172a; color: #fff; }
         table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 14px; overflow: hidden; }
-        th, td { text-align: left; padding: 12px 10px; border-bottom: 1px solid #eef2f6; font-size: 15px; }
-        th { font-size: 12px; color: #64748b; }
+        th, td { text-align: left; padding: 12px 10px; border-bottom: 1px solid #eef2f6; font-size: 15px; vertical-align: top; }
+        th { font-size: 12px; color: #64748b; line-height: 1.25; }
         .back { display: inline-block; margin-bottom: 12px; color: #334155; font-weight: 700; }
     </style>
 </head>
@@ -23,14 +23,14 @@
     <div class="wrap">
         <a class="back" href="/admin">← К заявкам</a>
         <h1>Статистика</h1>
-        <p class="muted">Общее среднее: {% if overall is not none %}{{ overall }} ч{% else %}пока нет{% endif %}. Это часы от создания заявки до «Выполнено», по базе за 60 дней. Эвакуации, «вело не было» и замены — за 30 дней. Оценка появится из бота. {{ now }}</p>
+        <p class="muted">Общее среднее: {% if overall is not none %}{{ overall }} ч{% else %}пока нет{% endif %}. Это часы от создания заявки до «Выполнено», по базе за 60 дней. Статус «Эвакуация», «вело не было» и заменённые велосипеды — за 30 дней. Оценка — среднее от кураторов. Учётная запись IOT в эту таблицу не входит. {{ now }}</p>
         <div class="switch">
             <button type="button" class="on" onclick="showStats('masters', this)">Мастера</button>
             <button type="button" onclick="showStats('expenses', this)">Доп. расходы</button>
         </div>
         <div id="masters">
             <table>
-                <tr><th>Мастер</th><th>В работе</th><th>7 дней</th><th>30 дней</th><th>Среднее</th><th>Эвакуация</th><th>Вело не было</th><th>Замены</th><th>Оценка</th></tr>
+                <tr><th>Мастер</th><th>В работе</th><th>7 дней</th><th>30 дней</th><th>Среднее</th><th>Поставлен статус «Эвакуация»</th><th>Вело не было</th><th>Заменено велосипедов</th><th>Оценка</th></tr>
                 {% for person in people %}
                 <tr>
                     <td>{{ person.name }}</td>
@@ -41,7 +41,7 @@
                     <td>{{ person.evac }}</td>
                     <td>{{ person.missing }}</td>
                     <td>{{ person.replace }}</td>
-                    <td>нет оценок</td>
+                    <td>{% if person.rating is not none %}{{ person.rating }}{% else %}нет оценок{% endif %}</td>
                 </tr>
                 {% endfor %}
             </table>
@@ -61,6 +61,21 @@
                 {% endfor %}
             </table>
         </div>
+        <h2 style="margin-top:22px;">Оценки кураторов</h2>
+        <table>
+            <tr><th>Дата</th><th>Даркстор</th><th>Мастер</th><th>Оценка</th><th>Куратор</th></tr>
+            {% for row in ratings %}
+            <tr>
+                <td>{{ row.date_ru or row.day }} {{ row.time }}</td>
+                <td>{{ row.darks }}</td>
+                <td>{{ row.master }}</td>
+                <td>{{ row.score }}</td>
+                <td>{{ row.curator }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5">Оценок пока нет. Бот спросит куратора, когда мастер закроет последнюю заявку на дарксторе.</td></tr>
+            {% endfor %}
+        </table>
     </div>
     <script>
         function showStats(id, button) {

@@ -993,7 +993,7 @@ function searchBike() {
                 html += '<div><b>Поставщик:</b> ' + (item.supplier || '—') + '</div>';
                 html += '<div><b>Даркстор:</b> ' + (item.darks || '—') + (item.address ? (', ' + item.address) : '') + '</div>';
                 if (item.url) html += '<div style="margin-top:8px;"><a href="' + item.url + '" target="_blank">Открыть на карте</a>' + (item.online ? ' · на связи' : ' · последняя точка') + '</div>';
-                else html += '<div style="margin-top:8px;color:#64748b;">Точки на карте сейчас нет</div>';
+                else html += '<div style="margin-top:8px;color:#64748b;">' + (item.map_error || 'Точки на карте сейчас нет') + '</div>';
                 html += '</div>';
             }
             box.innerHTML = html;
@@ -1530,7 +1530,7 @@ function updateChangesInfo() {
         document.getElementById('syncStatus').textContent = '📝 Есть изменения';
         document.getElementById('syncStatus').style.color = '#f59e0b';
     } else {
-        el.textContent = 'Назначение сразу пишется в базу. «Сохранить назначения» нужно, только если сеть оборвалась.';
+        el.textContent = 'Назначение сразу пишется в базу.';
         document.getElementById('syncStatus').textContent = '✅ Готово';
         document.getElementById('syncStatus').style.color = '#22c55e';
     }
@@ -1622,7 +1622,7 @@ function savePendingKeys(keys, ask) {
         showToastModern('Назначение записано', 'success');
     })
     .catch(function() {
-        showToastModern('Нет сети. Нажмите «Сохранить назначения», когда связь появится.', 'error');
+        showToastModern('Нет сети. Назначение осталось на экране и запишется, когда связь появится.', 'error');
     });
 }
 
@@ -1715,7 +1715,7 @@ function saveAllChangesOld() {
 function reconcileSheet() {
     var keys = Object.keys(pendingChanges);
     if (keys.length > 0) {
-        alert('Сначала нажмите «Сохранить назначения». Несохранённых мастеров в сверку не беру.');
+        alert('Есть назначения, которые ещё не записались. Подождите пару секунд и нажмите сверку ещё раз.');
         return;
     }
     if (!confirm('Админка и база станут такими же, как Google Таблица. Заявки, которых в таблице уже нет, закроются. Продолжить?')) {

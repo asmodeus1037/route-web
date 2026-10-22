@@ -25,7 +25,7 @@ app.secret_key = secrets.token_hex(16)
 CREDENTIALS_FILE = "/data/credentials.json"
 SHEET_NAME = "Система ремонта ВВ"
 START_COORDS = "55.775267, 37.745690"
-MASTERS = ['Антон', 'Сергей', 'Иван', 'Алексей']
+MASTERS = ['Алексей', 'Сергей', 'Транзит', 'Иван']
 PARTS = [
     ('Покрышка', 1200),
     ('Камера', 300),
@@ -90,10 +90,10 @@ db.start()
 
 MASTER_CREDENTIALS = {
     'admin': {'password': 'admin123', 'name': 'Админ', 'role': 'admin'},
-    'anton': {'password': 'anton1987', 'name': 'Антон', 'role': 'master'},
-    'sergey': {'password': 'sergey1992', 'name': 'Сергей', 'role': 'master'},
-    'ivan': {'password': 'ivan1994', 'name': 'Иван', 'role': 'master'},
     'alexey': {'password': 'alexey0304', 'name': 'Алексей', 'role': 'master'},
+    'sergey': {'password': 'sergey1992', 'name': 'Сергей', 'role': 'master'},
+    'transit': {'password': 'transit2024', 'name': 'Транзит', 'role': 'master'},
+    'ivan': {'password': 'ivan1994', 'name': 'Иван', 'role': 'master'},
     'iot': {'password': 'iot2026', 'name': 'IOT-Мастер', 'role': 'iot'}
 }
 
@@ -396,6 +396,14 @@ def get_iot_sheet_by_id(sheet_id, sheet_name=None):
 def clean_name(value):
     return ' '.join(str(value or '').replace('\xa0', ' ').split()).lower()
 
+def is_transit_master(name):
+    return clean_name(name) in ('транзит', 'сергей транзит')
+
+def same_master(left, right):
+    if clean_name(left) == clean_name(right):
+        return True
+    return is_transit_master(left) and is_transit_master(right)
+
 def column_index(header, needles, default):
     for index, title in enumerate(header or []):
         text = str(title or '').strip().lower().replace('\xa0', ' ')
@@ -542,23 +550,27 @@ def refresh_xdevice_points(force=False):
         )
         response.raise_for_status()
         items = response.json()
+        if isinstance(items, dict):
+            for key in ('items', 'data', 'objects', 'result', 'rows'):
+                if isinstance(items.get(key), list):
+                    items = items[key]
+                    break
         if not isinstance(items, list):
             raise RuntimeError("Ответ IoT не список")
         points = {}
         for obj in items:
+            if not isinstance(obj, dict):
+                continue
             state = obj.get("state") or {}
-            processed = obj.get("processedState") or {}
-            navigation = processed.get("navigation") if isinstance(processed.get("navigation"), dict) else {}
-            gps = state.get("gps") if isinstance(state.get("gps"), dict) else {}
-            lat, lon = live_bike_coords(processed, navigation, gps)
+            lat, lon = find_coords(obj)
             point = {
                 "lat": lat,
                 "lon": lon,
-                "online": bool(state.get("online")),
+                "online": bool(state.get("online")) if isinstance(state, dict) else False,
                 "name": str(obj.get("name") or ""),
-                "at": state.get("time") or gps.get("gps-time") or 0,
+                "at": (state.get("time") if isinstance(state, dict) else 0) or 0,
                 "object_id": str(obj.get("id") or ""),
-                "lock": bool(state.get("lock")),
+                "lock": bool(state.get("lock")) if isinstance(state, dict) else False,
             }
             if not point["object_id"] and lat is None:
                 continue
@@ -566,11 +578,17 @@ def refresh_xdevice_points(force=False):
             name = normalize_iot(obj.get("name"))
             if name:
                 keys.add(name.lower())
+                compact = re.sub(r'[^0-9a-zа-я]', '', name.lower())
+                if compact:
+                    keys.add(compact)
             ident = str(obj.get("id") or "")
             if ":" in ident:
-                keys.add(ident.split(":", 1)[1].lower())
+                tail = ident.split(":", 1)[1].lower()
+                keys.add(tail)
+                keys.add(re.sub(r'[^0-9a-zа-я]', '', tail))
             for key in keys:
-                points[key] = point
+                if key:
+                    points[key] = point
         _xdevice_points = points
         _xdevice_loaded_at = time.time()
         _xdevice_error = ""
@@ -597,26 +615,61 @@ def coord_number(value):
     try:
         if value is None or value == '':
             return None
+        if isinstance(value, str):
+            value = value.replace(',', '.').strip()
         number = float(value)
     except (TypeError, ValueError):
         return None
-    if abs(number) < 1:
+    if abs(number) >= 1000:
+        scaled = number / 1000000.0
+        if abs(scaled) <= 180:
+            number = scaled
+    if abs(number) < 1 or abs(number) > 180:
         return None
     return number
 
-def live_bike_coords(processed, navigation, gps):
-    pairs = (
-        (processed.get("lat"), processed.get("lon")),
-        (navigation.get("coord-latitude"), navigation.get("coord-longitude")),
-        (gps.get("gps-latitude"), gps.get("gps-longitude")),
-        (processed.get("last_valid_lat"), processed.get("last_valid_lon")),
-    )
-    for lat, lon in pairs:
-        lat_n = coord_number(lat)
-        lon_n = coord_number(lon)
-        if lat_n is not None and lon_n is not None:
-            return lat_n, lon_n
+_LAT_KEYS = {'lat', 'latitude', 'gps-latitude', 'coord-latitude', 'last_valid_lat'}
+_LON_KEYS = {'lon', 'lng', 'longitude', 'gps-longitude', 'coord-longitude', 'last_valid_lon'}
+
+def find_coords(node, depth=0):
+    if depth > 6 or node is None:
+        return None, None
+    if isinstance(node, dict):
+        lat = lon = None
+        for key, value in node.items():
+            name = str(key).lower()
+            if name in _LAT_KEYS:
+                lat = coord_number(value)
+            elif name in _LON_KEYS:
+                lon = coord_number(value)
+        if lat is not None and lon is not None:
+            return lat, lon
+        for value in node.values():
+            lat, lon = find_coords(value, depth + 1)
+            if lat is not None and lon is not None:
+                return lat, lon
+    elif isinstance(node, list):
+        for value in node[:40]:
+            lat, lon = find_coords(value, depth + 1)
+            if lat is not None and lon is not None:
+                return lat, lon
     return None, None
+
+def fetch_object_coords(object_id):
+    token = xdevice_token()
+    if not token or not object_id:
+        return None, None
+    try:
+        response = requests.get(
+            XDEVICE_URL.rstrip('/') + '/' + str(object_id),
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        return find_coords(response.json())
+    except Exception as exc:
+        logger.warning(f"Карточка IoT {object_id} не открылась: {exc}")
+        return None, None
 
 def lookup_bike_point(iot):
     ensure_xdevice_loop()
@@ -624,7 +677,18 @@ def lookup_bike_point(iot):
     key = normalize_iot(iot).lower()
     if not key:
         return None
-    return _xdevice_points.get(key)
+    point = _xdevice_points.get(key)
+    if point is None:
+        compact = re.sub(r'[^0-9a-zа-я]', '', key)
+        point = _xdevice_points.get(compact)
+    if point is None:
+        return None
+    if point.get('lat') is None or point.get('lon') is None:
+        lat, lon = fetch_object_coords(point.get('object_id'))
+        if lat is not None and lon is not None:
+            point['lat'] = lat
+            point['lon'] = lon
+    return point
 
 def resolve_ticket_iot(iot, darks, gos):
     if normalize_iot(iot):
@@ -736,6 +800,196 @@ def notify_dark_event(darks, text, uid='', event=''):
         except Exception as e:
             logger.warning(f'Не ушло сообщение куратору {darks}: {e}')
     threading.Thread(target=run, daemon=True).start()
+
+RATINGS_FILE = os.path.join(CACHE_DIR, "ratings.json")
+_rating_lock = threading.Lock()
+
+def load_ratings():
+    data = _read_json(RATINGS_FILE, {})
+    if not isinstance(data, dict):
+        data = {}
+    if not isinstance(data.get('asked'), dict):
+        data['asked'] = {}
+    if not isinstance(data.get('items'), list):
+        data['items'] = []
+    if not isinstance(data.get('sheet'), list):
+        data['sheet'] = []
+    return data
+
+def save_ratings(data):
+    _write_json(RATINGS_FILE, data)
+
+def darks_has_open_work(darks):
+    admin = get_admin_cache() or {}
+    for direction in (admin.get('directions') or {}).values():
+        for ticket in direction.get('tickets') or []:
+            if str(ticket.get('darks')) != str(darks):
+                continue
+            if ticket.get('status') in ('pending', 'todo', 'fail'):
+                return True
+    return False
+
+def maybe_ask_rating(darks, master):
+    if not darks or not master:
+        return
+    if clean_name(master) in ('iot-мастер', 'iot'):
+        return
+    if darks_has_open_work(darks):
+        return
+    day = get_msk_now().strftime('%Y-%m-%d')
+    key = f'{day}|{darks}'
+    info = (darks_ref or {}).get(str(darks)) or {}
+    with _rating_lock:
+        data = load_ratings()
+        asked = data.get('asked') or {}
+        if key in asked:
+            return
+        token = secrets.token_hex(4)
+        asked[token] = {
+            'key': key,
+            'darks': str(darks),
+            'master': master,
+            'day': day,
+            'address': info.get('address') or '',
+        }
+        asked[key] = token
+        data['asked'] = asked
+        save_ratings(data)
+    def run():
+        ok = False
+        for _attempt in range(2):
+            try:
+                response = requests.post(
+                    f'{BOT_API_URL}/ask_rating',
+                    json={
+                        'token': token,
+                        'darks': str(darks),
+                        'master': master,
+                        'address': info.get('address') or '',
+                    },
+                    timeout=12,
+                )
+                ok = response.status_code == 200
+                if ok:
+                    break
+            except Exception as exc:
+                logger.warning(f'Оценка не ушла: {exc}')
+            time.sleep(2)
+        if ok:
+            return
+        with _rating_lock:
+            stored = load_ratings()
+            asked_now = stored.get('asked') or {}
+            asked_now.pop(key, None)
+            asked_now.pop(token, None)
+            stored['asked'] = asked_now
+            save_ratings(stored)
+    threading.Thread(target=run, daemon=True).start()
+
+def flush_rating_sheet():
+    with _rating_lock:
+        stored = load_ratings()
+        pending = list(stored.get('sheet') or [])
+    if not pending:
+        return
+    try:
+        book = get_sheet_client()
+        try:
+            sheet = book.worksheet('Оценки')
+        except Exception:
+            sheet = book.add_worksheet('Оценки', rows=2000, cols=6)
+            sheet.update(
+                values=[['Дата', 'Время', 'Даркстор', 'Мастер', 'Оценка', 'Куратор']],
+                range_name='A1:F1',
+            )
+        rows = []
+        for item in pending:
+            day = item.get('day') or ''
+            try:
+                day = datetime.strptime(day, '%Y-%m-%d').strftime('%d.%m.%Y')
+            except ValueError:
+                pass
+            rows.append([
+                day,
+                item.get('time') or '',
+                item.get('darks') or '',
+                item.get('master') or '',
+                item.get('score') or '',
+                item.get('curator') or '',
+            ])
+        sheet.append_rows(rows, value_input_option='RAW')
+    except Exception as exc:
+        logger.warning(f'Оценки не записались в таблицу: {exc}')
+        return
+    with _rating_lock:
+        stored = load_ratings()
+        left = stored.get('sheet') or []
+        stored['sheet'] = left[len(pending):] if len(left) >= len(pending) else []
+        save_ratings(stored)
+
+def master_rating_value(name):
+    latest = {}
+    for item in load_ratings().get('items') or []:
+        if not same_master(item.get('master'), name):
+            continue
+        try:
+            score = int(item.get('score'))
+        except (TypeError, ValueError):
+            continue
+        key = (item.get('day'), str(item.get('darks')), item.get('chat_id') or item.get('curator'))
+        latest[key] = score
+    if not latest:
+        return None
+    return round(sum(latest.values()) / len(latest), 1)
+
+@app.route('/api/service_rating', methods=['POST'])
+def api_service_rating():
+    if not bot_hook_ok():
+        return jsonify({'success': False, 'error': 'Нет доступа'}), 403
+    body = request.json or {}
+    token = (body.get('token') or '').strip()
+    try:
+        score = int(body.get('score') or 0)
+    except (TypeError, ValueError):
+        score = 0
+    if not token or score < 1 or score > 5:
+        return jsonify({'success': False, 'error': 'Нет оценки'})
+    curator = (body.get('curator') or '').strip()
+    chat_id = str(body.get('chat_id') or '').strip()
+    with _rating_lock:
+        stored = load_ratings()
+        ask = (stored.get('asked') or {}).get(token)
+        if not isinstance(ask, dict):
+            return jsonify({'success': False, 'error': 'Запрос устарел'})
+        now = get_msk_now()
+        item = {
+            'day': ask.get('day') or now.strftime('%Y-%m-%d'),
+            'time': now.strftime('%H:%M'),
+            'darks': ask.get('darks') or '',
+            'address': ask.get('address') or '',
+            'master': ask.get('master') or '',
+            'score': score,
+            'curator': curator or chat_id,
+            'chat_id': chat_id,
+            'date_ru': now.strftime('%d.%m.%Y'),
+        }
+        items = []
+        for row in stored.get('items') or []:
+            if (
+                row.get('day') == item['day']
+                and str(row.get('darks')) == str(item['darks'])
+                and row.get('master') == item['master']
+                and (row.get('chat_id') or '') == chat_id
+            ):
+                continue
+            items.append(row)
+        items.append(item)
+        stored['items'] = items[-500:]
+        stored.setdefault('sheet', []).append(item)
+        stored['sheet'] = stored['sheet'][-200:]
+        save_ratings(stored)
+    threading.Thread(target=flush_rating_sheet, daemon=True).start()
+    return jsonify({'success': True, 'score': score})
 
 def supplier_of(gos_value):
     return (_bike_type_cache.get('supplier') or {}).get(normalize_gos(gos_value), '')
@@ -980,7 +1234,7 @@ def publish_caches(tickets):
     enrich_tickets(tickets)
     save_admin_cache(tickets)
     for master in MASTERS:
-        master_tickets = [t for t in tickets if clean_name(t.get('master')) == clean_name(master) and is_active_status(t.get('status'))]
+        master_tickets = [t for t in tickets if same_master(t.get('master'), master) and is_active_status(t.get('status'))]
         save_master_cache(master, master_tickets, '')
 
 _last_google_import = 0
@@ -1157,8 +1411,7 @@ def refresh_admin_cache():
 def refresh_master_cache(master_name):
     try:
         tickets = get_tickets_from_sheets()
-        wanted = clean_name(master_name)
-        master_tickets = [t for t in tickets if clean_name(t.get('master')) == wanted and is_active_status(t.get('status'))]
+        master_tickets = [t for t in tickets if same_master(t.get('master'), master_name) and is_active_status(t.get('status'))]
         enrich_tickets(master_tickets)
         save_master_cache(master_name, master_tickets, '')
         logger.info(f"✅ Кэш для {master_name} обновлен: {len(master_tickets)} заявок")
@@ -1728,7 +1981,7 @@ def stats_bundle(only_name=None):
             'missing': missing_count,
             'replace': replace_count,
             'avg_hours': avg,
-            'rating': None,
+            'rating': master_rating_value(name),
         })
     known = [person['avg_hours'] for person in people if person.get('avg_hours') is not None]
     if not known:
@@ -2549,11 +2802,23 @@ def api_bike_search():
         point = lookup_bike_point(iot) if normalize_iot(iot) else None
         url = ''
         online = False
+        map_error = ''
+        if not normalize_iot(iot):
+            map_error = 'В базе нет номера IoT, точку не к чему привязать'
+        elif not point:
+            if not _xdevice_points:
+                refresh_xdevice_points(force=True)
+                point = lookup_bike_point(iot)
+            if not point:
+                map_error = _xdevice_error or 'Этот IoT не найден у поставщика'
         if point and point.get('lat') is not None and point.get('lon') is not None:
             lat = point['lat']
             lon = point['lon']
             url = f'https://yandex.ru/maps/?ll={lon},{lat}&pt={lon},{lat}&z=16&l=map'
             online = bool(point.get('online'))
+            map_error = ''
+        elif point and not map_error:
+            map_error = 'У поставщика нет координат этого модуля'
         info = (darks_ref or {}).get(str(darks)) or {}
         hits.append({
             'serial': serial,
@@ -2565,6 +2830,7 @@ def api_bike_search():
             'supplier': company,
             'url': url,
             'online': online,
+            'map_error': map_error,
         })
         if len(hits) >= 20:
             break
@@ -3375,7 +3641,7 @@ def refresh_master_caches_from_admin():
         all_tickets.extend(dir_data.get('tickets', []))
     apply_pending_queue(all_tickets)
     for master in MASTERS:
-        master_tickets = [t for t in all_tickets if t.get('master') == master and is_active_status(t.get('status'))]
+        master_tickets = [t for t in all_tickets if same_master(t.get('master'), master) and is_active_status(t.get('status'))]
         save_master_cache(master, master_tickets, '')
 
 def queue_admin_status(uid, status_display, note='', skip_report=True, actor='Админ'):
@@ -3617,7 +3883,7 @@ def master_groups(name):
     master_tickets = list(cache_data.get('tickets') or [])
     if not master_tickets and not cache_data:
         tickets = get_tickets_from_sheets()
-        master_tickets = [t for t in tickets if clean_name(t.get('master')) == clean_name(name) and is_active_status(t.get('status'))]
+        master_tickets = [t for t in tickets if same_master(t.get('master'), name) and is_active_status(t.get('status'))]
         enrich_tickets(master_tickets)
         save_master_cache(name, master_tickets, '')
     else:
@@ -3667,6 +3933,7 @@ def admin_stats():
         overall=bundle['overall_hours'],
         reports=reports[:80],
         expenses=expenses[:80],
+        ratings=list(reversed(load_ratings().get('items') or []))[:40],
         now=get_msk_now().strftime('%d.%m.%Y %H:%M'),
     )
 
@@ -3821,7 +4088,7 @@ def master_darks(name, darks_number):
         filtered = [t for t in all_tickets if str(t.get('darks')) == str(darks_number)]
     else:
         tickets = get_tickets_from_sheets()
-        filtered = [t for t in tickets if clean_name(t.get('master')) == clean_name(name) and str(t.get('darks')) == str(darks_number) and is_active_status(t.get('status'))]
+        filtered = [t for t in tickets if same_master(t.get('master'), name) and str(t.get('darks')) == str(darks_number) and is_active_status(t.get('status'))]
         enrich_tickets(filtered)
         save_master_cache(name, filtered, '')
     enrich_tickets(filtered)
@@ -3830,7 +4097,7 @@ def master_darks(name, darks_number):
         t['hours_since'] = ticket_hours(t)
     fill_old_bike(filtered)
     
-    if name == 'Сергей Транзит':
+    if is_transit_master(name):
         gos_counts = {}
         for t in filtered:
             gos = t.get('gos')
@@ -3962,15 +4229,59 @@ def admin_trunks():
         rows, total_qty = trunk_rows(master)
         stock = [row for row in rows if row['qty'] > 0]
         masters.append({'name': master, 'rows': stock, 'total_qty': total_qty})
-    spent = {}
+    today = get_msk_now().date()
+    month_start = today.replace(day=1)
+    week_start = today - timedelta(days=6)
+    def period_day(value, fallback):
+        try:
+            return datetime.strptime(value or '', '%Y-%m-%d').date()
+        except ValueError:
+            return fallback
+    start = period_day(request.args.get('start'), month_start)
+    end = period_day(request.args.get('end'), today)
+    if end < start:
+        start, end = end, start
+    by_master = {name: {} for name in MASTERS}
+    total = {}
     for move in parts_log():
         if move.get('action') != 'Поставил':
             continue
-        key = move.get('name') or ''
-        bucket = spent.setdefault(key, {'name': key, 'qty': 0})
-        bucket['qty'] += int(move.get('qty') or 0)
-    spent_rows = sorted(spent.values(), key=lambda item: item['qty'], reverse=True)
-    return render_template('admin_trunks.html', masters=masters, spent=spent_rows, now=get_msk_now().strftime('%H:%M:%S'))
+        try:
+            day = datetime.strptime(str(move.get('time') or '')[:10], '%Y-%m-%d').date()
+        except ValueError:
+            continue
+        if day < start or day > end:
+            continue
+        part_name = move.get('name') or ''
+        qty = int(move.get('qty') or 0)
+        bucket = None
+        for known in MASTERS:
+            if same_master(known, move.get('master')):
+                bucket = by_master[known]
+                break
+        if bucket is None:
+            continue
+        row = bucket.setdefault(part_name, {'name': part_name, 'qty': 0})
+        row['qty'] += qty
+        total_row = total.setdefault(part_name, {'name': part_name, 'qty': 0})
+        total_row['qty'] += qty
+    spent_masters = []
+    for master in MASTERS:
+        rows = sorted(by_master[master].values(), key=lambda item: item['qty'], reverse=True)
+        spent_masters.append({'name': master, 'rows': rows, 'qty': sum(item['qty'] for item in rows)})
+    spent_rows = sorted(total.values(), key=lambda item: item['qty'], reverse=True)
+    return render_template(
+        'admin_trunks.html',
+        masters=masters,
+        spent=spent_rows,
+        spent_masters=spent_masters,
+        start=start.isoformat(),
+        end=end.isoformat(),
+        week_start=week_start.isoformat(),
+        month_start=month_start.isoformat(),
+        today=today.isoformat(),
+        now=get_msk_now().strftime('%H:%M:%S'),
+    )
 
 # ============================================================
 # API ДЛЯ МАСТЕРОВ
@@ -4032,6 +4343,7 @@ def master_done(name, darks_number, uid):
         notify_dark_event(darks_number, f'{label} отказ от эвакуации', uid, 'refuse')
     else:
         notify_dark_event(darks_number, f'✅ {label} заявка выполнена', uid, 'done')
+    maybe_ask_rating(darks_number, name)
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/fail/<uid>')
@@ -4040,6 +4352,7 @@ def master_fail(name, darks_number, uid):
     if session.get('master_name') != name:
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
     mark_bike_missing(uid, name)
+    maybe_ask_rating(darks_number, name)
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/evacuation/<uid>', methods=['POST'])
@@ -4067,6 +4380,7 @@ def master_evacuation(name, darks_number, uid):
     })
     label = ticket_label(find_cached_ticket(uid) or {'gos': request.form.get('gos', '')})
     notify_dark_event(darks_number, f'🔧 {label} нужно эвакуировать: {reason.strip()}', uid, 'evacuation')
+    maybe_ask_rating(darks_number, name)
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/taken_no_replace/<uid>', methods=['POST'])
@@ -4111,6 +4425,7 @@ def master_replace_yes(name, darks_number, uid):
         'type': 'replace_yes',
         'data': {'parts': parts, 'master': name, 'darks_number': darks_number}
     })
+    maybe_ask_rating(darks_number, name)
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/replace_no/<uid>', methods=['POST'])
@@ -4418,6 +4733,7 @@ def master_evacuation_replace():
         update_ticket_in_admin_cache(uid, 'done', 'Заменен при эвакуации', '✅ Выполнено')
         update_status_in_google_sheets(uid, '✅ Выполнено', 'Заменен при эвакуации')
         notify_dark_event(darks_number, f'✅ {old_data.get("gos") or ticket_label(ticket)} заменен и готов к эксплуатации', uid, 'replaced')
+        maybe_ask_rating(darks_number, master_name)
         
         add_to_queue({
             'uid': uid,
@@ -4451,9 +4767,7 @@ def get_transit_tickets_by_gos(master_name, gos_number):
         tickets = get_tickets_from_sheets()
         result = []
         for t in tickets:
-            if (t.get('master') == master_name and 
-                t.get('gos') == gos_number and 
-                is_active_status(t.get('status'))):
+            if (same_master(t.get('master'), master_name) and t.get('gos') == gos_number and is_active_status(t.get('status'))):
                 result.append(t)
         return result
     except Exception as e:
@@ -4502,8 +4816,8 @@ def close_all_transit_tickets(uid, master_name, gos_number, parts=''):
 def transit_done(uid):
     try:
         master_name = session.get('master_name')
-        if master_name != 'Сергей Транзит':
-            return jsonify({'success': False, 'error': 'Только для Сергея Транзита'}), 403
+        if not is_transit_master(master_name):
+            return jsonify({'success': False, 'error': 'Только для Транзита'}), 403
         
         parts = request.form.get('parts', '')
         if not parts.strip():
@@ -4527,7 +4841,7 @@ def transit_done(uid):
         
         if closed_count == 0:
             return jsonify({'success': False, 'error': 'Не найдено заявок для закрытия'}), 404
-        
+        maybe_ask_rating(target_ticket.get('darks'), master_name)
         return jsonify({
             'success': True, 
             'message': f'Закрыто {closed_count} заявок на велосипед {gos_number}',

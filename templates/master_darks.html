@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Даркстор #{{ darks_number }}</title>
     <link rel="manifest" href="/manifest.json">
-    <link rel="stylesheet" href="/static/css/master.css">
+    <link rel="stylesheet" href="/static/css/master.css?v=16">
     <style>
         .evacuation-form {
             background: #fff3e0;
@@ -172,7 +172,7 @@
         {% for t in tickets %}
         {% set is_battery = t.type in ['Аккумуляторная батарея', 'Зарядное устройство'] %}
         {% set is_evacuation = (not is_battery) and t.status == 'evacuation' %}
-        {% set is_transit = name == 'Сергей Транзит' and not is_battery %}
+        {% set is_transit = (name == 'Транзит' or name == 'Сергей Транзит') and not is_battery %}
         
         <!-- Если заявка на эвакуацию ИЛИ мастер Сергей Транзит - показываем форму замены -->
         {% if is_evacuation or is_transit %}
@@ -385,7 +385,7 @@
 
     <div class="footer">Обновлено: {{ now }}</div>
     
-    <script src="/static/js/master.js?v=15"></script>
+    <script src="/static/js/master.js?v=16"></script>
     <nav class="dock"></nav>
 </body>
 </html>

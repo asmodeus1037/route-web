@@ -26,14 +26,31 @@
         {% endfor %}
     </div>
     {% endfor %}
+    <form method="get" style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin:12px 0;">
+        <label>С <input type="date" name="start" value="{{ start }}"></label>
+        <label>По <input type="date" name="end" value="{{ end }}"></label>
+        <button class="btn btn-view" type="submit">Показать</button>
+        <a href="/admin/trunks?start={{ week_start }}&end={{ today }}">Неделя</a>
+        <a href="/admin/trunks?start={{ month_start }}&end={{ today }}">Месяц</a>
+    </form>
     <div class="card">
-        <b>Уже поставлено на велосипеды</b>
+        <b>Уже поставлено на велосипеды за период</b>
         {% for row in spent %}
         <div class="row"><span>{{ row.name }}</span><span>{{ row.qty }} шт</span></div>
         {% else %}
-        <p>Пока никто ничего не списал.</p>
+        <p>За этот период никто ничего не списал.</p>
         {% endfor %}
     </div>
+    {% for master in spent_masters %}
+    <div class="card">
+        <div class="row"><b>{{ master.name }}</b><span>{{ master.qty }} шт</span></div>
+        {% for row in master.rows %}
+        <div class="row"><span>{{ row.name }}</span><span>{{ row.qty }} шт</span></div>
+        {% else %}
+        <p>В этот период ничего не ставил.</p>
+        {% endfor %}
+    </div>
+    {% endfor %}
 </div>
 </body>
 </html>
