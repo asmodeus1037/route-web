@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Поставки и вывозы</title>
+    <title>Уведомления</title>
     <link rel="stylesheet" href="/static/css/admin.css?v=27">
     <style>
         body { padding: 16px; }
@@ -26,8 +26,8 @@
 <body>
     <div class="wrap">
         <a class="back" href="/admin">← К заявкам</a>
-        <h1>Поставки и вывозы</h1>
-        <p class="muted">Здесь закрытые задачи Транзита. Напоминание по замене ГАИ висит и с АКБ, и без, пока сами не нажмёте «Выполнено».</p>
+        <h1>Уведомления</h1>
+        <p class="muted">Только поставки, вывозы, замены и замены ГАИ. Напоминание перенести госномер в ГАИ висит и с АКБ, и без, пока не нажмёте «Выполнено».</p>
         {% for item in items if item.remind and not item.remind_done %}
         <div class="remind" id="remind-{{ item.id }}">
             <b>{{ item.operation }} · даркстор {{ item.darks }} · {{ item.date }}</b>

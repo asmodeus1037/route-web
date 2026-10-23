@@ -145,6 +145,7 @@ def apply_transit_meta(ticket):
     company = (ticket or {}).get('company') or ''
     akb = (ticket or {}).get('akb_mode') or ''
     taken = (ticket or {}).get('taken_gos') or ''
+    plan = str((ticket or {}).get('plan_qty') or '')
     for line in str(note).splitlines():
         if line.startswith('КОМПАНИЯ:') and not company:
             company = line.split(':', 1)[1].strip()
@@ -152,9 +153,12 @@ def apply_transit_meta(ticket):
             akb = line.split(':', 1)[1].strip()
         elif line.startswith('ЗАБРАН:') and not taken:
             taken = line.split(':', 1)[1].strip()
+        elif line.startswith('КОЛИЧЕСТВО:') and not plan:
+            plan = line.split(':', 1)[1].strip()
     ticket['company'] = company
     ticket['akb_mode'] = akb
     ticket['taken_gos'] = taken
+    ticket['plan_qty'] = plan
     return ticket
 
 def ticket_hours(ticket):
@@ -3164,16 +3168,23 @@ def api_admin_ticket():
         return jsonify({'success': False, 'error': 'Укажите тип техники'})
     supply = bike_type in ('Аккумуляторная батарея', 'Зарядное устройство')
     warning = ''
+    plan_qty = ''
     if task_status:
         if company not in ('Vanta', 'ВелоСтеп'):
             return jsonify({'success': False, 'error': 'Выберите компанию'})
-        if not desc:
-            desc = bike_type
-        if task_status == 'gai':
+        if task_status in ('supply', 'pickup'):
+            if not qty.isdigit() or int(qty) < 1 or int(qty) > 200:
+                return jsonify({'success': False, 'error': 'Укажите, сколько велосипедов'})
+            plan_qty = str(int(qty))
+            title = 'Поставка' if task_status == 'supply' else 'Вывоз'
+            desc = f'{title} {plan_qty} вело, {int(plan_qty) * 2} акб, {plan_qty} з.у.'
+            gos = ''
+        elif task_status == 'gai':
             if not gos:
                 return jsonify({'success': False, 'error': 'Укажите госномер забранного велосипеда'})
             if akb_choice not in ('с', 'без'):
                 return jsonify({'success': False, 'error': 'Отметьте, замена с АКБ или без'})
+            desc = 'Замена ГАИ ' + ('с АКБ' if akb_choice == 'с' else 'без АКБ')
             try:
                 rows = load_bike_rows()
             except Exception:
@@ -3216,13 +3227,14 @@ def api_admin_ticket():
     note_lines = []
     if task_status:
         note_lines.append('КОМПАНИЯ: ' + company)
+        if plan_qty:
+            note_lines.append('КОЛИЧЕСТВО: ' + plan_qty)
         if task_status == 'gai':
             note_lines.append('АКБ: ' + akb_choice)
             note_lines.append('ЗАБРАН: ' + gos)
-        if desc and desc != bike_type:
-            note_lines.append(desc)
     note = '\n'.join(note_lines)
     sheet_status = {'supply': 'Поставка', 'pickup': 'Вывоз', 'gai': 'Замена ГАИ'}.get(task_status, '🟡 В работе')
+    master_name = 'Транзит' if task_status in ('supply', 'pickup') else ''
     row = [''] * 15
     row[0] = darks
     row[1] = bike_type
@@ -3230,7 +3242,7 @@ def api_admin_ticket():
     row[3] = gos
     row[4] = 'Админ'
     row[5] = created
-    row[6] = 'Транзит' if task_status else ''
+    row[6] = master_name
     row[7] = sheet_status
     row[8] = subtype
     row[9] = note
@@ -3255,12 +3267,13 @@ def api_admin_ticket():
         'created': created,
         'timer_from': '',
         'hours_since': 0,
-        'master': 'Транзит' if task_status else '',
+        'master': master_name,
         'status': task_status or 'pending',
         'note': note,
         'company': company if task_status else '',
         'akb_mode': akb_choice if task_status == 'gai' else '',
         'taken_gos': gos if task_status == 'gai' else '',
+        'plan_qty': plan_qty,
         'evac_reason': '',
         'uid': uid,
         'row_index': row_index,
@@ -3278,7 +3291,7 @@ def api_admin_ticket():
     except Exception:
         pass
     publish_new_ticket(ticket)
-    if task_status:
+    if master_name:
         refresh_master_caches_from_admin()
     return jsonify({'success': True, 'ticket': ticket, 'warning': warning})
 
@@ -3529,6 +3542,16 @@ def load_ops():
 def save_ops(items):
     write_cache(OPS_FILE, {'items': list(items or [])[-400:]})
 
+def ops_alert_count(items=None):
+    rows = load_ops() if items is None else items
+    count = 0
+    for item in rows:
+        if item.get('remind') and not item.get('remind_done'):
+            count += 1
+        elif not item.get('seen'):
+            count += 1
+    return count
+
 def append_operation_summary(date, operation, company, darks, bikes, akb, link):
     book = get_gspread_client().open_by_key(IOT_VEHICLES_SHEET_ID)
     try:
@@ -3662,41 +3685,93 @@ def upload_act(filename, payload):
         logger.warning(f'Акт на Google Диск не ушёл: {exc}')
     return local_name, link
 
+def _sheet_cell(row, index):
+    if not row or index >= len(row) or row[index] is None:
+        return ''
+    return str(row[index]).strip()
+
+def _join_comment(old, line):
+    old = (old or '').strip()
+    line = (line or '').strip()
+    if not line or line in old:
+        return old
+    return (old + '\n' + line).strip() if old else line
+
 def append_gai_sheet(address, darks, new_data, taken_gos):
+    """Лист «Учет вело ВВ»: у забранного в столбце «Дарк» пишем ГАИ и дописываем комментарий.
+    Столбец P не трогаем: там даты возврата, не пометка ГАИ."""
     book = get_gspread_client().open_by_key(IOT_VEHICLES_SHEET_ID)
     sheet = None
     for item in book.worksheets():
+        title = (item.title or '').strip().lower()
         try:
             gid = int(item.id)
         except Exception:
             gid = item.id
-        if gid == GAI_SHEET_GID:
+        if gid == GAI_SHEET_GID or title == 'учет вело вв':
             sheet = item
             break
     if sheet is None:
-        raise RuntimeError('Лист «Замены вело» по ссылке не найден')
-    if sheet.col_count < 16:
-        sheet.add_cols(16 - sheet.col_count)
-    rows = sheet.get_all_values()
-    start = len(rows) + 1
-    for index, row in enumerate(rows, start=1):
-        if index > 1 and not any(str(cell).strip() for cell in row[:6]):
-            start = index
-            break
-    comment = 'Забрали в ГАИ ' + (taken_gos or '')
-    sheet.update(
-        f'A{start}:F{start}',
-        [[
-            (new_data or {}).get('serial') or '',
-            (new_data or {}).get('gos') or '',
-            (new_data or {}).get('iot') or '',
-            address or '',
-            str(darks or ''),
-            comment.strip(),
-        ]],
-        value_input_option='USER_ENTERED',
-    )
-    sheet.update(f'P{start}', [['ГАИ']], value_input_option='USER_ENTERED')
+        raise RuntimeError('Лист «Учет вело ВВ» не найден')
+    rows = sheet.get('A:F')
+    taken_key = normalize_gos(taken_gos)
+    give_frame = re.sub(r'\s+', '', str((new_data or {}).get('serial') or '')).lower()
+    give_gos = normalize_gos((new_data or {}).get('gos'))
+    give_iot = normalize_iot((new_data or {}).get('iot')).lower()
+    give_tail = iot_tail((new_data or {}).get('iot')) if give_iot else ''
+    taken_rows = []
+    given_row = None
+    for index, row in enumerate(rows[1:], start=2):
+        gos = normalize_gos(_sheet_cell(row, 1))
+        if taken_key and gos == taken_key:
+            taken_rows.append(index)
+            continue
+        if given_row is not None:
+            continue
+        frame = re.sub(r'\s+', '', _sheet_cell(row, 0)).lower()
+        iot = normalize_iot(_sheet_cell(row, 2)).lower()
+        if give_frame and frame == give_frame:
+            given_row = index
+        elif give_gos and gos == give_gos:
+            given_row = index
+        elif give_iot and (iot == give_iot or (give_tail and len(give_tail) >= 3 and iot_tail(_sheet_cell(row, 2)) == give_tail)):
+            given_row = index
+    date = get_msk_now().strftime('%d.%m.%Y')
+    comment = f'{date} Забрали в ГАИ {taken_gos or ""}'.strip()
+    updates = []
+    for index in taken_rows:
+        row = rows[index - 1] if index - 1 < len(rows) else []
+        updates.append({'range': f'E{index}', 'values': [['ГАИ']]})
+        updates.append({'range': f'F{index}', 'values': [[_join_comment(_sheet_cell(row, 5), comment)]]})
+    if given_row:
+        updates.append({'range': f'E{given_row}', 'values': [[str(darks or '')]]})
+        if address:
+            updates.append({'range': f'D{given_row}', 'values': [[address]]})
+    try:
+        if updates:
+            sheet.batch_update(updates, value_input_option='USER_ENTERED')
+        elif (new_data or {}).get('serial') or (new_data or {}).get('gos') or (new_data or {}).get('iot'):
+            sheet.append_row(
+                [
+                    (new_data or {}).get('serial') or '',
+                    (new_data or {}).get('gos') or '',
+                    (new_data or {}).get('iot') or '',
+                    address or '',
+                    str(darks or ''),
+                    '',
+                ],
+                value_input_option='USER_ENTERED',
+            )
+        if not taken_rows:
+            logger.warning(f'Забранный госномер {taken_gos or "-"} в «Учет вело ВВ» не найден, комментарий некуда дописать')
+    except Exception as exc:
+        text = str(exc).lower()
+        if 'protected' in text or 'защищ' in text:
+            raise RuntimeError(
+                'Лист «Учет вело ВВ» закрыт защитой. Откройте защиту этого листа и добавьте '
+                'route-cache@telegramsenderbot.iam.gserviceaccount.com'
+            ) from exc
+        raise
 
 def lookup_catalog_bike(token):
     text = (token or '').strip()
@@ -3904,7 +3979,10 @@ def master_gai_done(name, uid):
         append_gai_sheet(ticket.get('address') or '', ticket.get('darks') or '', new_data, taken)
     except Exception as exc:
         logger.warning(f'Замена ГАИ в таблицу не записалась: {exc}')
-        return jsonify({'success': False, 'error': 'Не удалось записать в лист «Замены вело»'})
+        text = str(exc)
+        if 'защит' in text.lower() or 'protected' in text.lower():
+            return jsonify({'success': False, 'error': text})
+        return jsonify({'success': False, 'error': 'Не удалось записать в лист «Учет вело ВВ»'})
     date = get_msk_now().strftime('%d.%m.%Y')
     company = ticket.get('company') or 'Vanta'
     with_akb = ticket.get('akb_mode') == 'с'
@@ -3951,8 +4029,18 @@ def master_gai_done(name, uid):
 def admin_ops():
     if session.get('role') != 'admin':
         return redirect(url_for('login_page'))
-    items = list(reversed(load_ops()))
-    return render_template('admin_ops.html', items=items)
+    with _ops_lock:
+        items = load_ops()
+        changed = False
+        for item in items:
+            if item.get('remind') and not item.get('remind_done'):
+                continue
+            if not item.get('seen'):
+                item['seen'] = True
+                changed = True
+        if changed:
+            save_ops(items)
+    return render_template('admin_ops.html', items=list(reversed(items)))
 
 @app.route('/admin/ops/<uid>/file')
 @login_required
@@ -4257,7 +4345,7 @@ def admin_panel():
     else:
         db_line = 'База ещё не ответила. Если так и останется, на Amvera проверьте, что база запущена.'
     try:
-        ops_open = sum(1 for item in load_ops() if item.get('remind') and not item.get('remind_done'))
+        ops_open = ops_alert_count()
     except Exception:
         ops_open = 0
     return render_template('admin.html',
@@ -5554,7 +5642,15 @@ def export_removal_reason(old_data, reason):
             logger.warning(f'Велосипед не найден в «Общее»: IoT {iot_key or "-"}, гос {gos_key or "-"}')
             return
         text = (reason or '').strip() or 'Эвакуация'
-        sheet.update(f'J{target}', [[text]], value_input_option='USER_ENTERED')
+        date = get_msk_now().strftime('%d.%m.%Y')
+        line = f'{date} {text}'
+        current_row = rows[target - 1] if 0 < target <= len(rows) else []
+        current = _sheet_cell(current_row, 9)
+        if current and line not in current:
+            line = current + '\n' + line
+        elif current and line in current:
+            line = current
+        sheet.update(values=[[line]], range_name=f'J{target}', value_input_option='USER_ENTERED')
         how = 'IoT и госномер' if both else 'только IoT'
         logger.info(f'Причина эвакуации записана в «Общее», строка {target}, поиск: {how}')
     except Exception as e:
@@ -5632,6 +5728,24 @@ def master_evacuation_replace():
         update_status_in_google_sheets(uid, '✅ Выполнено', 'Заменен при эвакуации')
         notify_dark_event(darks_number, f'✅ {old_data.get("gos") or ticket_label(ticket)} заменен и готов к эксплуатации', uid, 'replaced')
         maybe_ask_rating(darks_number, master_name)
+        try:
+            remember_operation({
+                'id': uid,
+                'date': get_msk_now().strftime('%d.%m.%Y'),
+                'operation': 'Замена',
+                'company': '',
+                'darks': str(darks_number or ''),
+                'bikes': 1,
+                'akb': '',
+                'doc': '',
+                'doc_url': '',
+                'remind': False,
+                'remind_done': False,
+                'seen': False,
+                'text': f"Замена. Забрали {old_data.get('gos') or ''}, отдали {new_data.get('gos') or ''}.",
+            })
+        except Exception as exc:
+            logger.warning(f'Уведомление о замене не сохранилось: {exc}')
         
         add_to_queue({
             'uid': uid,

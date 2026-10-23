@@ -188,7 +188,7 @@
             <div class="field-group">
                 <div class="row">
                     <label>Велосипедов, шт</label>
-                    <input type="number" id="supplyQty_{{ t.uid }}" min="1" max="200" inputmode="numeric" placeholder="Сколько штук">
+                    <input type="number" id="supplyQty_{{ t.uid }}" min="1" max="200" inputmode="numeric" placeholder="Сколько штук" value="{{ t.plan_qty or '' }}">
                 </div>
             </div>
             <button type="button" class="submit-btn" onclick="submitSupply('{{ name }}', '{{ t.uid }}')">Готово</button>
@@ -201,11 +201,11 @@
                 <span class="status-badge status-pending">{{ t.company or 'Компания не указана' }}</span>
             </div>
             <div class="ticket-desc">{{ t.desc }}</div>
-            <p class="task-note">Сначала количество. Потом по одному полю на велосипед: госномер или IoT. «Верно» сверяет с базой и закрывает поле. АКБ введите отдельно, их может быть меньше.</p>
+            <p class="task-note">Выше написано, сколько надо вывезти. Если на точке другое число, поправьте его. Потом госномер или IoT каждого велосипеда и сколько АКБ забрали по факту.</p>
             <div class="field-group">
                 <div class="row">
                     <label>Велосипедов, шт</label>
-                    <input type="number" id="pickupQty_{{ t.uid }}" min="1" max="80" inputmode="numeric" placeholder="Сколько забираете">
+                    <input type="number" id="pickupQty_{{ t.uid }}" min="1" max="80" inputmode="numeric" placeholder="Сколько забираете" value="{{ t.plan_qty or '' }}">
                 </div>
             </div>
             <button type="button" class="submit-btn" id="pickupBuild_{{ t.uid }}" onclick="buildPickupSlots('{{ t.uid }}')">Дальше</button>

@@ -43,6 +43,11 @@
         .btn-mini.on { color: #166534; border-color: #86efac; background: #f0fdf4; }
         .btn-mini.off { color: #9f1239; border-color: #fda4af; background: #fff1f2; }
         .btn-mini:disabled { opacity: 0.55; cursor: wait; }
+        .bell-link { display: inline-flex; align-items: center; gap: 6px; }
+        .bell-badge { background: #dc2626; color: #fff; border-radius: 999px; min-width: 18px; height: 18px; padding: 0 5px; font-size: 12px; line-height: 18px; font-weight: 800; }
+        .ticket-row.gai-row { background: #ffedd5 !important; box-shadow: inset 4px 0 0 #ea580c; }
+        .ticket-row.supply-row { background: #dcfce7 !important; box-shadow: inset 4px 0 0 #16a34a; }
+        .ticket-row.pickup-row { background: #dbeafe !important; box-shadow: inset 4px 0 0 #2563eb; }
         @media (max-width: 760px) {
             body { padding-bottom: 24px; }
             .tabs { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -106,7 +111,10 @@
             <button class="btn btn-view" type="button" onclick="openBikeSearch()">Поиск вело</button>
             <button class="btn btn-view" type="button" onclick="openDocs()">Документы</button>
             <a class="btn btn-view" href="/admin/stats">Статистика</a>
-            <a class="btn btn-view" href="/admin/ops">Поставки и вывозы{% if ops_open %} ({{ ops_open }}){% endif %}</a>
+            <a class="btn btn-view bell-link" href="/admin/ops">
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 22a2.2 2.2 0 0 0 2.2-2.2h-4.4A2.2 2.2 0 0 0 12 22zm7-6V11a7 7 0 0 0-5-6.7V3.5a2 2 0 1 0-4 0v.8A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2z"/></svg>
+                Уведомления{% if ops_open %}<span class="bell-badge">{{ ops_open }}</span>{% endif %}
+            </a>
         </div>
         <div class="action-group">
             <span class="action-label">Мастера</span>
@@ -315,15 +323,18 @@
                 </div>
                 <p class="task-note" style="color:#64748b;">Без этой отметки задача не создастся. Напоминание перенести госномер в ГАИ появится и с АКБ, и без.</p>
             </div>
-            <label>Описание проблемы</label>
-            <input id="createDesc" placeholder="Что сломалось">
+            <div id="createDescWrap">
+                <label>Описание проблемы</label>
+                <input id="createDesc" placeholder="Что сломалось">
+            </div>
             <div id="createGosWrap">
                 <label id="createGosLabel">Госномер велосипеда, например РЕ111Р</label>
                 <input id="createGos" placeholder="РЕ111Р">
             </div>
             <div id="createQtyWrap" style="display:none;">
-                <label>Количество</label>
-                <input id="createQty" inputmode="numeric" placeholder="Сколько штук">
+                <label id="createQtyLabel">Количество</label>
+                <input id="createQty" inputmode="numeric" placeholder="Сколько велосипедов">
+                <p id="createQtyHint" style="display:none;color:#64748b;font-size:13px;margin:8px 0 0;">В задаче будет написано, например: «Поставка 5 вело, 10 акб, 5 з.у.» АКБ по 2 на велосипед, зарядка по 1.</p>
             </div>
         </div>
         <div style="margin-top:12px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
@@ -416,6 +427,6 @@
         now: '{{ now }}'
     };
 </script>
-<script src="/static/js/admin.js?v=27"></script>
+<script src="/static/js/admin.js?v=28"></script>
 </body>
 </html>

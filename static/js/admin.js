@@ -1233,9 +1233,16 @@ function toggleCustomType() {
     var supply = type === 'Аккумуляторная батарея' || type === 'Зарядное устройство';
     var transitTask = type === 'Поставка' || type === 'Вывоз' || type === 'Замена ГАИ';
     var gai = type === 'Замена ГАИ';
+    var transitQty = type === 'Поставка' || type === 'Вывоз';
     document.getElementById('createCustom').style.display = type === 'Свой вариант' ? 'block' : 'none';
-    document.getElementById('createGosWrap').style.display = (supply || type === 'Поставка' || type === 'Вывоз') ? 'none' : 'block';
-    document.getElementById('createQtyWrap').style.display = supply ? 'block' : 'none';
+    var descWrap = document.getElementById('createDescWrap');
+    if (descWrap) descWrap.style.display = transitTask ? 'none' : 'block';
+    document.getElementById('createGosWrap').style.display = (supply || transitQty) ? 'none' : 'block';
+    document.getElementById('createQtyWrap').style.display = (supply || transitQty) ? 'block' : 'none';
+    var qtyLabel = document.getElementById('createQtyLabel');
+    if (qtyLabel) qtyLabel.textContent = transitQty ? 'Сколько велосипедов' : 'Количество';
+    var hint = document.getElementById('createQtyHint');
+    if (hint) hint.style.display = transitQty ? 'block' : 'none';
     var company = document.getElementById('createCompanyWrap');
     var akb = document.getElementById('createAkbWrap');
     if (company) company.style.display = transitTask ? 'block' : 'none';
@@ -1449,7 +1456,11 @@ function renderTicketsGrouped(tickets, containerId) {
             if (!isProcessed && t.hours_since > 48) hoursClass = 'overdue';
             else if (!isProcessed && t.hours_since >= 32) hoursClass = 'warning';
             
-            html += '<div class="ticket-row' + (isEvacuation ? ' evacuation-row' : '') + (isProcessed ? ' processed-row' : '') + (isQueued ? ' queued-row' : '') + (String(t.contact || '').trim().toLowerCase() === 'админ' ? ' admin-made' : '') + '" data-uid="' + t.uid + '">';
+            var taskClass = '';
+            if (t.status === 'gai') taskClass = ' gai-row';
+            else if (t.status === 'supply') taskClass = ' supply-row';
+            else if (t.status === 'pickup') taskClass = ' pickup-row';
+            html += '<div class="ticket-row' + taskClass + (isEvacuation ? ' evacuation-row' : '') + (isProcessed ? ' processed-row' : '') + (isQueued ? ' queued-row' : '') + (String(t.contact || '').trim().toLowerCase() === 'админ' ? ' admin-made' : '') + '" data-uid="' + t.uid + '">';
             html += '<span class="id">' + (t.gos || '—') + '</span>';
             html += '<span class="desc" title="' + (t.display_desc || t.desc || '-') + '">' + originBadge(t.source, t.contact) + supplierBadge(t.supplier) + (t.display_desc || t.desc || '-');
             if (t.contact) {
