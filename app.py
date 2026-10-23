@@ -3975,14 +3975,6 @@ def master_gai_done(name, uid):
     if not new_data['serial'] or not new_data['gos'] or not new_data['iot']:
         return jsonify({'success': False, 'error': 'Введите номер рамы, госномер и IoT'})
     taken = ticket.get('taken_gos') or ticket.get('gos') or ''
-    try:
-        append_gai_sheet(ticket.get('address') or '', ticket.get('darks') or '', new_data, taken)
-    except Exception as exc:
-        logger.warning(f'Замена ГАИ в таблицу не записалась: {exc}')
-        text = str(exc)
-        if 'защит' in text.lower() or 'protected' in text.lower():
-            return jsonify({'success': False, 'error': text})
-        return jsonify({'success': False, 'error': 'Не удалось записать в лист «Учет вело ВВ»'})
     date = get_msk_now().strftime('%d.%m.%Y')
     company = ticket.get('company') or 'Vanta'
     with_akb = ticket.get('akb_mode') == 'с'
