@@ -1211,9 +1211,9 @@ function submitDoc() {
         document.body.appendChild(link);
         link.click();
         link.remove();
-        if (file.note.indexOf('drive-failed') !== -1) showToastModern('Документ скачан, на Google Диск не сохранился', 'error');
+        if (file.note.indexOf('drive-failed') !== -1) showToastModern('Документ скачан, на Яндекс Диск не сохранился', 'error');
         else if (file.note.indexOf('sheet-failed') !== -1) showToastModern('Документ скачан, в таблицу не записался', 'error');
-        else showToastModern('Документ скачан и сохранён на Google Диск', 'success');
+        else showToastModern('Документ скачан и сохранён на Яндекс Диск', 'success');
     })
     .catch(function(error) {
         alert(error.message || 'Не создалось');

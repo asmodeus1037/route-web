@@ -3701,9 +3701,57 @@ def drive_access_token():
     return creds.get_access_token().access_token
 
 DRIVE_ACTS_FOLDER = '1w0QbWh_zwkQEF_Q8dkvFPSbWm80tmnSi'
+YANDEX_DISK_TOKEN = 'y0__wgBELLdxZkEGNeyTSCMsM2_GTCIr8vnByDQ44mvVfLYxF-X-91xCao0g_N4'
+YANDEX_DISK_FOLDER = 'Поставки вывозы замены'
 
 def drive_folder_id(token):
     return DRIVE_ACTS_FOLDER
+
+def yandex_upload(filename, payload):
+    headers = {'Authorization': 'OAuth ' + YANDEX_DISK_TOKEN}
+    folder = requests.put(
+        'https://cloud-api.yandex.net/v1/disk/resources',
+        params={'path': YANDEX_DISK_FOLDER},
+        headers=headers,
+        timeout=20,
+    )
+    if folder.status_code not in (201, 409):
+        folder.raise_for_status()
+    path = YANDEX_DISK_FOLDER + '/' + filename
+    slot = requests.get(
+        'https://cloud-api.yandex.net/v1/disk/resources/upload',
+        params={'path': path, 'overwrite': 'true'},
+        headers=headers,
+        timeout=20,
+    )
+    slot.raise_for_status()
+    href = (slot.json() or {}).get('href')
+    if not href:
+        raise RuntimeError('Яндекс не дал адрес загрузки')
+    sent = requests.put(href, data=payload, timeout=60)
+    if sent.status_code not in (201, 202):
+        sent.raise_for_status()
+    link = ''
+    try:
+        published = requests.put(
+            'https://cloud-api.yandex.net/v1/disk/resources/publish',
+            params={'path': path},
+            headers=headers,
+            timeout=20,
+        )
+        if published.status_code not in (200, 201):
+            published.raise_for_status()
+        info = requests.get(
+            'https://cloud-api.yandex.net/v1/disk/resources',
+            params={'path': path},
+            headers=headers,
+            timeout=20,
+        )
+        info.raise_for_status()
+        link = (info.json() or {}).get('public_url') or ''
+    except Exception as exc:
+        logger.warning(f'Файл на Яндекс Диске есть, ссылка не открылась: {exc}')
+    return link
 
 def upload_act(filename, payload):
     os.makedirs(ACTS_DIR, exist_ok=True)
@@ -3713,35 +3761,9 @@ def upload_act(filename, payload):
         handle.write(payload)
     link = ''
     try:
-        token = drive_access_token()
-        folder = drive_folder_id(token)
-        boundary = 'routeact' + secrets.token_hex(8)
-        meta = json.dumps({'name': filename, 'parents': [folder]}, ensure_ascii=False)
-        body = (
-            f'--{boundary}\r\n'
-            'Content-Type: application/json; charset=UTF-8\r\n\r\n'
-            f'{meta}\r\n'
-            f'--{boundary}\r\n'
-            'Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document\r\n\r\n'
-        ).encode('utf-8') + payload + f'\r\n--{boundary}--'.encode('utf-8')
-        response = requests.post(
-            'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
-            data=body,
-            headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'multipart/related; boundary=' + boundary},
-            timeout=40,
-        )
-        response.raise_for_status()
-        file_id = response.json().get('id')
-        if file_id:
-            requests.post(
-                f'https://www.googleapis.com/drive/v3/files/{file_id}/permissions',
-                json={'role': 'reader', 'type': 'anyone'},
-                headers={'Authorization': 'Bearer ' + token},
-                timeout=20,
-            )
-            link = 'https://drive.google.com/file/d/' + file_id + '/view'
+        link = yandex_upload(local_name, payload)
     except Exception as exc:
-        logger.warning(f'Акт на Google Диск не ушёл: {exc}')
+        logger.warning(f'Акт на Яндекс Диск не ушёл: {exc}')
     return local_name, link
 
 def _sheet_cell(row, index):
