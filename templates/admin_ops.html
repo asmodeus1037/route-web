@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Поставки и вывозы</title>
+    <link rel="stylesheet" href="/static/css/admin.css?v=27">
+    <style>
+        body { padding: 16px; }
+        .wrap { max-width: 980px; margin: 0 auto; }
+        h1 { font-size: 26px; margin: 0 0 6px; }
+        .muted { color: #64748b; margin-bottom: 16px; }
+        .back { display: inline-block; margin-bottom: 12px; color: #334155; font-weight: 700; }
+        .remind { background: #fff7ed; border: 1px solid #fdba74; border-radius: 14px; padding: 14px; margin: 0 0 12px; }
+        .remind b { display: block; margin-bottom: 6px; }
+        .remind p { margin: 0 0 10px; }
+        table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 14px; overflow: hidden; }
+        th, td { text-align: left; padding: 12px 10px; border-bottom: 1px solid #eef2f6; font-size: 15px; vertical-align: top; }
+        th { font-size: 12px; color: #64748b; }
+        .btn { display: inline-block; border: 0; border-radius: 10px; padding: 8px 12px; font-weight: 800; cursor: pointer; text-decoration: none; }
+        .btn-ok { background: #16a34a; color: #fff; }
+        .btn-file { background: #e2e8f0; color: #0f172a; margin-right: 6px; }
+        .done { color: #166534; font-weight: 700; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <a class="back" href="/admin">← К заявкам</a>
+        <h1>Поставки и вывозы</h1>
+        <p class="muted">Здесь закрытые задачи Транзита. Напоминание по замене ГАИ висит и с АКБ, и без, пока сами не нажмёте «Выполнено».</p>
+        {% for item in items if item.remind and not item.remind_done %}
+        <div class="remind" id="remind-{{ item.id }}">
+            <b>{{ item.operation }} · даркстор {{ item.darks }} · {{ item.date }}</b>
+            <p>{{ item.text }}</p>
+            <button type="button" class="btn btn-ok" onclick="ackOp('{{ item.id }}')">Выполнено</button>
+        </div>
+        {% endfor %}
+        <table>
+            <tr>
+                <th>Дата</th>
+                <th>Операция</th>
+                <th>Компания</th>
+                <th>Даркстор</th>
+                <th>Вело</th>
+                <th>АКБ</th>
+                <th>Документ</th>
+            </tr>
+            {% for item in items %}
+            <tr>
+                <td>{{ item.date }}</td>
+                <td>{{ item.operation }}{% if item.remind and item.remind_done %}<div class="done">В ГАИ перенесено</div>{% endif %}</td>
+                <td>{{ item.company or '—' }}</td>
+                <td>{{ item.darks }}</td>
+                <td>{{ item.bikes }}</td>
+                <td>{{ item.akb }}</td>
+                <td>
+                    {% if item.doc %}
+                    <a class="btn btn-file" href="/admin/ops/{{ item.id }}/file">Скачать</a>
+                    {% endif %}
+                    {% if item.doc_url %}
+                    <a href="{{ item.doc_url }}" target="_blank" rel="noopener">Диск</a>
+                    {% elif not item.doc %}
+                    —
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7">Пока пусто. Строка появится, когда Транзит нажмёт «Готово».</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+    <script>
+    function ackOp(uid) {
+        fetch('/admin/ops/' + encodeURIComponent(uid) + '/ack', { method: 'POST', credentials: 'same-origin' })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (!data.success) {
+                    alert(data.error || 'Не отметилось');
+                    return;
+                }
+                var box = document.getElementById('remind-' + uid);
+                if (box) box.remove();
+                location.reload();
+            })
+            .catch(function() { alert('Нет сети'); });
+    }
+    </script>
+</body>
+</html>

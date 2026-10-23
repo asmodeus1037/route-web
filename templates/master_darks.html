@@ -149,6 +149,9 @@
             color: #64748b;
             font-weight: 400;
         }
+        .task-note { color: #475569; font-size: 14px; margin: 8px 0 12px; line-height: 1.4; }
+        .slot-warn { color: #b45309; font-size: 13px; font-weight: 700; margin-top: 4px; }
+        .slot-ok { color: #166534; font-size: 13px; font-weight: 700; margin-top: 4px; }
     </style>
 </head>
 <body data-master="{{ name }}" data-page="route">
@@ -173,9 +176,79 @@
         {% set is_battery = t.type in ['Аккумуляторная батарея', 'Зарядное устройство'] %}
         {% set is_evacuation = (not is_battery) and t.status == 'evacuation' %}
         {% set is_transit = (name == 'Транзит' or name == 'Сергей Транзит') and not is_battery %}
-        
-        <!-- Если заявка на эвакуацию ИЛИ мастер Сергей Транзит - показываем форму замены -->
-        {% if is_evacuation or is_transit %}
+
+        {% if is_transit and t.status == 'supply' %}
+        <div class="ticket evacuation-form" id="ticket-{{ t.uid }}" data-uid="{{ t.uid }}">
+            <div class="ticket-header">
+                <span class="ticket-id">ПОСТАВКА</span>
+                <span class="status-badge status-pending">{{ t.company or 'Компания не указана' }}</span>
+            </div>
+            <div class="ticket-desc">{{ t.desc }}</div>
+            <p class="task-note">Напишите, сколько велосипедов привезли. АКБ посчитаются сами: 2 на каждый велосипед. Номера вводить не нужно.</p>
+            <div class="field-group">
+                <div class="row">
+                    <label>Велосипедов, шт</label>
+                    <input type="number" id="supplyQty_{{ t.uid }}" min="1" max="200" inputmode="numeric" placeholder="Сколько штук">
+                </div>
+            </div>
+            <button type="button" class="submit-btn" onclick="submitSupply('{{ name }}', '{{ t.uid }}')">Готово</button>
+        </div>
+
+        {% elif is_transit and t.status == 'pickup' %}
+        <div class="ticket evacuation-form" id="ticket-{{ t.uid }}" data-uid="{{ t.uid }}" data-darks="{{ darks_number }}">
+            <div class="ticket-header">
+                <span class="ticket-id">ВЫВОЗ</span>
+                <span class="status-badge status-pending">{{ t.company or 'Компания не указана' }}</span>
+            </div>
+            <div class="ticket-desc">{{ t.desc }}</div>
+            <p class="task-note">Сначала количество. Потом по одному полю на велосипед: госномер или IoT. «Верно» сверяет с базой и закрывает поле. АКБ введите отдельно, их может быть меньше.</p>
+            <div class="field-group">
+                <div class="row">
+                    <label>Велосипедов, шт</label>
+                    <input type="number" id="pickupQty_{{ t.uid }}" min="1" max="80" inputmode="numeric" placeholder="Сколько забираете">
+                </div>
+            </div>
+            <button type="button" class="submit-btn" id="pickupBuild_{{ t.uid }}" onclick="buildPickupSlots('{{ t.uid }}')">Дальше</button>
+            <div id="pickupBody_{{ t.uid }}" hidden>
+                <div id="pickupSlots_{{ t.uid }}"></div>
+                <div class="field-group">
+                    <div class="row">
+                        <label>АКБ, шт</label>
+                        <input type="number" id="pickupAkb_{{ t.uid }}" min="0" max="500" inputmode="numeric" placeholder="Сколько АКБ забрали">
+                    </div>
+                </div>
+                <button type="button" class="submit-btn" onclick="submitPickup('{{ name }}', '{{ t.uid }}')">Готово</button>
+            </div>
+        </div>
+
+        {% elif is_transit and t.status == 'gai' %}
+        <div class="ticket evacuation-form" id="ticket-{{ t.uid }}" data-uid="{{ t.uid }}">
+            <div class="ticket-header">
+                <span class="ticket-id">ЗАМЕНА ГАИ</span>
+                <span class="status-badge status-pending">{% if t.akb_mode == 'с' %}с АКБ{% elif t.akb_mode == 'без' %}без АКБ{% else %}АКБ не указаны{% endif %}</span>
+            </div>
+            <div class="gos-display">
+                <span class="label">Забрали в ГАИ:</span> {{ t.taken_gos or t.gos or 'госномер не указан' }}
+            </div>
+            <p class="task-note">Старый велосипед подтверждать не нужно. Напишите только тот, который отдаёте: раму, госномер и IoT. Компания: {{ t.company or '—' }}.</p>
+            <div class="field-group">
+                <div class="row">
+                    <label>Номер рамы</label>
+                    <input type="text" id="gaiFrame_{{ t.uid }}" placeholder="Номер рамы">
+                </div>
+                <div class="row">
+                    <label>Госномер</label>
+                    <input type="text" id="gaiGos_{{ t.uid }}" placeholder="Госномер">
+                </div>
+                <div class="row">
+                    <label>IoT</label>
+                    <input type="text" id="gaiIot_{{ t.uid }}" placeholder="Номер IoT">
+                </div>
+            </div>
+            <button type="button" class="submit-btn" onclick="submitGai('{{ name }}', '{{ t.uid }}')">Готово</button>
+        </div>
+
+        {% elif is_evacuation %}
         <div class="ticket evacuation-form" id="ticket-{{ t.uid }}" data-uid="{{ t.uid }}" data-gos="{{ t.gos }}">
             <div class="ticket-header">
                 <span class="ticket-id">
@@ -385,7 +458,7 @@
 
     <div class="footer">Обновлено: {{ now }}</div>
     
-    <script src="/static/js/master.js?v=16"></script>
+    <script src="/static/js/master.js?v=17"></script>
     <nav class="dock"></nav>
 </body>
 </html>

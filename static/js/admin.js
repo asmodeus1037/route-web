@@ -1231,20 +1231,32 @@ function toggleCustomType() {
     var chosen = document.querySelector('input[name="createType"]:checked');
     var type = chosen ? chosen.value : '';
     var supply = type === 'Аккумуляторная батарея' || type === 'Зарядное устройство';
+    var transitTask = type === 'Поставка' || type === 'Вывоз' || type === 'Замена ГАИ';
+    var gai = type === 'Замена ГАИ';
     document.getElementById('createCustom').style.display = type === 'Свой вариант' ? 'block' : 'none';
-    document.getElementById('createGosWrap').style.display = supply ? 'none' : 'block';
+    document.getElementById('createGosWrap').style.display = (supply || type === 'Поставка' || type === 'Вывоз') ? 'none' : 'block';
     document.getElementById('createQtyWrap').style.display = supply ? 'block' : 'none';
+    var company = document.getElementById('createCompanyWrap');
+    var akb = document.getElementById('createAkbWrap');
+    if (company) company.style.display = transitTask ? 'block' : 'none';
+    if (akb) akb.style.display = gai ? 'block' : 'none';
+    var label = document.getElementById('createGosLabel');
+    if (label) label.textContent = gai ? 'Госномер велосипеда, который забрали в ГАИ' : 'Госномер велосипеда, например РЕ111Р';
 }
 
 function submitCreateTicket() {
     var chosen = document.querySelector('input[name="createType"]:checked');
+    var company = document.querySelector('input[name="createCompany"]:checked');
+    var akb = document.querySelector('input[name="createAkb"]:checked');
     var payload = {
         darks: document.getElementById('createDarks').value.trim(),
         type: chosen ? chosen.value : '',
         custom_type: document.getElementById('createCustom').value.trim(),
         desc: document.getElementById('createDesc').value.trim(),
         gos: document.getElementById('createGos').value.trim(),
-        qty: document.getElementById('createQty').value.trim()
+        qty: document.getElementById('createQty').value.trim(),
+        company: company ? company.value : '',
+        akb: akb ? akb.value : ''
     };
     fetch('/api/admin_ticket', {
         method: 'POST',
@@ -1270,7 +1282,8 @@ function submitCreateTicket() {
         document.getElementById('createGos').value = '';
         document.getElementById('createQty').value = '';
         document.getElementById('createCustom').value = '';
-        showToastModern('Заявка создана', 'success');
+        if (data.warning) alert(data.warning);
+        showToastModern(data.warning ? 'Заявка создана, есть предупреждение' : 'Заявка создана', 'success');
         renderCurrentTab();
     })
     .catch(function(error) {
@@ -1416,8 +1429,12 @@ function renderTicketsGrouped(tickets, containerId) {
                 statusDisplay = '🔵 Доделать';
             } else if (t.status === 'processed' || t.status === 'fail') {
                 statusDisplay = '⏹️ Обработано';
-            } else if (t.status === 'evacuation') {
-                statusDisplay = '🔧 Эвакуация';
+            } else if (t.status === 'supply') {
+                statusDisplay = 'Поставка';
+            } else if (t.status === 'pickup') {
+                statusDisplay = 'Вывоз';
+            } else if (t.status === 'gai') {
+                statusDisplay = 'Замена ГАИ';
             }
             
             var hoursDisplay = t.hours_since !== undefined ? t.hours_since.toFixed(1) : '0';
@@ -1458,15 +1475,19 @@ function renderTicketsGrouped(tickets, containerId) {
             html += '</select></span></span>';
             
             html += '<span class="field"><span class="field-label">Статус</span>';
-            html += '<select class="status-select" data-uid="' + t.uid + '" data-old-status="' + statusDisplay + '" onchange="updateStatus(this)" style="padding:2px 6px;border-radius:4px;border:1px solid #d1d5db;font-size:10px;background:white;width:100%;max-width:100px;cursor:pointer;">';
-            html += '<option value="🟡 В работе"' + (statusDisplay === '🟡 В работе' ? ' selected' : '') + '>🟡 В работе</option>';
-            html += '<option value="✅ Выполнено"' + (statusDisplay === '✅ Выполнено' ? ' selected' : '') + '>✅ Выполнено</option>';
-            html += '<option value="🔵 Доделать"' + (statusDisplay === '🔵 Доделать' ? ' selected' : '') + '>🔵 Доделать</option>';
-            html += '<option value="⏹️ Обработано"' + (statusDisplay === '⏹️ Обработано' ? ' selected' : '') + '>⏹️ Обработано</option>';
-            if (!isSupplyTicket(t)) {
-                html += '<option value="🔧 Эвакуация"' + (statusDisplay === '🔧 Эвакуация' ? ' selected' : '') + '>🔧 Эвакуация</option>';
+            if (t.status === 'supply' || t.status === 'pickup' || t.status === 'gai') {
+                html += '<span class="type-badge">' + statusDisplay + '</span>';
+            } else {
+                html += '<select class="status-select" data-uid="' + t.uid + '" data-old-status="' + statusDisplay + '" onchange="updateStatus(this)" style="padding:2px 6px;border-radius:4px;border:1px solid #d1d5db;font-size:10px;background:white;width:100%;max-width:100px;cursor:pointer;">';
+                html += '<option value="🟡 В работе"' + (statusDisplay === '🟡 В работе' ? ' selected' : '') + '>🟡 В работе</option>';
+                html += '<option value="✅ Выполнено"' + (statusDisplay === '✅ Выполнено' ? ' selected' : '') + '>✅ Выполнено</option>';
+                html += '<option value="🔵 Доделать"' + (statusDisplay === '🔵 Доделать' ? ' selected' : '') + '>🔵 Доделать</option>';
+                html += '<option value="⏹️ Обработано"' + (statusDisplay === '⏹️ Обработано' ? ' selected' : '') + '>⏹️ Обработано</option>';
+                if (!isSupplyTicket(t)) {
+                    html += '<option value="🔧 Эвакуация"' + (statusDisplay === '🔧 Эвакуация' ? ' selected' : '') + '>🔧 Эвакуация</option>';
+                }
+                html += '</select>';
             }
-            html += '</select>';
             html += '</span></span>';
             
             html += '<span class="hours ' + hoursClass + '">⏱️ ' + hoursDisplay + ' ч</span>';

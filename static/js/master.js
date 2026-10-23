@@ -447,21 +447,23 @@ function togglePanel(uid) {
         var input = panel.querySelector('.part-query, input[name="parts"], textarea');
         if (input) {
             input.focus();
-            liftField(input);
+            holdField(input);
         }
     }
 }
 
-function liftField(input) {
-    var run = function() {
-        if (!input || input.hidden) return;
-        var view = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+function holdField(input) {
+    if (!input) return;
+    setTimeout(function() {
+        if (document.activeElement !== input) return;
+        var view = window.visualViewport;
+        var height = view ? view.height : window.innerHeight;
+        var top = view ? view.offsetTop : 0;
         var rect = input.getBoundingClientRect();
-        var overflow = rect.bottom - (view - 20);
-        if (overflow > 0) window.scrollBy(0, overflow + 12);
-    };
-    setTimeout(run, 280);
-    setTimeout(run, 600);
+        var visibleBottom = top + height - 12;
+        if (rect.bottom <= visibleBottom && rect.top >= top + 8) return;
+        window.scrollBy(0, rect.top - (top + height * 0.28));
+    }, 320);
 }
 
 function toggleMore(uid) {
@@ -635,14 +637,12 @@ function renderPartList(panel) {
         var stock = trunkCache || [];
         box.dataset.stock = JSON.stringify(stock);
         box.dataset.catalog = JSON.stringify(partsCatalog || []);
-        box.innerHTML = '<div class="part-suggest"></div><div class="part-chosen"></div>'
-            + '<input class="part-query" type="text" placeholder="Запчасть или слово нет" autocomplete="off">';
+        box.innerHTML = '<div class="part-field"><input class="part-query" type="text" placeholder="Запчасть или слово нет" autocomplete="off" enterkeyhint="done"><div class="part-suggest"></div></div><div class="part-chosen"></div>';
         box.querySelector('.part-query').addEventListener('input', function(event) {
             showPartMatches(box, event.target.value);
-            liftField(event.target);
         });
         box.querySelector('.part-query').addEventListener('focus', function(event) {
-            liftField(event.target);
+            holdField(event.target);
         });
         box.dataset.ready = '1';
     };
@@ -690,18 +690,15 @@ function showPartMatches(box, query) {
     var q = partKey(query).trim();
     if (q === 'нет') {
         suggest.innerHTML = '<div class="part-miss">Запчасти не использовал. Нажмите «Отправить».</div>';
-        floatSuggest(suggest);
         return;
     }
     if (q.length < 2) {
         suggest.innerHTML = '';
-        floatSuggest(suggest);
         return;
     }
     var hits = catalog.filter(function(name) { return partKey(name).indexOf(q) !== -1; });
     if (!hits.length) {
         suggest.innerHTML = '<div class="part-miss">Такой запчасти нет в списке</div>';
-        floatSuggest(suggest);
         return;
     }
     suggest.innerHTML = hits.slice(0, 8).map(function(name) {
@@ -714,7 +711,6 @@ function showPartMatches(box, query) {
             addPartChip(box, button.getAttribute('data-name'));
         });
     });
-    floatSuggest(suggest);
 }
 
 function addPartChip(box, name) {
@@ -723,10 +719,7 @@ function addPartChip(box, name) {
         var query = box.querySelector('.part-query');
         if (query) query.value = '';
         var suggest = box.querySelector('.part-suggest');
-        if (suggest) {
-            suggest.innerHTML = '';
-            floatSuggest(suggest);
-        }
+        if (suggest) suggest.innerHTML = '';
         return;
     }
     var chip = document.createElement('div');
@@ -744,7 +737,6 @@ function addPartChip(box, name) {
     var suggest = box.querySelector('.part-suggest');
     if (suggest) {
         suggest.innerHTML = '';
-        floatSuggest(suggest);
     }
 }
 
@@ -828,4 +820,158 @@ function openModal(name, darks, uid, type, title) {
     
     form.action = '/master/' + name + '/darks/' + darks + '/' + type + '/' + uid;
     modal.classList.add('active');
+}
+
+function hideTicket(uid) {
+    var card = document.getElementById('ticket-' + uid);
+    if (card) card.style.display = 'none';
+}
+
+function postTransit(url, body, uid, okText) {
+    fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body)
+    })
+    .then(readJsonResponse)
+    .then(function(result) {
+        if (result.success) {
+            hideTicket(uid);
+            showToast(okText);
+        } else {
+            showToast(result.error || 'Не получилось', true);
+        }
+    })
+    .catch(function() {
+        showToast('Нет сети. Повторите, когда связь появится', true);
+    });
+}
+
+function submitSupply(name, uid) {
+    var input = document.getElementById('supplyQty_' + uid);
+    var qty = parseInt(input && input.value, 10);
+    if (!qty || qty < 1) {
+        showToast('Укажите количество велосипедов', true);
+        return;
+    }
+    if (!confirm('Поставка: ' + qty + ' вело. АКБ запишутся как ' + (qty * 2) + '.')) return;
+    postTransit('/master/' + encodeURIComponent(name) + '/supply/' + encodeURIComponent(uid), { qty: qty }, uid, 'Поставка закрыта');
+}
+
+function buildPickupSlots(uid) {
+    var qtyInput = document.getElementById('pickupQty_' + uid);
+    var qty = parseInt(qtyInput && qtyInput.value, 10);
+    if (!qty || qty < 1 || qty > 80) {
+        showToast('Укажите, сколько велосипедов забираете', true);
+        return;
+    }
+    var box = document.getElementById('pickupSlots_' + uid);
+    var body = document.getElementById('pickupBody_' + uid);
+    if (!box || !body) return;
+    var html = '';
+    for (var i = 0; i < qty; i++) {
+        html += '<div class="field-group" id="pickupSlot_' + uid + '_' + i + '">';
+        html += '<div class="row"><label>Велосипед ' + (i + 1) + '. Госномер или IoT</label>';
+        html += '<input type="text" class="pickup-token" placeholder="ре123р или 0301">';
+        html += '<div class="tool-row"><button type="button" class="btn-icon" onclick="confirmPickupSlot(\'' + uid + '\',' + i + ')">Верно</button></div>';
+        html += '<div class="slot-note"></div></div></div>';
+    }
+    box.innerHTML = html;
+    body.hidden = false;
+}
+
+function confirmPickupSlot(uid, index) {
+    var slot = document.getElementById('pickupSlot_' + uid + '_' + index);
+    if (!slot) return;
+    var input = slot.querySelector('.pickup-token');
+    var note = slot.querySelector('.slot-note');
+    var token = (input.value || '').trim();
+    if (token.length < 3) {
+        showToast('Введите госномер или IoT', true);
+        return;
+    }
+    var card = document.getElementById('ticket-' + uid);
+    var darks = card ? (card.getAttribute('data-darks') || '') : '';
+    fetch('/api/transit_bike?q=' + encodeURIComponent(token) + '&darks=' + encodeURIComponent(darks), { credentials: 'same-origin' })
+        .then(readJsonResponse)
+        .then(function(data) {
+            if (!data.success) {
+                showToast(data.error || 'Не нашёл', true);
+                return;
+            }
+            var bike = data.bike || {};
+            var gos = String(bike.gos || '').trim();
+            var same = false;
+            document.querySelectorAll('#pickupSlots_' + uid + ' .field-group').forEach(function(other) {
+                if (other === slot) return;
+                if (other.getAttribute('data-ok') === '1' && gos && other.getAttribute('data-gos') === gos) same = true;
+            });
+            if (same) {
+                showToast('Этот госномер уже есть в этом вывозе', true);
+                return;
+            }
+            slot.setAttribute('data-ok', '1');
+            slot.setAttribute('data-frame', bike.frame || '');
+            slot.setAttribute('data-gos', gos);
+            slot.setAttribute('data-iot', bike.iot || '');
+            slot.setAttribute('data-home', bike.darks || '');
+            input.value = [bike.frame, gos, bike.iot].filter(Boolean).join(' · ');
+            input.readOnly = true;
+            input.classList.add('valid');
+            note.className = data.warning ? 'slot-warn' : 'slot-ok';
+            note.textContent = data.warning || 'Сверено';
+        })
+        .catch(function() {
+            showToast('База не открылась', true);
+        });
+}
+
+function submitPickup(name, uid) {
+    var slots = document.querySelectorAll('#pickupSlots_' + uid + ' .field-group');
+    if (!slots.length) {
+        showToast('Сначала укажите количество и нажмите «Дальше»', true);
+        return;
+    }
+    var bikes = [];
+    var seen = {};
+    for (var i = 0; i < slots.length; i++) {
+        if (slots[i].getAttribute('data-ok') !== '1') {
+            showToast('Нажмите «Верно» на каждом велосипеде', true);
+            return;
+        }
+        var gos = slots[i].getAttribute('data-gos') || '';
+        if (gos && seen[gos]) {
+            showToast('Госномер ' + gos + ' указан дважды', true);
+            return;
+        }
+        if (gos) seen[gos] = true;
+        bikes.push({
+            frame: slots[i].getAttribute('data-frame') || '',
+            gos: gos,
+            iot: slots[i].getAttribute('data-iot') || '',
+            darks: slots[i].getAttribute('data-home') || ''
+        });
+    }
+    var akbInput = document.getElementById('pickupAkb_' + uid);
+    var akbText = akbInput ? String(akbInput.value).trim() : '';
+    if (akbText === '' || isNaN(parseInt(akbText, 10)) || parseInt(akbText, 10) < 0) {
+        showToast('Укажите количество АКБ. Если нет ни одной, напишите 0', true);
+        return;
+    }
+    var akb = parseInt(akbText, 10);
+    if (!confirm('Вывоз: ' + bikes.length + ' вело, АКБ ' + akb + '.')) return;
+    postTransit('/master/' + encodeURIComponent(name) + '/pickup/' + encodeURIComponent(uid), { bikes: bikes, akb: akb }, uid, 'Вывоз закрыт');
+}
+
+function submitGai(name, uid) {
+    var frame = (document.getElementById('gaiFrame_' + uid).value || '').trim();
+    var gos = (document.getElementById('gaiGos_' + uid).value || '').trim();
+    var iot = (document.getElementById('gaiIot_' + uid).value || '').trim();
+    if (!frame || !gos || !iot) {
+        showToast('Введите номер рамы, госномер и IoT', true);
+        return;
+    }
+    if (!confirm('Отдать велосипед ' + gos + '? Старый в ГАИ подтверждать не нужно.')) return;
+    postTransit('/master/' + encodeURIComponent(name) + '/gai/' + encodeURIComponent(uid), { serial: frame, gos: gos, iot: iot }, uid, 'Замена ГАИ закрыта');
 }

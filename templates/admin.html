@@ -106,6 +106,7 @@
             <button class="btn btn-view" type="button" onclick="openBikeSearch()">Поиск вело</button>
             <button class="btn btn-view" type="button" onclick="openDocs()">Документы</button>
             <a class="btn btn-view" href="/admin/stats">Статистика</a>
+            <a class="btn btn-view" href="/admin/ops">Поставки и вывозы{% if ops_open %} ({{ ops_open }}){% endif %}</a>
         </div>
         <div class="action-group">
             <span class="action-label">Мастера</span>
@@ -294,12 +295,30 @@
                 <label><input type="radio" name="createType" value="Аккумуляторная батарея" onchange="toggleCustomType()"> Аккумуляторная батарея</label>
                 <label><input type="radio" name="createType" value="Зарядное устройство" onchange="toggleCustomType()"> Зарядное устройство</label>
                 <label><input type="radio" name="createType" value="Свой вариант" onchange="toggleCustomType()"> Свой вариант</label>
+                <label><input type="radio" name="createType" value="Поставка" onchange="toggleCustomType()"> Поставка</label>
+                <label><input type="radio" name="createType" value="Вывоз" onchange="toggleCustomType()"> Вывоз</label>
+                <label><input type="radio" name="createType" value="Замена ГАИ" onchange="toggleCustomType()"> Замена ГАИ</label>
             </div>
             <input id="createCustom" placeholder="Свой тип техники" style="display:none;margin-top:8px;">
+            <div id="createCompanyWrap" style="display:none;">
+                <label>Компания</label>
+                <div class="choices">
+                    <label><input type="radio" name="createCompany" value="Vanta"> Vanta</label>
+                    <label><input type="radio" name="createCompany" value="ВелоСтеп"> ВелоСтеп</label>
+                </div>
+            </div>
+            <div id="createAkbWrap" style="display:none;">
+                <label>Как отдали замену</label>
+                <div class="choices">
+                    <label><input type="radio" name="createAkb" value="с"> с АКБ</label>
+                    <label><input type="radio" name="createAkb" value="без"> без АКБ</label>
+                </div>
+                <p class="task-note" style="color:#64748b;">Без этой отметки задача не создастся. Напоминание перенести госномер в ГАИ появится и с АКБ, и без.</p>
+            </div>
             <label>Описание проблемы</label>
             <input id="createDesc" placeholder="Что сломалось">
             <div id="createGosWrap">
-                <label>Госномер велосипеда, например РЕ111Р</label>
+                <label id="createGosLabel">Госномер велосипеда, например РЕ111Р</label>
                 <input id="createGos" placeholder="РЕ111Р">
             </div>
             <div id="createQtyWrap" style="display:none;">
@@ -397,6 +416,6 @@
         now: '{{ now }}'
     };
 </script>
-<script src="/static/js/admin.js?v=26"></script>
+<script src="/static/js/admin.js?v=27"></script>
 </body>
 </html>
