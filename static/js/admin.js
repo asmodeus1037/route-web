@@ -1211,8 +1211,9 @@ function submitDoc() {
         document.body.appendChild(link);
         link.click();
         link.remove();
-        if (file.note === 'sheet-failed') showToastModern('Документ скачан, в таблицу не записался', 'error');
-        else showToastModern('Документ скачан', 'success');
+        if (file.note.indexOf('drive-failed') !== -1) showToastModern('Документ скачан, на Google Диск не сохранился', 'error');
+        else if (file.note.indexOf('sheet-failed') !== -1) showToastModern('Документ скачан, в таблицу не записался', 'error');
+        else showToastModern('Документ скачан и сохранён на Google Диск', 'success');
     })
     .catch(function(error) {
         alert(error.message || 'Не создалось');
@@ -1237,7 +1238,9 @@ function toggleCustomType() {
     document.getElementById('createCustom').style.display = type === 'Свой вариант' ? 'block' : 'none';
     var descWrap = document.getElementById('createDescWrap');
     if (descWrap) descWrap.style.display = transitTask ? 'none' : 'block';
-    document.getElementById('createGosWrap').style.display = (supply || transitQty) ? 'none' : 'block';
+    document.getElementById('createGosWrap').style.display = (supply || transitQty || gai) ? 'none' : 'block';
+    var plates = document.getElementById('createPlateWrap');
+    if (plates) plates.style.display = gai ? 'block' : 'none';
     document.getElementById('createQtyWrap').style.display = (supply || transitQty) ? 'block' : 'none';
     var qtyLabel = document.getElementById('createQtyLabel');
     if (qtyLabel) qtyLabel.textContent = transitQty ? 'Сколько велосипедов' : 'Количество';
@@ -1247,20 +1250,72 @@ function toggleCustomType() {
     var akb = document.getElementById('createAkbWrap');
     if (company) company.style.display = transitTask ? 'block' : 'none';
     if (akb) akb.style.display = gai ? 'block' : 'none';
+    if (gai) {
+        var darksNow = (document.getElementById('createDarks').value || '').trim();
+        if (darksNow) loadGaiPlates();
+    }
     var label = document.getElementById('createGosLabel');
     if (label) label.textContent = gai ? 'Госномер велосипеда, который забрали в ГАИ' : 'Госномер велосипеда, например РЕ111Р';
+}
+
+function maybeLoadGaiPlates() {
+    var chosen = document.querySelector('input[name="createType"]:checked');
+    if (chosen && chosen.value === 'Замена ГАИ') loadGaiPlates();
+}
+
+function loadGaiPlates() {
+    var select = document.getElementById('createPlate');
+    var darks = (document.getElementById('createDarks').value || '').trim();
+    if (!select) return;
+    if (!darks) {
+        select.innerHTML = '<option value="">Сначала укажите номер даркстора</option>';
+        return;
+    }
+    select.innerHTML = '<option value="">Загружаю велосипеды...</option>';
+    fetch('/api/darks_bikes?darks=' + encodeURIComponent(darks), { credentials: 'same-origin' })
+        .then(readApi)
+        .then(function(data) {
+            if (!data.success) {
+                select.innerHTML = '<option value="">' + (data.error || 'Не открылось') + '</option>';
+                return;
+            }
+            var bikes = data.bikes || [];
+            if (!bikes.length) {
+                select.innerHTML = '<option value="">На этом дарксторе в базе нет велосипедов</option>';
+                return;
+            }
+            var html = '<option value="">Выберите госномер</option>';
+            bikes.forEach(function(bike) {
+                var label = bike.gos;
+                if (bike.iot) label += ' · ' + bike.iot;
+                html += '<option value="' + String(bike.gos).replace(/"/g, '') + '" data-frame="' + String(bike.frame || '').replace(/"/g, '') + '" data-iot="' + String(bike.iot || '').replace(/"/g, '') + '">' + label + '</option>';
+            });
+            select.innerHTML = html;
+        })
+        .catch(function(error) {
+            select.innerHTML = '<option value="">' + (error.message || 'Нет сети') + '</option>';
+        });
 }
 
 function submitCreateTicket() {
     var chosen = document.querySelector('input[name="createType"]:checked');
     var company = document.querySelector('input[name="createCompany"]:checked');
     var akb = document.querySelector('input[name="createAkb"]:checked');
+    var type = chosen ? chosen.value : '';
+    var plate = document.getElementById('createPlate');
+    var plateOption = plate && plate.selectedOptions ? plate.selectedOptions[0] : null;
+    if (type === 'Замена ГАИ' && (!plateOption || !plateOption.value)) {
+        alert('Выберите госномер из списка. Сначала укажите даркстор.');
+        return;
+    }
     var payload = {
         darks: document.getElementById('createDarks').value.trim(),
-        type: chosen ? chosen.value : '',
+        type: type,
         custom_type: document.getElementById('createCustom').value.trim(),
         desc: document.getElementById('createDesc').value.trim(),
-        gos: document.getElementById('createGos').value.trim(),
+        gos: type === 'Замена ГАИ' ? (plateOption ? plateOption.value : '') : document.getElementById('createGos').value.trim(),
+        frame: type === 'Замена ГАИ' && plateOption ? (plateOption.getAttribute('data-frame') || '') : '',
+        iot: type === 'Замена ГАИ' && plateOption ? (plateOption.getAttribute('data-iot') || '') : '',
         qty: document.getElementById('createQty').value.trim(),
         company: company ? company.value : '',
         akb: akb ? akb.value : ''
@@ -1289,6 +1344,8 @@ function submitCreateTicket() {
         document.getElementById('createGos').value = '';
         document.getElementById('createQty').value = '';
         document.getElementById('createCustom').value = '';
+        var plate = document.getElementById('createPlate');
+        if (plate) plate.innerHTML = '<option value="">Сначала укажите номер даркстора</option>';
         if (data.warning) alert(data.warning);
         showToastModern(data.warning ? 'Заявка создана, есть предупреждение' : 'Заявка создана', 'success');
         renderCurrentTab();

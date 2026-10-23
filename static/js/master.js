@@ -875,6 +875,11 @@ function buildPickupSlots(uid) {
         html += '<div class="row"><label>Велосипед ' + (i + 1) + '. Госномер или IoT</label>';
         html += '<input type="text" class="pickup-token" placeholder="ре123р или 0301">';
         html += '<div class="tool-row"><button type="button" class="btn-icon" onclick="confirmPickupSlot(\'' + uid + '\',' + i + ')">Верно</button></div>';
+        html += '<div class="pickup-edit" hidden>';
+        html += '<label>Серийный номер</label><input type="text" class="pickup-frame">';
+        html += '<label>Госномер</label><input type="text" class="pickup-gos">';
+        html += '<label>IoT</label><input type="text" class="pickup-iot">';
+        html += '</div>';
         html += '<div class="slot-note"></div></div></div>';
     }
     box.innerHTML = html;
@@ -918,13 +923,52 @@ function confirmPickupSlot(uid, index) {
             slot.setAttribute('data-home', bike.darks || '');
             input.value = [bike.frame, gos, bike.iot].filter(Boolean).join(' · ');
             input.readOnly = true;
-            input.classList.add('valid');
+            input.hidden = true;
+            var edit = slot.querySelector('.pickup-edit');
+            if (edit) edit.hidden = false;
+            var frameInput = slot.querySelector('.pickup-frame');
+            var gosInput = slot.querySelector('.pickup-gos');
+            var iotInput = slot.querySelector('.pickup-iot');
+            if (frameInput) frameInput.value = bike.frame || '';
+            if (gosInput) gosInput.value = gos;
+            if (iotInput) iotInput.value = bike.iot || '';
+            var button = slot.querySelector('.btn-icon');
+            if (button) {
+                button.textContent = 'Искать заново';
+                button.onclick = function() { resetPickupSlot(uid, index); };
+            }
             note.className = data.warning ? 'slot-warn' : 'slot-ok';
-            note.textContent = data.warning || 'Сверено';
+            note.textContent = data.warning || 'Сверено. Номера можно поправить';
         })
         .catch(function() {
             showToast('База не открылась', true);
         });
+}
+
+function resetPickupSlot(uid, index) {
+    var slot = document.getElementById('pickupSlot_' + uid + '_' + index);
+    if (!slot) return;
+    slot.removeAttribute('data-ok');
+    var input = slot.querySelector('.pickup-token');
+    if (input) {
+        input.hidden = false;
+        input.readOnly = false;
+        input.value = '';
+        input.focus();
+    }
+    var edit = slot.querySelector('.pickup-edit');
+    if (edit) edit.hidden = true;
+    ['pickup-frame', 'pickup-gos', 'pickup-iot'].forEach(function(name) {
+        var field = slot.querySelector('.' + name);
+        if (field) field.value = '';
+    });
+    var note = slot.querySelector('.slot-note');
+    if (note) note.textContent = '';
+    var button = slot.querySelector('.btn-icon');
+    if (button) {
+        button.textContent = 'Верно';
+        button.onclick = function() { confirmPickupSlot(uid, index); };
+    }
 }
 
 function submitPickup(name, uid) {
@@ -940,16 +984,25 @@ function submitPickup(name, uid) {
             showToast('Нажмите «Верно» на каждом велосипеде', true);
             return;
         }
-        var gos = slots[i].getAttribute('data-gos') || '';
-        if (gos && seen[gos]) {
+        var frameInput = slots[i].querySelector('.pickup-frame');
+        var gosInput = slots[i].querySelector('.pickup-gos');
+        var iotInput = slots[i].querySelector('.pickup-iot');
+        var frame = frameInput ? frameInput.value.trim() : (slots[i].getAttribute('data-frame') || '');
+        var gos = gosInput ? gosInput.value.trim() : (slots[i].getAttribute('data-gos') || '');
+        var iot = iotInput ? iotInput.value.trim() : (slots[i].getAttribute('data-iot') || '');
+        if (!frame || !gos || !iot) {
+            showToast('У велосипеда ' + (i + 1) + ' заполните серийный номер, госномер и IoT', true);
+            return;
+        }
+        if (seen[gos]) {
             showToast('Госномер ' + gos + ' указан дважды', true);
             return;
         }
-        if (gos) seen[gos] = true;
+        seen[gos] = true;
         bikes.push({
-            frame: slots[i].getAttribute('data-frame') || '',
+            frame: frame,
             gos: gos,
-            iot: slots[i].getAttribute('data-iot') || '',
+            iot: iot,
             darks: slots[i].getAttribute('data-home') || ''
         });
     }

@@ -296,7 +296,7 @@
         <h3>Создать задачу</h3>
         <div class="create-form">
             <label>Номер дарка</label>
-            <input id="createDarks" placeholder="1234">
+            <input id="createDarks" placeholder="1234" onblur="maybeLoadGaiPlates()">
             <label>Тип техники</label>
             <div class="choices">
                 <label><input type="radio" name="createType" value="Электровелосипед" checked onchange="toggleCustomType()"> Электровелосипед</label>
@@ -326,6 +326,13 @@
             <div id="createDescWrap">
                 <label>Описание проблемы</label>
                 <input id="createDesc" placeholder="Что сломалось">
+            </div>
+            <div id="createPlateWrap" style="display:none;">
+                <label>Госномер, который забрали в ГАИ</label>
+                <button type="button" class="btn btn-view" onclick="loadGaiPlates()">Показать велосипеды этого дарка</button>
+                <select id="createPlate" style="margin-top:8px;">
+                    <option value="">Сначала укажите даркстор</option>
+                </select>
             </div>
             <div id="createGosWrap">
                 <label id="createGosLabel">Госномер велосипеда, например РЕ111Р</label>
@@ -427,6 +434,6 @@
         now: '{{ now }}'
     };
 </script>
-<script src="/static/js/admin.js?v=28"></script>
+<script src="/static/js/admin.js?v=30"></script>
 </body>
 </html>

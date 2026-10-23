@@ -146,6 +146,8 @@ def apply_transit_meta(ticket):
     akb = (ticket or {}).get('akb_mode') or ''
     taken = (ticket or {}).get('taken_gos') or ''
     plan = str((ticket or {}).get('plan_qty') or '')
+    taken_frame = (ticket or {}).get('taken_frame') or ''
+    taken_iot = (ticket or {}).get('taken_iot') or ''
     for line in str(note).splitlines():
         if line.startswith('КОМПАНИЯ:') and not company:
             company = line.split(':', 1)[1].strip()
@@ -153,11 +155,17 @@ def apply_transit_meta(ticket):
             akb = line.split(':', 1)[1].strip()
         elif line.startswith('ЗАБРАН:') and not taken:
             taken = line.split(':', 1)[1].strip()
+        elif line.startswith('ЗАБРАН_РАМА:') and not taken_frame:
+            taken_frame = line.split(':', 1)[1].strip()
+        elif line.startswith('ЗАБРАН_IOT:') and not taken_iot:
+            taken_iot = line.split(':', 1)[1].strip()
         elif line.startswith('КОЛИЧЕСТВО:') and not plan:
             plan = line.split(':', 1)[1].strip()
     ticket['company'] = company
     ticket['akb_mode'] = akb
     ticket['taken_gos'] = taken
+    ticket['taken_frame'] = taken_frame
+    ticket['taken_iot'] = taken_iot
     ticket['plan_qty'] = plan
     return ticket
 
@@ -3145,6 +3153,37 @@ def api_bike_search():
             break
     return jsonify({'success': True, 'items': hits})
 
+@app.route('/api/darks_bikes')
+@login_required
+def api_darks_bikes():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    darks = str(request.args.get('darks') or '').strip()
+    if not darks:
+        return jsonify({'success': False, 'error': 'Сначала укажите номер даркстора'})
+    try:
+        rows = load_bike_rows()
+    except Exception:
+        return jsonify({'success': False, 'error': 'База велосипедов не открылась'})
+    bikes = []
+    seen = set()
+    for row in rows[1:]:
+        home = row[4].strip() if len(row) > 4 else ''
+        gos = row[1].strip() if len(row) > 1 else ''
+        if home != darks or not gos:
+            continue
+        key = normalize_gos(gos)
+        if key in seen:
+            continue
+        seen.add(key)
+        bikes.append({
+            'frame': (row[0] if row else '').strip(),
+            'gos': gos,
+            'iot': (row[2] if len(row) > 2 else '').strip(),
+        })
+    bikes.sort(key=lambda item: item['gos'])
+    return jsonify({'success': True, 'bikes': bikes})
+
 @app.route('/api/admin_ticket', methods=['POST'])
 @login_required
 def api_admin_ticket():
@@ -3159,6 +3198,8 @@ def api_admin_ticket():
     qty = str(data.get('qty') or '').strip()
     company = str(data.get('company') or '').strip()
     akb_choice = str(data.get('akb') or '').strip()
+    taken_frame = str(data.get('frame') or '').strip()
+    taken_iot = str(data.get('iot') or '').strip()
     if bike_type == 'Свой вариант':
         bike_type = custom
     task_status = {'Поставка': 'supply', 'Вывоз': 'pickup', 'Замена ГАИ': 'gai'}.get(bike_type)
@@ -3181,7 +3222,7 @@ def api_admin_ticket():
             gos = ''
         elif task_status == 'gai':
             if not gos:
-                return jsonify({'success': False, 'error': 'Укажите госномер забранного велосипеда'})
+                return jsonify({'success': False, 'error': 'Выберите госномер из списка велосипедов даркстора'})
             if akb_choice not in ('с', 'без'):
                 return jsonify({'success': False, 'error': 'Отметьте, замена с АКБ или без'})
             desc = 'Замена ГАИ ' + ('с АКБ' if akb_choice == 'с' else 'без АКБ')
@@ -3195,6 +3236,10 @@ def api_admin_ticket():
                 home = row[4].strip() if len(row) > 4 else ''
                 if plate and normalize_gos(plate) == normalize_gos(gos):
                     homes.append(home)
+                    if not taken_frame and row:
+                        taken_frame = row[0].strip()
+                    if not taken_iot and len(row) > 2:
+                        taken_iot = row[2].strip()
             if not homes:
                 warning = 'Этого госномера нет в базе. Заявка всё равно создана.'
             elif darks not in homes:
@@ -3232,6 +3277,10 @@ def api_admin_ticket():
         if task_status == 'gai':
             note_lines.append('АКБ: ' + akb_choice)
             note_lines.append('ЗАБРАН: ' + gos)
+            if taken_frame:
+                note_lines.append('ЗАБРАН_РАМА: ' + taken_frame)
+            if taken_iot:
+                note_lines.append('ЗАБРАН_IOT: ' + taken_iot)
     note = '\n'.join(note_lines)
     sheet_status = {'supply': 'Поставка', 'pickup': 'Вывоз', 'gai': 'Замена ГАИ'}.get(task_status, '🟡 В работе')
     master_name = 'Транзит' if task_status in ('supply', 'pickup') else ''
@@ -3273,6 +3322,8 @@ def api_admin_ticket():
         'company': company if task_status else '',
         'akb_mode': akb_choice if task_status == 'gai' else '',
         'taken_gos': gos if task_status == 'gai' else '',
+        'taken_frame': taken_frame if task_status == 'gai' else '',
+        'taken_iot': taken_iot if task_status == 'gai' else '',
         'plan_qty': plan_qty,
         'evac_reason': '',
         'uid': uid,
@@ -3558,7 +3609,7 @@ def append_operation_summary(date, operation, company, darks, bikes, akb, link):
         sheet = book.worksheet('Итоги операций')
     except Exception:
         sheet = book.add_worksheet('Итоги операций', rows=2000, cols=8)
-        sheet.update('A1:G1', [['Дата', 'Операция', 'Компания', 'Даркстор', 'Вело, шт', 'АКБ, шт', 'Документ']], value_input_option='RAW')
+        sheet.update(values=[['Дата', 'Операция', 'Компания', 'Даркстор', 'Вело, шт', 'АКБ, шт', 'Документ']], range_name='A1:G1', value_input_option='RAW')
     column = sheet.col_values(1)
     start = len(column) + 1
     for index, value in enumerate(column, start=1):
@@ -3566,8 +3617,32 @@ def append_operation_summary(date, operation, company, darks, bikes, akb, link):
             start = index
             break
     sheet.update(
-        f'A{start}:G{start}',
-        [[date, operation, company, str(darks), bikes, akb, link or '']],
+        values=[[date, operation, company, str(darks), bikes, akb, link or '']],
+        range_name=f'A{start}:G{start}',
+        value_input_option='USER_ENTERED',
+    )
+
+def append_repair_operation(date, operation, company, darks, bikes, akb, link, comment=''):
+    """Отдельный лист в «Система ремонта ВВ»: одна строка на всю задачу."""
+    book = get_sheet_client()
+    try:
+        sheet = book.worksheet('Поставки и вывозы')
+    except Exception:
+        sheet = book.add_worksheet('Поставки и вывозы', rows=2000, cols=8)
+        sheet.update(
+            values=[['Дата', 'Операция', 'Компания', 'Даркстор', 'Вело, шт', 'АКБ, шт', 'Документ', 'Комментарий']],
+            range_name='A1:H1',
+            value_input_option='RAW',
+        )
+    column = sheet.col_values(1)
+    start = len(column) + 1
+    for index, value in enumerate(column, start=1):
+        if index > 1 and not str(value).strip():
+            start = index
+            break
+    sheet.update(
+        values=[[date, operation, company, str(darks), bikes, akb, link or '', comment or '']],
+        range_name=f'A{start}:H{start}',
         value_input_option='USER_ENTERED',
     )
 
@@ -3625,26 +3700,10 @@ def drive_access_token():
     )
     return creds.get_access_token().access_token
 
+DRIVE_ACTS_FOLDER = '1w0QbWh_zwkQEF_Q8dkvFPSbWm80tmnSi'
+
 def drive_folder_id(token):
-    query = "name = 'Акты вывоза и замен' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    response = requests.get(
-        'https://www.googleapis.com/drive/v3/files',
-        params={'q': query, 'fields': 'files(id)', 'pageSize': 1},
-        headers={'Authorization': 'Bearer ' + token},
-        timeout=20,
-    )
-    response.raise_for_status()
-    files = (response.json() or {}).get('files') or []
-    if files:
-        return files[0]['id']
-    created = requests.post(
-        'https://www.googleapis.com/drive/v3/files',
-        json={'name': 'Акты вывоза и замен', 'mimeType': 'application/vnd.google-apps.folder'},
-        headers={'Authorization': 'Bearer ' + token},
-        timeout=20,
-    )
-    created.raise_for_status()
-    return created.json()['id']
+    return DRIVE_ACTS_FOLDER
 
 def upload_act(filename, payload):
     os.makedirs(ACTS_DIR, exist_ok=True)
@@ -3863,6 +3922,10 @@ def master_supply_done(name, uid):
     except Exception as exc:
         logger.warning(f'Итог поставки не записался: {exc}')
         return jsonify({'success': False, 'error': 'Не удалось записать итог в таблицу'})
+    try:
+        append_repair_operation(date, 'Поставка', ticket.get('company') or '', ticket.get('darks') or '', qty, akb, '', f'{qty} вело, {akb} акб')
+    except Exception as exc:
+        logger.warning(f'Поставка в «Система ремонта ВВ» не записалась: {exc}')
     finish_transit_ticket(ticket, name, f'Поставка: {qty} вело, {akb} АКБ')
     remember_operation({
         'id': uid,
@@ -3940,6 +4003,11 @@ def master_pickup_done(name, uid):
         append_operation_summary(date, 'Вывоз', company, ticket.get('darks') or '', len(clean), akb, link)
     except Exception as exc:
         logger.warning(f'Итог вывоза не записался: {exc}')
+    plates = ', '.join(bike['gos'] for bike in clean if bike.get('gos'))
+    try:
+        append_repair_operation(date, 'Вывоз', company, ticket.get('darks') or '', len(clean), akb, link, plates)
+    except Exception as exc:
+        logger.warning(f'Вывоз в «Система ремонта ВВ» не записался: {exc}')
     finish_transit_ticket(ticket, name, f'Вывоз: {len(clean)} вело, {akb} АКБ')
     remember_operation({
         'id': uid,
@@ -3975,6 +4043,36 @@ def master_gai_done(name, uid):
     if not new_data['serial'] or not new_data['gos'] or not new_data['iot']:
         return jsonify({'success': False, 'error': 'Введите номер рамы, госномер и IoT'})
     taken = ticket.get('taken_gos') or ticket.get('gos') or ''
+    old_data = {
+        'serial': ticket.get('taken_frame') or '',
+        'gos': taken,
+        'iot': ticket.get('taken_iot') or '',
+    }
+    if taken and (not old_data['serial'] or not old_data['iot']):
+        try:
+            for row in load_bike_rows()[1:]:
+                plate = row[1].strip() if len(row) > 1 else ''
+                if plate and normalize_gos(plate) == normalize_gos(taken):
+                    if not old_data['serial'] and row:
+                        old_data['serial'] = row[0].strip()
+                    if not old_data['iot'] and len(row) > 2:
+                        old_data['iot'] = row[2].strip()
+                    break
+        except Exception as exc:
+            logger.warning(f'Старый велосипед ГАИ в базе не нашёлся: {exc}')
+    try:
+        append_bike_swap(
+            ticket.get('address') or '',
+            ticket.get('darks') or '',
+            old_data,
+            {'serial': new_data['serial'], 'gos': new_data['gos'], 'iot': new_data['iot']},
+            name,
+            uid,
+            'ГАИ',
+        )
+    except Exception as exc:
+        logger.warning(f'Замена ГАИ в «Замены вело» не записалась: {exc}')
+        return jsonify({'success': False, 'error': 'Не удалось записать велосипед в лист «Замены вело»'})
     date = get_msk_now().strftime('%d.%m.%Y')
     company = ticket.get('company') or 'Vanta'
     with_akb = ticket.get('akb_mode') == 'с'
@@ -3987,7 +4085,7 @@ def master_gai_done(name, uid):
             date,
             ticket.get('darks') or '',
             ticket.get('address') or '',
-            {'take': [{'frame': '', 'gos': taken, 'iot': ''}], 'give': [{'frame': new_data['serial'], 'gos': new_data['gos'], 'iot': new_data['iot']}]},
+            {'take': [{'frame': old_data['serial'], 'gos': taken, 'iot': old_data['iot']}], 'give': [{'frame': new_data['serial'], 'gos': new_data['gos'], 'iot': new_data['iot']}]},
             1 if with_akb else 0,
         )
         local_name, link = upload_act(f"{ticket.get('darks')}_ЗАМЕНА_ГАИ_{date.replace('.', '')}.docx", payload)
@@ -3999,6 +4097,13 @@ def master_gai_done(name, uid):
         append_operation_summary(date, 'Замена ГАИ', company, ticket.get('darks') or '', 1, 1 if with_akb else 0, link)
     except Exception as exc:
         logger.warning(f'Итог замены ГАИ не записался: {exc}')
+    try:
+        append_repair_operation(
+            date, 'Замена ГАИ', company, ticket.get('darks') or '', 1, 1 if with_akb else 0, link,
+            f'Забрали {taken}. Отдали {new_data["gos"]}',
+        )
+    except Exception as exc:
+        logger.warning(f'Замена ГАИ в «Система ремонта ВВ» не записалась: {exc}')
     finish_transit_ticket(ticket, name, f'Замена ГАИ {akb_text}. Отдан {new_data["gos"]}. Забран {taken}')
     remember_operation({
         'id': uid,
@@ -4193,6 +4298,10 @@ def api_make_document():
         logger.warning(f'Журнал поставки не записался: {exc}')
         log_note = 'sheet-failed'
     filename = f'{darks}_{operation}_{date.replace(".", "")}.docx'
+    _local_name, drive_link = upload_act(filename, buffer.getvalue())
+    if not drive_link:
+        log_note = 'drive-failed' if log_note == 'ok' else log_note + ',drive-failed'
+    buffer.seek(0)
     response = send_file(
         buffer,
         as_attachment=True,
@@ -4200,6 +4309,8 @@ def api_make_document():
         mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     )
     response.headers['X-Log-Note'] = log_note
+    if drive_link:
+        response.headers['X-Drive-Link'] = drive_link
     return response
 
 # ============================================================
