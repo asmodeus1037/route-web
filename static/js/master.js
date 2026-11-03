@@ -833,7 +833,7 @@ function openModal(name, darks, uid, type, title) {
                 method: 'POST',
                 body: formBody(fd),
                 uid: uid,
-                okText: 'Заявка отмечена: доделать'
+                okText: 'Заявка снята с вас. Она у руководителя без мастера'
             });
             closeModal('reasonModal');
             return false;

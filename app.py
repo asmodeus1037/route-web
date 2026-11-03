@@ -371,6 +371,13 @@ def apply_pending_queue(tickets):
             ticket['is_active'] = True
             if data.get('reason'):
                 ticket['evac_reason'] = data.get('reason')
+        elif kind == 'redo':
+            ticket['status'] = 'todo'
+            ticket['master'] = ''
+            ticket['is_done'] = False
+            ticket['is_active'] = True
+            if data.get('note'):
+                ticket['note'] = data.get('note')
         elif kind in ('done', 'replace_yes', 'evacuation_and_replace', 'transit_replace', 'transit_bulk_close'):
             ticket['status'] = 'done'
             ticket['is_done'] = True
@@ -448,7 +455,7 @@ def queue_clears_master(uid):
             continue
         kind = task.get('type')
         data = task.get('data') or {}
-        if kind in ('fail', 'evacuation'):
+        if kind in ('fail', 'evacuation', 'redo'):
             return True
         if kind == 'assign' and not (data.get('master') or '').strip():
             return True
@@ -2112,6 +2119,7 @@ def apply_queue_to_sheets(tasks):
             updates.append({'range': f'H{row_idx}', 'values': [['🔵 Доделать']]})
             updates.append({'range': f'J{row_idx}', 'values': [[data.get('reason') or 'Куратор не предоставил']]})
         elif task_type == 'redo':
+            updates.append({'range': f'G{row_idx}', 'values': [['']]})
             updates.append({'range': f'H{row_idx}', 'values': [['🔵 Доделать']]})
             updates.append({'range': f'J{row_idx}', 'values': [[data.get('note') or data.get('reason') or 'Доделать']]})
         elif task_type == 'status_update':
@@ -2163,6 +2171,7 @@ def apply_queue_to_sheets(tasks):
             sheet_status, sheet_note = 'Доделать', data.get('reason') or 'Куратор не предоставил'
         elif task_type == 'redo':
             sheet_status, sheet_note = 'Доделать', data.get('note') or data.get('reason') or 'Доделать'
+            clear_master = True
         elif task_type == 'status_update':
             sheet_note = data.get('note') or ''
             if data.get('note_only'):
@@ -5886,7 +5895,9 @@ def master_redo(name, darks_number, uid):
     previous = (ticket.get('note') or '').strip()
     line = 'Доделать: ' + reason
     note = f'{previous}\n{line}'.strip() if previous else line
-    update_ticket_in_admin_cache(uid, 'todo', note)
+    update_ticket_in_admin_cache(uid, 'todo', note, extra={'master': ''})
+    remember_master_cleared(uid)
+    remove_ticket_from_master_cache(name, uid)
     refresh_master_caches_from_admin()
     add_to_queue({
         'uid': uid,
