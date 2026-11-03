@@ -2,9 +2,9 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=390, viewport-fit=cover">
     <title>Мой багажник</title>
-    <link rel="stylesheet" href="/static/css/master.css">
+    <link rel="stylesheet" href="/static/css/master.css?v=17">
     <style>
         .trunk-card { background: #fff; border-radius: 14px; padding: 12px; margin: 8px 0; }
         .stock { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f5f5f4; }
@@ -38,7 +38,7 @@
         <button class="load-btn" type="submit">Загрузить багажник</button>
     </form>
     <nav class="dock"></nav>
-    <script src="/static/js/master.js?v=15"></script>
+    <script src="/static/js/master.js?v=16"></script>
     <script>
         var catalog = {{ parts|map(attribute='name')|list|tojson }};
         var picker = document.getElementById('picker');

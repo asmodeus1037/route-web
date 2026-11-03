@@ -2,6 +2,11 @@
    МАСТЕР - НОВЫЙ ДИЗАЙН (мягкий, бело-красный)
    ============================================================ */
 
+html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+}
+
 * {
     box-sizing: border-box;
     margin: 0;
@@ -759,7 +764,25 @@ h1 {
 .part-query, .trunk-card input[type="text"], .evacuation-form input {
     font-size: 16px;
 }
-.part-suggest { display: flex; flex-direction: column; gap: 6px; }
+.part-list { position: relative; }
+.part-field { position: relative; }
+.part-suggest {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(100% + 6px);
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 220px;
+    overflow: auto;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+    padding: 6px;
+}
+.part-suggest:empty { display: none; }
 .part-hit, .part-miss {
     width: 100%;
     text-align: left;
@@ -1058,16 +1081,5 @@ body { padding-bottom: 96px; }
     color: #1e293b;
     text-decoration: none;
 }
-.part-suggest.is-float {
-    position: fixed;
-    left: 12px;
-    right: 12px;
-    z-index: 70;
-    background: #fff;
-    border-radius: 14px;
-    box-shadow: 0 10px 32px rgba(15, 23, 42, 0.2);
-    padding: 8px;
-    max-height: 42vh;
-    overflow: auto;
-}
+.part-suggest.is-float { position: absolute; left: 0; right: 0; }
 
