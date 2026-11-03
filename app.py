@@ -2523,18 +2523,17 @@ def append_shift_debrief(item):
         status_text,
         item.get('comment') or '',
     ]
+    names = sheet.col_values(2)
+    dates = sheet.col_values(3)
+    start = max(len(names), len(dates), 1) + 1
     try:
-        result = sheet.append_row(row, value_input_option='USER_ENTERED', table_range='A:I')
+        sheet.update(values=[row], range_name=f'A{start}:I{start}', value_input_option='USER_ENTERED')
     except TypeError:
-        result = sheet.append_row(row, value_input_option='USER_ENTERED')
-    updated = ''
-    if isinstance(result, dict):
-        updated = str((result.get('updates') or {}).get('updatedRange') or '')
-    numbers = re.findall(r'[A-Z]+(\d+)', updated.split('!')[-1])
-    start = int(numbers[-1]) if numbers else 0
-    if not start:
-        return
+        sheet.update(f'A{start}:I{start}', [row], value_input_option='USER_ENTERED')
     try:
+        current = sheet.get(f'J{start}:J{start}', value_render_option='FORMULA')
+        if current and current[0] and str(current[0][0]).startswith('='):
+            return
         source = sheet.get('J2:P2', value_render_option='FORMULA')
         cells = source[0] if source else []
         copied = []
