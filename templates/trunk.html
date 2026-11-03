@@ -6,12 +6,87 @@
     <title>Мой багажник</title>
     <link rel="stylesheet" href="/static/css/master.css?v=17">
     <style>
-        .trunk-card { background: #fff; border-radius: 14px; padding: 12px; margin: 8px 0; }
-        .stock { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f5f5f4; }
-        .load-btn { width: 100%; margin-top: 12px; height: 48px; border: 0; border-radius: 12px; background: #15803d; color: #fff; font: inherit; font-weight: 800; font-size: 16px; }
-        .muted { color: #78716c; font-size: 13px; }
+        .trunk-card { background: #fff; border-radius: 16px; padding: 14px; margin: 10px 0; }
+        .stock { display: flex; justify-content: space-between; gap: 8px; padding: 10px 0; border-bottom: 1px solid #f5f5f4; font-size: 16px; }
+        .load-btn { width: 100%; margin-top: 14px; height: 52px; border: 0; border-radius: 14px; background: #15803d; color: #fff; font: inherit; font-weight: 800; font-size: 17px; }
+        .muted { color: #78716c; font-size: 14px; line-height: 1.35; }
         .err { background: #fee2e2; color: #991b1b; padding: 10px; border-radius: 10px; }
         .ok { background: #dcfce7; color: #166534; padding: 10px; border-radius: 10px; }
+        body[data-page="trunk"] .part-field { position: relative; margin-top: 10px; }
+        body[data-page="trunk"] .part-query {
+            width: 100%;
+            height: 56px;
+            border: 3px solid #e11d48;
+            background: #fff1f2;
+            border-radius: 14px;
+            padding: 0 14px;
+            font-size: 18px;
+            font-weight: 800;
+            color: #1e293b;
+        }
+        body[data-page="trunk"] .part-query:focus {
+            outline: none;
+            background: #fff;
+            box-shadow: 0 0 0 4px rgba(225, 29, 72, 0.2);
+        }
+        body[data-page="trunk"] .part-suggest,
+        body[data-page="trunk"] .part-suggest.is-float {
+            position: static;
+            top: auto;
+            right: auto;
+            bottom: auto !important;
+            left: auto;
+            margin-top: 8px;
+            max-height: 280px;
+            box-shadow: none;
+            border: 1px solid #fecdd3;
+            background: #fff;
+        }
+        body[data-page="trunk"] .part-hit,
+        body[data-page="trunk"] .part-miss {
+            min-height: 48px;
+            font-size: 17px;
+            font-weight: 700;
+        }
+        body[data-page="trunk"] .part-chip {
+            grid-template-columns: 1fr auto;
+            background: #f8fafc;
+            border-radius: 12px;
+            padding: 8px 10px;
+            margin-top: 8px;
+        }
+        body[data-page="trunk"] .qty {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        body[data-page="trunk"] .qty button {
+            width: 40px;
+            height: 40px;
+            border: 0;
+            border-radius: 10px;
+            background: #e2e8f0;
+            font-size: 22px;
+            font-weight: 800;
+        }
+        body[data-page="trunk"] .qty input {
+            width: 52px;
+            height: 40px;
+            text-align: center;
+            font-size: 18px;
+            font-weight: 800;
+            border: 1px solid #e7e5e4;
+            border-radius: 10px;
+        }
+        body[data-page="trunk"] .part-chip .drop {
+            grid-column: 1 / -1;
+            justify-self: start;
+            color: #b45309;
+            background: transparent;
+            border: 0;
+            font-weight: 800;
+            min-height: 36px;
+        }
     </style>
 </head>
 <body data-master="{{ name }}" data-page="trunk">
@@ -43,45 +118,53 @@
         var catalog = {{ parts|map(attribute='name')|list|tojson }};
         var picker = document.getElementById('picker');
         var chosen = document.getElementById('chosen');
-        picker.innerHTML = '<input class="part-query" type="text" placeholder="Например камера" autocomplete="off"><div class="part-suggest"></div>';
+        picker.innerHTML = '<div class="part-field"><input class="part-query" type="text" placeholder="Например: камера" autocomplete="off" enterkeyhint="search"></div>';
         var input = picker.querySelector('input');
-        var suggest = picker.querySelector('.part-suggest');
+        var suggest = document.createElement('div');
+        suggest.className = 'part-suggest';
+        input.parentNode.appendChild(suggest);
         function key(value) { return String(value || '').toLowerCase().replace(/ё/g, 'е'); }
-        input.addEventListener('input', function() {
+        function showMatches() {
             var q = key(input.value).trim();
-            if (q.length < 2) { suggest.innerHTML = ''; floatSuggest(suggest); return; }
+            if (!q) { suggest.innerHTML = ''; return; }
             var hits = catalog.filter(function(name) { return key(name).indexOf(q) !== -1; });
             if (!hits.length) {
                 suggest.innerHTML = '<div class="part-miss">Такой запчасти нет в списке</div>';
-                floatSuggest(suggest);
                 return;
             }
             suggest.innerHTML = hits.slice(0, 8).map(function(name) {
-                return '<button type="button" class="part-hit">' + name + '</button>';
+                return '<button type="button" class="part-hit">' + name.replace(/</g, '') + '</button>';
             }).join('');
-            floatSuggest(suggest);
             suggest.querySelectorAll('button').forEach(function(button) {
                 button.addEventListener('click', function() {
-                    if (chosen.querySelector('[data-name="' + button.textContent.replace(/"/g, '') + '"]')) {
+                    var partName = button.textContent;
+                    if (chosen.querySelector('[data-name="' + partName.replace(/"/g, '') + '"]')) {
                         input.value = '';
                         suggest.innerHTML = '';
-                        floatSuggest(suggest);
                         return;
                     }
                     var row = document.createElement('div');
                     row.className = 'part-chip';
-                    row.setAttribute('data-name', button.textContent);
-                    row.innerHTML = '<span></span><input type="number" min="1" value="1"><button type="button">убрать</button>';
-                    row.querySelector('span').textContent = button.textContent;
-                    row.querySelector('button').addEventListener('click', function() { row.remove(); });
+                    row.setAttribute('data-name', partName);
+                    row.innerHTML = '<span></span><div class="qty"><button type="button" data-step="-1">−</button><input type="number" min="1" value="1"><button type="button" data-step="1">+</button></div><button type="button" class="drop">убрать</button>';
+                    row.querySelector('span').textContent = partName;
+                    row.querySelector('.drop').addEventListener('click', function() { row.remove(); });
+                    row.querySelectorAll('[data-step]').forEach(function(step) {
+                        step.addEventListener('click', function() {
+                            var field = row.querySelector('input');
+                            var next = (parseInt(field.value, 10) || 1) + parseInt(step.getAttribute('data-step'), 10);
+                            field.value = next < 1 ? 1 : next;
+                        });
+                    });
                     chosen.appendChild(row);
                     input.value = '';
                     suggest.innerHTML = '';
-                    floatSuggest(suggest);
                     input.focus();
                 });
             });
-        });
+        }
+        input.addEventListener('input', showMatches);
+        input.addEventListener('keyup', showMatches);
         document.getElementById('loadForm').addEventListener('submit', function(event) {
             var rows = chosen.querySelectorAll('.part-chip');
             if (!rows.length) {
