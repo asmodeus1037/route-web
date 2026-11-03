@@ -3,10 +3,10 @@
 <head>
     <link rel="icon" href="/data/vanta.png" type="image/png">
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=overlays-content">
     <title>Вход в маршрут</title>
     <link rel="manifest" href="/manifest.json">
-    <link rel="stylesheet" href="/static/css/login.css">
+    <link rel="stylesheet" href="/static/css/login.css?v=2">
 </head>
 <body>
     <div class="container">
@@ -19,11 +19,11 @@
         <form id="loginForm">
             <div class="form-group">
                 <label>👤 Логин</label>
-                <input type="text" id="loginInput" placeholder="Введите логин" required autofocus>
+                <input type="text" id="loginInput" placeholder="Введите логин" required autocomplete="username">
             </div>
             <div class="form-group">
                 <label>🔑 Пароль</label>
-                <input type="password" id="passwordInput" placeholder="Введите пароль" required>
+                <input type="password" id="passwordInput" placeholder="Введите пароль" required autocomplete="current-password">
             </div>
             <button type="submit" class="btn-login" id="loginBtn">
                 <span class="loading" id="spinner"></span>
