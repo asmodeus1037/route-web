@@ -2797,6 +2797,7 @@ def write_to_report(tasks):
                 'replace_yes': '✅ Выполнено',
                 'taken_no_replace': '🔵 Доделать',
                 'replace_no': '🔵 Доделать',
+                'redo': '🔵 Доделать',
                 'transit_replace': '✅ Выполнено'
             }
             status = status_map.get(task_type, '✅ Выполнено')
@@ -5913,6 +5914,13 @@ def master_redo(name, darks_number, uid):
             'desc': ticket.get('desc', ''),
         }
     })
+    label = ticket_label(ticket)
+    notify_dark_event(
+        darks_number,
+        f'🔵 {label} не сделан: {reason}. Заявка снята с мастера {name}.',
+        uid,
+        'redo',
+    )
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/replace_no/<uid>', methods=['POST'])
