@@ -15,7 +15,7 @@ import html
 import logging
 import secrets
 from functools import wraps
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeout
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
@@ -745,6 +745,7 @@ def refresh_xdevice_points(force=False):
         _xdevice_points = points
         _xdevice_loaded_at = time.time()
         _xdevice_error = ""
+        remember_points_bulk(points)
         logger.info(f"Точки IoT обновлены: {len(items)} модулей, с координатами {len(set(id(p) for p in points.values()))}")
     except Exception as exc:
         _xdevice_error = "Точки IoT не обновились"
@@ -874,7 +875,7 @@ def fetch_object_coords(object_id):
         response = requests.get(
             XDEVICE_URL.rstrip('/') + '/' + str(object_id),
             headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-            timeout=20,
+            timeout=6,
         )
         response.raise_for_status()
         return find_coords(response.json())
@@ -889,7 +890,7 @@ def fetch_packet_coords(object_id):
         return None, None
     now_ms = int(time.time() * 1000)
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    for days in (21, 120):
+    for days in (30,):
         try:
             response = requests.get(
                 XDEVICE_URL.rstrip('/') + '/' + str(object_id) + '/packets',
@@ -930,7 +931,56 @@ def lookup_bike_point(iot):
         if lat is not None and lon is not None:
             point['lat'] = lat
             point['lon'] = lon
+    if point.get('lat') is not None and point.get('lon') is not None:
+        remember_point(iot, point['lat'], point['lon'], point.get('at'))
     return point
+
+IOT_POINTS_FILE = 'iot_points.json'
+
+def remember_points_bulk(points):
+    saved = read_cache(IOT_POINTS_FILE) or {}
+    if not isinstance(saved, dict):
+        saved = {}
+    changed = False
+    for key, point in (points or {}).items():
+        if not key or not isinstance(point, dict):
+            continue
+        if point.get('lat') is None or point.get('lon') is None:
+            continue
+        row = {'lat': point['lat'], 'lon': point['lon'], 'at': point.get('at') or 0}
+        if saved.get(key) != row:
+            saved[key] = row
+            changed = True
+    if changed:
+        write_cache(IOT_POINTS_FILE, saved)
+
+def remember_point(iot, lat, lon, at=0):
+    if lat is None or lon is None:
+        return
+    saved = read_cache(IOT_POINTS_FILE) or {}
+    if not isinstance(saved, dict):
+        saved = {}
+    row = {'lat': lat, 'lon': lon, 'at': at or 0}
+    changed = False
+    for token in iot_tokens(iot):
+        if token and saved.get(token) != row:
+            saved[token] = row
+            changed = True
+    if changed:
+        write_cache(IOT_POINTS_FILE, saved)
+
+def remembered_point(iot):
+    saved = read_cache(IOT_POINTS_FILE) or {}
+    if not isinstance(saved, dict):
+        return None
+    for token in iot_tokens(iot):
+        row = saved.get(token)
+        if isinstance(row, dict) and row.get('lat') is not None and row.get('lon') is not None:
+            return row
+    return None
+
+def yandex_map_url(lat, lon):
+    return f'https://yandex.ru/maps/?ll={lon},{lat}&pt={lon},{lat}&z=16&l=map'
 
 def resolve_ticket_iot(iot, darks, gos):
     if normalize_iot(iot):
@@ -2061,6 +2111,9 @@ def apply_queue_to_sheets(tasks):
         elif task_type == 'replace_no':
             updates.append({'range': f'H{row_idx}', 'values': [['🔵 Доделать']]})
             updates.append({'range': f'J{row_idx}', 'values': [[data.get('reason') or 'Куратор не предоставил']]})
+        elif task_type == 'redo':
+            updates.append({'range': f'H{row_idx}', 'values': [['🔵 Доделать']]})
+            updates.append({'range': f'J{row_idx}', 'values': [[data.get('note') or data.get('reason') or 'Доделать']]})
         elif task_type == 'status_update':
             if not data.get('note_only'):
                 updates.append({'range': f'H{row_idx}', 'values': [[data.get('status') or '🟡 В работе']]})
@@ -2108,6 +2161,8 @@ def apply_queue_to_sheets(tasks):
             sheet_status, sheet_note = 'Доделать', f"ЗАБРАЛИ: {data.get('parts', '')} АКБ"
         elif task_type == 'replace_no':
             sheet_status, sheet_note = 'Доделать', data.get('reason') or 'Куратор не предоставил'
+        elif task_type == 'redo':
+            sheet_status, sheet_note = 'Доделать', data.get('note') or data.get('reason') or 'Доделать'
         elif task_type == 'status_update':
             sheet_note = data.get('note') or ''
             if data.get('note_only'):
@@ -2149,6 +2204,7 @@ def append_master_history(master, action, data):
         'replace_yes': 'Замена',
         'replace_no': 'Куратор не дал',
         'taken_no_replace': 'Забрали без замены',
+        'redo': 'Не сделан',
     }
     raw = read_cache(f"history_{master}.json")
     if isinstance(raw, dict):
@@ -2181,6 +2237,53 @@ def append_master_history(master, action, data):
         }
     })
     write_cache(f"history_{master}.json", {'items': items[-300:]})
+    remember_work({
+        'timestamp': items[-1]['timestamp'],
+        'master': master,
+        'gos': items[-1]['action'].get('gos') or '',
+        'uid': data.get('uid') or '',
+        'darks': data.get('darks_number') or '',
+        'label': items[-1]['action'].get('label') or '',
+        'detail': detail,
+        'hours': hours,
+        'desc': (ticket or {}).get('desc') or data.get('desc') or '',
+    })
+
+WORK_HISTORY_FILE = 'masters_work.json'
+
+def work_history_items():
+    raw = read_cache(WORK_HISTORY_FILE) or {}
+    items = raw.get('items') if isinstance(raw, dict) else []
+    return items if isinstance(items, list) else []
+
+def remember_work(row):
+    items = work_history_items()
+    items.append(row)
+    write_cache(WORK_HISTORY_FILE, {'items': items[-5000:]})
+
+def load_work_history():
+    items = work_history_items()
+    if items:
+        return items
+    merged = []
+    for name in master_name_list():
+        for row in history_rows(name):
+            action = row.get('action') if isinstance(row.get('action'), dict) else {}
+            merged.append({
+                'timestamp': row.get('timestamp') or '',
+                'master': name,
+                'gos': action.get('gos') or '',
+                'uid': '',
+                'darks': action.get('darks_number') or '',
+                'label': action.get('label') or '',
+                'detail': action.get('detail') or action.get('parts') or '',
+                'hours': row.get('hours'),
+                'desc': '',
+            })
+    merged.sort(key=lambda row: row.get('timestamp') or '')
+    if merged:
+        write_cache(WORK_HISTORY_FILE, {'items': merged[-5000:]})
+    return merged[-5000:]
 
 SHIFT_REPORTS_FILE = 'shift_reports.json'
 SHIFT_SEEN_FILE = 'shift_seen.json'
@@ -3038,12 +3141,33 @@ def bike_map_url(iot, darks, gos):
     iot = resolve_ticket_iot(iot, darks, gos)
     if not normalize_iot(iot):
         return ''
-    point = lookup_bike_point(iot)
-    if not point or point.get('lat') is None or point.get('lon') is None:
+    ensure_xdevice_loop()
+    refresh_xdevice_points(force=False)
+    point = None
+    for token in iot_tokens(iot):
+        found = _xdevice_points.get(token)
+        if found:
+            point = found
+            break
+    if point and point.get('lat') is not None and point.get('lon') is not None:
+        remember_point(iot, point['lat'], point['lon'], point.get('at'))
+        return yandex_map_url(point['lat'], point['lon'])
+    remembered = remembered_point(iot)
+    if remembered:
+        return yandex_map_url(remembered['lat'], remembered['lon'])
+    object_id = (point or {}).get('object_id') or ''
+    lat, lon = (None, None)
+    if object_id:
+        lat, lon = fetch_object_coords(object_id)
+        if lat is None or lon is None:
+            lat, lon = fetch_packet_coords(object_id)
+    if lat is None or lon is None:
         return ''
-    lat = point['lat']
-    lon = point['lon']
-    return f'https://yandex.ru/maps/?ll={lon},{lat}&pt={lon},{lat}&z=16&l=map'
+    if point is not None:
+        point['lat'] = lat
+        point['lon'] = lon
+    remember_point(iot, lat, lon, (point or {}).get('at') or 0)
+    return yandex_map_url(lat, lon)
 
 def _bot_map_row(item):
     return {
@@ -3063,9 +3187,20 @@ def api_bot_maps():
         bike_lookup()
     except Exception:
         pass
+    maps = []
     if len(rows) > 1:
         with ThreadPoolExecutor(max_workers=6) as pool:
-            maps = list(pool.map(_bot_map_row, rows))
+            futures = [pool.submit(_bot_map_row, item) for item in rows]
+            try:
+                for future in as_completed(futures, timeout=16):
+                    maps.append(future.result())
+            except FutureTimeout:
+                logger.warning('Часть точек парка не успела прийти, отдаю что уже есть')
+        ready = {item.get('gos') for item in maps}
+        for item in rows:
+            gos = item.get('gos') or ''
+            if gos not in ready:
+                maps.append({'gos': gos, 'url': ''})
     else:
         maps = [_bot_map_row(item) for item in rows]
     return jsonify({'success': True, 'maps': maps})
@@ -5186,6 +5321,30 @@ def master_groups(name):
             })
     return groups, master_tickets, cache_data.get('updated_at', '')
 
+@app.route('/admin/history')
+@login_required
+def admin_history():
+    if session.get('role') != 'admin':
+        return redirect(url_for('login_page'))
+    query = (request.args.get('q') or '').strip()
+    items = list(reversed(load_work_history()))
+    if query:
+        needle = normalize_gos(query)
+        folded = query.lower()
+        picked = []
+        for row in items:
+            gos = normalize_gos(row.get('gos'))
+            master = str(row.get('master') or '').lower()
+            if (needle and needle in gos) or folded in master:
+                picked.append(row)
+        items = picked
+    return render_template(
+        'admin_history.html',
+        items=items[:300],
+        query=query,
+        now=get_msk_now().strftime('%d.%m.%Y %H:%M'),
+    )
+
 @app.route('/admin/stats')
 @login_required
 def admin_stats():
@@ -5697,15 +5856,52 @@ def master_replace_yes(name, darks_number, uid):
     parts = request.form.get('parts', '')
     if not parts or int(parts) <= 0:
         return jsonify({'success': False, 'error': 'Укажите количество'})
+    ticket = find_cached_ticket(uid) or {}
     update_ticket_in_admin_cache(uid, 'done', parts)
     refresh_master_caches_from_admin()
     add_to_queue({
         'uid': uid,
         'source': source_of(uid),
         'type': 'replace_yes',
-        'data': {'parts': parts, 'master': name, 'darks_number': darks_number}
+        'data': {'parts': parts, 'master': name, 'darks_number': darks_number, 'gos': ticket.get('gos', ''), 'desc': ticket.get('desc', '')}
     })
+    kind = (ticket.get('type') or 'Заявка').strip()
+    notify_dark_event(darks_number, f'✅ {kind}: отдано {parts}. Заявка выполнена.', uid, 'done')
     maybe_ask_rating(darks_number, name)
+    return jsonify({'success': True})
+
+@app.route('/master/<name>/darks/<darks_number>/redo/<uid>', methods=['POST'])
+@login_required
+def master_redo(name, darks_number, uid):
+    if session.get('master_name') != name:
+        return jsonify({'success': False, 'error': 'Доступ запрещён'})
+    reason = (request.form.get('reason') or '').strip()
+    if not reason:
+        return jsonify({'success': False, 'error': 'Напишите, почему не сделано'})
+    ticket = find_cached_ticket(uid) or {}
+    if is_supply(ticket):
+        return jsonify({'success': False, 'error': 'Для аккумулятора и зарядки эта кнопка не нужна'})
+    if ticket.get('status') != 'pending':
+        return jsonify({'success': False, 'error': 'Так можно отметить только заявку в работе'})
+    previous = (ticket.get('note') or '').strip()
+    line = 'Доделать: ' + reason
+    note = f'{previous}\n{line}'.strip() if previous else line
+    update_ticket_in_admin_cache(uid, 'todo', note)
+    refresh_master_caches_from_admin()
+    add_to_queue({
+        'uid': uid,
+        'source': source_of(uid),
+        'type': 'redo',
+        'data': {
+            'reason': reason,
+            'note': note,
+            'detail': line,
+            'master': name,
+            'darks_number': darks_number,
+            'gos': ticket.get('gos', ''),
+            'desc': ticket.get('desc', ''),
+        }
+    })
     return jsonify({'success': True})
 
 @app.route('/master/<name>/darks/<darks_number>/replace_no/<uid>', methods=['POST'])

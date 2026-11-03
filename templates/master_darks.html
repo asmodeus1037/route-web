@@ -404,6 +404,9 @@
                     <button type="submit" class="fast-ok">Отправить</button>
                 </form>
                 <div class="fast-more-panel" id="more-{{ t.uid }}" hidden>
+                    {% if t.status == 'pending' %}
+                    <button type="button" class="fast-side" onclick="openModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'redo', 'Не сделан')">Не сделан</button>
+                    {% endif %}
                     <button type="button" class="fast-side" onclick="openModal('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'evacuation', 'Причина эвакуации')">Эвакуация</button>
                     <button type="button" class="fast-side" onclick="closeTicketInstant('{{ name }}', '{{ darks_number }}', '{{ t.uid }}', 'fail')">Вело отсутствует на дарксторе</button>
                 </div>
@@ -458,7 +461,7 @@
 
     <div class="footer">Обновлено: {{ now }}</div>
     
-    <script src="/static/js/master.js?v=19"></script>
+    <script src="/static/js/master.js?v=20"></script>
     <nav class="dock"></nav>
 </body>
 </html>

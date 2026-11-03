@@ -817,6 +817,28 @@ function openModal(name, darks, uid, type, title) {
             return false;
         };
     }
+    if (type === 'redo') {
+        textarea.placeholder = 'Почему не сделано';
+        form.onsubmit = function(e) {
+            e.preventDefault();
+            var reason = textarea.value;
+            if (!reason.trim()) {
+                alert('Напишите, почему не сделано');
+                return false;
+            }
+            var fd = new FormData();
+            fd.append('reason', reason);
+            sendOrQueue({
+                url: '/master/' + name + '/darks/' + darks + '/redo/' + uid,
+                method: 'POST',
+                body: formBody(fd),
+                uid: uid,
+                okText: 'Заявка отмечена: доделать'
+            });
+            closeModal('reasonModal');
+            return false;
+        };
+    }
     
     form.action = '/master/' + name + '/darks/' + darks + '/' + type + '/' + uid;
     modal.classList.add('active');

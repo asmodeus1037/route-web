@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>История мастеров</title>
+    <link rel="stylesheet" href="/static/css/admin.css?v=26">
+    <style>
+        body { padding: 16px; }
+        .wrap { max-width: 1100px; margin: 0 auto; }
+        h1 { font-size: 26px; margin: 0 0 6px; }
+        .muted { color: #64748b; margin-bottom: 16px; }
+        form { display: flex; gap: 8px; margin-bottom: 14px; }
+        input { flex: 1; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 12px; font: inherit; }
+        button { border: 0; background: #0f172a; color: #fff; border-radius: 10px; padding: 10px 14px; font-weight: 800; cursor: pointer; }
+        table { width: 100%; border-collapse: collapse; background: #fff; }
+        th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #eef2f6; font-size: 14px; vertical-align: top; }
+        th { font-size: 12px; color: #64748b; }
+        .back { display: inline-block; margin-bottom: 12px; color: #334155; font-weight: 700; }
+        .empty { color: #64748b; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <a class="back" href="/admin">← К заявкам</a>
+        <h1>История мастеров</h1>
+        <p class="muted">Кто закрыл заявку, когда и сколько прошло от создания до отметки. Поиск по госномеру. {{ now }}</p>
+        <form method="get" action="/admin/history">
+            <input name="q" value="{{ query }}" placeholder="Госномер, например РЕ621Р">
+            <button type="submit">Найти</button>
+        </form>
+        {% if items %}
+        <table>
+            <tr>
+                <th>Когда</th>
+                <th>Мастер</th>
+                <th>Госномер</th>
+                <th>Что сделал</th>
+                <th>Комментарий</th>
+                <th>Прошло</th>
+                <th>Дарк</th>
+            </tr>
+            {% for row in items %}
+            <tr>
+                <td>{{ row.timestamp }}</td>
+                <td>{{ row.master }}</td>
+                <td>{{ row.gos or '—' }}</td>
+                <td>{{ row.label or '—' }}{% if row.desc %}<div class="empty">{{ row.desc }}</div>{% endif %}</td>
+                <td>{{ row.detail or '—' }}</td>
+                <td>{% if row.hours is not none and row.hours != '' %}{{ row.hours }} ч{% else %}—{% endif %}</td>
+                <td>{{ row.darks or '—' }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p class="empty">Пока записей нет. История копится отдельно и не стирается вместе с заявкой.</p>
+        {% endif %}
+    </div>
+</body>
+</html>

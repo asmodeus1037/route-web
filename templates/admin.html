@@ -29,6 +29,8 @@
         .bike-search { background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:16px; }
         .bike-search input, .create-form input, .create-form textarea, .create-form select { width:100%; box-sizing:border-box; border:1px solid #cbd5e1; border-radius:10px; padding:10px 12px; font:inherit; }
         .bike-card { border:1px solid #e2e8f0; border-radius:12px; padding:12px; margin-top:10px; }
+        .copy-chip { border:0; background:transparent; padding:0; font:inherit; font-weight:800; color:#0f172a; cursor:pointer; text-decoration:underline; text-underline-offset:3px; }
+        .copy-chip.iot { color:#2563eb; }
         .create-form label { display:block; font-weight:800; margin:12px 0 6px; }
         .create-form .choices { display:grid; gap:8px; }
         .create-form .choices label {
@@ -114,6 +116,7 @@
             <button class="btn btn-view" type="button" onclick="openBikeSearch()">Поиск вело</button>
             <button class="btn btn-view" type="button" onclick="openDocs()">Документы</button>
             <a class="btn btn-view" href="/admin/stats">Статистика</a>
+            <a class="btn btn-view" href="/admin/history">История мастеров</a>
             <a class="btn btn-view bell-link" href="/admin/ops">
                 <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 22a2.2 2.2 0 0 0 2.2-2.2h-4.4A2.2 2.2 0 0 0 12 22zm7-6V11a7 7 0 0 0-5-6.7V3.5a2 2 0 1 0-4 0v.8A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2z"/></svg>
                 Уведомления{% if ops_open %}<span class="bell-badge">{{ ops_open }}</span>{% endif %}
@@ -440,6 +443,6 @@
         now: '{{ now }}'
     };
 </script>
-<script src="/static/js/admin.js?v=32"></script>
+<script src="/static/js/admin.js?v=33"></script>
 </body>
 </html>

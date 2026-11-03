@@ -961,6 +961,40 @@ function toggleRowMenu(event, button) {
     if (!open) menu.classList.add('open');
 }
 
+function copyChip(value, iot) {
+    var text = String(value || '').trim();
+    if (!text) return '—';
+    var cls = iot ? 'copy-chip iot' : 'copy-chip';
+    return '<button type="button" class="' + cls + '" data-copy="' + escAttr(text) + '">' + escAttr(text) + '</button>';
+}
+
+function copyText(text, button) {
+    var done = function() {
+        var old = button.textContent;
+        button.textContent = 'Скопировано';
+        setTimeout(function() { button.textContent = old; }, 900);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(function() {
+            var area = document.createElement('textarea');
+            area.value = text;
+            document.body.appendChild(area);
+            area.select();
+            try { document.execCommand('copy'); } catch (e) {}
+            area.remove();
+            done();
+        });
+        return;
+    }
+    var area = document.createElement('textarea');
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    area.remove();
+    done();
+}
+
 function searchBike() {
     var input = document.getElementById('bikeQuery');
     var box = document.getElementById('bikeSearchResult');
@@ -986,9 +1020,9 @@ function searchBike() {
             for (var i = 0; i < items.length; i++) {
                 var item = items[i];
                 html += '<div class="bike-card">';
-                html += '<div><b>Госномер:</b> ' + (item.gos || '—') + '</div>';
-                html += '<div><b>IoT:</b> ' + (item.iot || '—') + '</div>';
-                html += '<div><b>Серийный:</b> ' + (item.serial || '—') + '</div>';
+                html += '<div><b>Госномер:</b> ' + copyChip(item.gos, false) + '</div>';
+                html += '<div><b>IoT:</b> ' + copyChip(item.iot, true) + '</div>';
+                html += '<div><b>Номер рамы:</b> ' + copyChip(item.serial, false) + '</div>';
                 html += '<div><b>Тип:</b> ' + (item.kind || '—') + '</div>';
                 html += '<div><b>Поставщик:</b> ' + (item.supplier || '—') + '</div>';
                 html += '<div><b>Даркстор:</b> ' + (item.darks || '—') + (item.address ? (', ' + item.address) : '') + '</div>';
@@ -1288,6 +1322,15 @@ document.addEventListener('click', function(event) {
     var button = event.target && event.target.closest ? event.target.closest('#createAddressList button') : null;
     if (!button) return;
     pickDarksAddress(button.getAttribute('data-number') || '', button.getAttribute('data-address') || '');
+});
+
+document.addEventListener('click', function(event) {
+    var chip = event.target && event.target.closest ? event.target.closest('[data-copy]') : null;
+    if (!chip) return;
+    var text = chip.getAttribute('data-copy') || '';
+    if (!text) return;
+    event.preventDefault();
+    copyText(text, chip);
 });
 
 function toggleCustomType() {
