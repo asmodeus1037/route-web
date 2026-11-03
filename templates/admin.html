@@ -36,6 +36,9 @@
             border:1px solid #e2e8f0; border-radius:12px; background:#f8fafc; font-weight:700;
         }
         .create-form .choices input[type="radio"] { width:18px; height:18px; margin:0; flex:0 0 18px; }
+        .address-list { border:1px solid #e2e8f0; border-radius:10px; margin-top:6px; overflow:hidden; }
+        .address-list button { display:block; width:100%; text-align:left; background:#fff; border:0; border-bottom:1px solid #f1f5f9; padding:8px 12px; font:inherit; cursor:pointer; }
+        .address-list button small { display:block; color:#64748b; font-weight:600; }
         .origin-badge, .supplier-badge { font-size:13px; padding:3px 8px; }
         .bike-actions { display: inline-flex; gap: 4px; align-items: center; vertical-align: middle; }
         .btn-mini { border: 1px solid #cbd5e1; background: #fff; color: #334155; border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 700; line-height: 18px; cursor: pointer; }
@@ -295,6 +298,9 @@
         <button class="close-btn" onclick="closeCreateTicket()">×</button>
         <h3>Создать задачу</h3>
         <div class="create-form">
+            <label>Адрес</label>
+            <input id="createAddress" placeholder="Начните вводить адрес, номер дарка подставится" autocomplete="off" oninput="filterDarksAddress()">
+            <div id="createAddressList" class="address-list"></div>
             <label>Номер дарка</label>
             <input id="createDarks" placeholder="1234" onblur="maybeLoadGaiPlates()">
             <label>Тип техники</label>
@@ -434,6 +440,6 @@
         now: '{{ now }}'
     };
 </script>
-<script src="/static/js/admin.js?v=31"></script>
+<script src="/static/js/admin.js?v=32"></script>
 </body>
 </html>

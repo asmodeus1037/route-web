@@ -1222,11 +1222,73 @@ function submitDoc() {
 
 function openCreateTicket() {
     document.getElementById('createTicketModal').classList.add('active');
+    ensureDarksOptions();
 }
 
 function closeCreateTicket() {
     document.getElementById('createTicketModal').classList.remove('active');
 }
+
+var darksOptions = null;
+
+function ensureDarksOptions() {
+    if (darksOptions) return;
+    fetch('/api/darks_options', { credentials: 'same-origin' })
+        .then(readApi)
+        .then(function(data) {
+            darksOptions = (data && data.items) || [];
+        })
+        .catch(function() {
+            darksOptions = [];
+        });
+}
+
+function escAttr(value) {
+    return String(value || '').replace(/[&<>"']/g, function(ch) {
+        return { '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[ch];
+    });
+}
+
+function filterDarksAddress() {
+    var input = document.getElementById('createAddress');
+    var box = document.getElementById('createAddressList');
+    if (!input || !box) return;
+    var query = (input.value || '').trim().toLowerCase();
+    if (query.length < 2 || !darksOptions) {
+        box.innerHTML = '';
+        return;
+    }
+    var hits = [];
+    for (var i = 0; i < darksOptions.length && hits.length < 8; i++) {
+        var item = darksOptions[i];
+        var address = String(item.address || '').toLowerCase();
+        var number = String(item.number || '');
+        if (address.indexOf(query) !== -1 || number.indexOf(query) === 0) hits.push(item);
+    }
+    var html = '';
+    hits.forEach(function(item) {
+        html += '<button type="button" data-number="' + escAttr(item.number) + '" data-address="' + escAttr(item.address) + '">';
+        html += escAttr(item.address || 'Без адреса');
+        html += '<small>даркстор ' + escAttr(item.number) + '</small></button>';
+    });
+    box.innerHTML = html;
+}
+
+function pickDarksAddress(number, address) {
+    var darks = document.getElementById('createDarks');
+    var input = document.getElementById('createAddress');
+    var box = document.getElementById('createAddressList');
+    if (darks) darks.value = number || '';
+    if (input) input.value = address || '';
+    if (box) box.innerHTML = '';
+    maybeLoadGaiPlates();
+}
+
+document.addEventListener('click', function(event) {
+    var button = event.target && event.target.closest ? event.target.closest('#createAddressList button') : null;
+    if (!button) return;
+    pickDarksAddress(button.getAttribute('data-number') || '', button.getAttribute('data-address') || '');
+});
 
 function toggleCustomType() {
     var chosen = document.querySelector('input[name="createType"]:checked');
@@ -1340,6 +1402,10 @@ function submitCreateTicket() {
         }
         closeCreateTicket();
         document.getElementById('createDarks').value = '';
+        var addressInput = document.getElementById('createAddress');
+        if (addressInput) addressInput.value = '';
+        var addressList = document.getElementById('createAddressList');
+        if (addressList) addressList.innerHTML = '';
         document.getElementById('createDesc').value = '';
         document.getElementById('createGos').value = '';
         document.getElementById('createQty').value = '';

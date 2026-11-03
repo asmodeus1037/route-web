@@ -15,6 +15,7 @@ import html
 import logging
 import secrets
 from functools import wraps
+from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
@@ -780,37 +781,89 @@ def coord_number(value):
         return None
     return number
 
-_LAT_KEYS = {'lat', 'latitude', 'gps-latitude', 'coord-latitude', 'last_valid_lat'}
-_LON_KEYS = {'lon', 'lng', 'longitude', 'gps-longitude', 'coord-longitude', 'last_valid_lon'}
+_LAT_KEYS = {
+    'lat', 'latitude', 'gps-latitude', 'coord-latitude', 'last_valid_lat',
+    'last_lat', 'lastlat', 'last_latitude', 'prev_lat', 'gps_lat', 'gpslat',
+}
+_LON_KEYS = {
+    'lon', 'lng', 'longitude', 'gps-longitude', 'coord-longitude', 'last_valid_lon',
+    'last_lon', 'lastlon', 'last_longitude', 'prev_lon', 'gps_lon', 'gps_lng', 'gpslng',
+}
+
+def coord_pair(text):
+    parts = re.findall(r'-?\d+(?:[.,]\d+)?', str(text or ''))
+    if len(parts) < 2:
+        return None
+    first = coord_number(parts[0])
+    second = coord_number(parts[1])
+    if first is None or second is None:
+        return None
+    if 40 <= abs(first) <= 80 and 20 <= abs(second) <= 180:
+        return first, second
+    if 40 <= abs(second) <= 80 and 20 <= abs(first) <= 180:
+        return second, first
+    return first, second
 
 def find_coords(node, depth=0):
     if depth > 6 or node is None:
         return None, None
     if isinstance(node, dict):
         lat = lon = None
+        named = str(node.get('name') or node.get('key') or '').strip().lower()
+        if named in _LAT_KEYS or named in _LON_KEYS:
+            parsed = coord_number(node.get('value'))
+            if parsed is None:
+                parsed = coord_number(node.get('val'))
+            if named in _LAT_KEYS and parsed is not None:
+                lat = parsed
+            elif named in _LON_KEYS and parsed is not None:
+                lon = parsed
         for key, value in node.items():
             name = str(key).lower()
-            if name in _LAT_KEYS:
-                lat = coord_number(value)
-            elif name in _LON_KEYS:
-                lon = coord_number(value)
+            if name in _LAT_KEYS or name in _LON_KEYS:
+                parsed = coord_number(value)
+                if name in _LAT_KEYS and parsed is not None:
+                    lat = parsed
+                elif name in _LON_KEYS and parsed is not None:
+                    lon = parsed
+            elif isinstance(value, str) and name in ('pos', 'position', 'location', 'coords', 'coordinates', 'gps'):
+                pair = coord_pair(value)
+                if pair:
+                    lat, lon = pair
         if lat is not None and lon is not None:
             return lat, lon
-        coords = node.get("coordinates")
+        coords = node.get('coordinates')
         if isinstance(coords, (list, tuple)) and len(coords) >= 2 and not isinstance(coords[0], (list, dict)):
             first = coord_number(coords[0])
             second = coord_number(coords[1])
             if first is not None and second is not None:
                 return second, first
         for value in node.values():
-            lat, lon = find_coords(value, depth + 1)
-            if lat is not None and lon is not None:
-                return lat, lon
+            found_lat, found_lon = find_coords(value, depth + 1)
+            if found_lat is not None and found_lon is not None:
+                return found_lat, found_lon
     elif isinstance(node, list):
-        for value in node[:40]:
-            lat, lon = find_coords(value, depth + 1)
-            if lat is not None and lon is not None:
-                return lat, lon
+        ordered = list(node[-80:])
+        if len(node) > 80:
+            ordered = list(node[:10]) + ordered
+        best = None
+        best_time = -1
+        for value in ordered:
+            found_lat, found_lon = find_coords(value, depth + 1)
+            if found_lat is None or found_lon is None:
+                continue
+            stamp = 0
+            if isinstance(value, dict):
+                raw = value.get('time') or value.get('t') or value.get('ts') or value.get('timestamp') or 0
+                try:
+                    stamp = float(raw)
+                except (TypeError, ValueError):
+                    stamp = 0
+            if best is None or stamp >= best_time:
+                best = (found_lat, found_lon)
+                best_time = stamp
+        if best:
+            return best
     return None, None
 
 def fetch_object_coords(object_id):
@@ -829,6 +882,31 @@ def fetch_object_coords(object_id):
         logger.warning(f"Карточка IoT {object_id} не открылась: {exc}")
         return None, None
 
+def fetch_packet_coords(object_id):
+    """Последняя точка из истории, если модуль давно не в сети и в карточке координат нет."""
+    token = xdevice_token()
+    if not token or not object_id:
+        return None, None
+    now_ms = int(time.time() * 1000)
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    for days in (21, 120):
+        try:
+            response = requests.get(
+                XDEVICE_URL.rstrip('/') + '/' + str(object_id) + '/packets',
+                params={'from': now_ms - days * 86400000, 'to': now_ms, 'limit': 40},
+                headers=headers,
+                timeout=8,
+            )
+            if response.status_code != 200 or len(response.content) > 2000000:
+                continue
+            lat, lon = find_coords(response.json())
+            if lat is not None and lon is not None:
+                return lat, lon
+        except Exception as exc:
+            logger.warning(f"История IoT {object_id} не открылась: {exc}")
+            return None, None
+    return None, None
+
 def lookup_bike_point(iot):
     ensure_xdevice_loop()
     refresh_xdevice_points(force=False)
@@ -844,6 +922,11 @@ def lookup_bike_point(iot):
         return None
     if point.get('lat') is None or point.get('lon') is None:
         lat, lon = fetch_object_coords(point.get('object_id'))
+        if lat is not None and lon is not None:
+            point['lat'] = lat
+            point['lon'] = lon
+    if point.get('lat') is None or point.get('lon') is None:
+        lat, lon = fetch_packet_coords(point.get('object_id'))
         if lat is not None and lon is not None:
             point['lat'] = lat
             point['lon'] = lon
@@ -2283,6 +2366,75 @@ def append_shift_sheet(item):
             break
     sheet.update(values=row, range_name=f'A{start}:J{start}', value_input_option='USER_ENTERED')
 
+DEBRIEF_BOOK_ID = '1vjaKs_0hE5A2N2fqaYJ2fbh89ASTsyXPioQSd8hOmKY'
+
+def debrief_status(item):
+    code = (item or {}).get('status') or ''
+    if code == 'partial':
+        return '⚠ Выполнено частично (см. комментарий)'
+    if code == 'failed':
+        return '❌ Не выполнен (см. комментарий)'
+    return '✅ Все запланированные выезды выполнены'
+
+def append_shift_debrief(item):
+    """Копия ежедневного отчёта в книгу «Выездные мастера», лист «Дебрифы мастеров»."""
+    book = get_gspread_client().open_by_key(DEBRIEF_BOOK_ID)
+    sheet = None
+    for ws in book.worksheets():
+        title = (ws.title or '').strip().lower()
+        try:
+            gid = int(ws.id)
+        except Exception:
+            gid = ws.id
+        if title == 'дебрифы мастеров' or gid == 1490061717:
+            sheet = ws
+            break
+    if sheet is None:
+        raise RuntimeError('Лист «Дебрифы мастеров» не найден')
+    column = sheet.col_values(1)
+    start = len(column) + 1
+    for index, value in enumerate(column, start=1):
+        if index > 1 and not str(value).strip():
+            start = index
+            break
+    mileage = str(item.get('mileage') or '').strip()
+    if mileage.lower() == 'нет':
+        mileage = ''
+    stamp = item.get('saved_at') or ''
+    try:
+        stamp = datetime.strptime(stamp, '%Y-%m-%d %H:%M:%S').strftime('%d.%m.%Y %H:%M:%S')
+    except ValueError:
+        stamp = get_msk_now().strftime('%d.%m.%Y %H:%M:%S')
+    sheet.update(
+        values=[[
+            stamp,
+            item.get('master') or '',
+            item.get('date_ru') or '',
+            item.get('start') or '',
+            item.get('end') or '',
+            mileage,
+            item.get('expenses') or '',
+            debrief_status(item),
+            item.get('comment') or '',
+        ]],
+        range_name=f'A{start}:I{start}',
+        value_input_option='USER_ENTERED',
+    )
+    try:
+        source = sheet.get('J2:P2', value_render_option='FORMULA')
+        cells = source[0] if source else []
+        copied = []
+        for formula in cells:
+            text = str(formula or '')
+            if text.startswith('='):
+                copied.append(re.sub(r'([A-Z])2\b', lambda match: match.group(1) + str(start), text))
+            else:
+                copied.append('')
+        if any(copied):
+            sheet.update(values=[copied], range_name=f'J{start}:P{start}', value_input_option='USER_ENTERED')
+    except Exception as exc:
+        logger.warning(f'Формулы дебрифа не скопировались: {exc}')
+
 def guard_shift(name):
     missing = missing_shift_day(name)
     if missing:
@@ -2605,6 +2757,13 @@ def ticket_mark(ticket):
         return '⚡'
     return '🚲'
 
+def curator_ticket_line(ticket):
+    if ticket.get('type') in ('Аккумуляторная батарея', 'Зарядное устройство'):
+        name = ticket.get('type')
+    else:
+        name = ticket.get('gos') or 'Без номера'
+    return f'{ticket_mark(ticket)} {tg_plain(name)} | {tg_plain(ticket.get("desc") or "-")}'
+
 def curator_notice_groups():
     tickets = []
     cache = get_admin_cache() or {}
@@ -2628,22 +2787,30 @@ def curator_notice_groups():
             if master and master not in names:
                 names.append(master)
         master_title = 'Вам назначен мастер' if len(names) < 2 else 'Вам назначены мастера'
+        transit = [ticket for ticket in items if is_transit_master(ticket.get('master'))]
+        repair = [ticket for ticket in items if not is_transit_master(ticket.get('master'))]
         lines = [
             'Привет!',
             f'{master_title}: {", ".join(names)}',
             '',
             f'<b>{tg_plain(address)} (даркстор {tg_plain(dark)})</b>',
-            f'Заявки ({len(items)}):',
         ]
-        for ticket in items:
-            if ticket.get('type') in ('Аккумуляторная батарея', 'Зарядное устройство'):
-                name = ticket.get('type')
-            else:
-                name = ticket.get('gos') or 'Без номера'
-            mark = ' — ЗАМЕНА' if is_evacuation_ticket(ticket) else ''
-            lines.append(f'{ticket_mark(ticket)} {tg_plain(name)} | {tg_plain(ticket.get("desc") or "-")}{mark}')
+        if transit:
+            lines.append('')
+            lines.append('<b>ЭВАКУАЦИЯ ВЕЛОСИПЕДА</b>')
+            lines.append(f'Заявки ({len(transit)}):')
+            for ticket in transit:
+                lines.append(curator_ticket_line(ticket))
+        if repair:
+            lines.append('')
+            lines.append(f'Заявки ({len(repair)}):')
+            for ticket in repair:
+                lines.append(curator_ticket_line(ticket))
         lines.append('')
-        lines.append('Подготовьте, пожалуйста, технику к ремонту')
+        if repair:
+            lines.append('Подготовьте, пожалуйста, технику к ремонту')
+        else:
+            lines.append('Подготовьте, пожалуйста, велосипед к эвакуации')
         lines.append('Хорошего дня!')
         payload.append({'darks': dark, 'text': '\n'.join(lines), 'count': len(items)})
     return payload
@@ -2871,32 +3038,36 @@ def bike_map_url(iot, darks, gos):
     iot = resolve_ticket_iot(iot, darks, gos)
     if not normalize_iot(iot):
         return ''
-    ensure_xdevice_loop()
-    refresh_xdevice_points(force=False)
-    point = None
-    for token in iot_tokens(iot):
-        point = _xdevice_points.get(token)
-        if point:
-            break
+    point = lookup_bike_point(iot)
     if not point or point.get('lat') is None or point.get('lon') is None:
         return ''
     lat = point['lat']
     lon = point['lon']
     return f'https://yandex.ru/maps/?ll={lon},{lat}&pt={lon},{lat}&z=16&l=map'
 
+def _bot_map_row(item):
+    return {
+        'gos': item.get('gos') or '',
+        'url': bike_map_url(item.get('iot') or '', item.get('darks') or '', item.get('gos') or ''),
+    }
+
 @app.route('/api/bot_maps', methods=['POST'])
 def api_bot_maps():
     if not bot_hook_ok():
         return jsonify({'success': False, 'error': 'Нет доступа'}), 403
     bikes = (request.json or {}).get('bikes') or []
-    maps = []
-    for item in bikes[:40]:
-        if not isinstance(item, dict):
-            continue
-        maps.append({
-            'gos': item.get('gos') or '',
-            'url': bike_map_url(item.get('iot') or '', item.get('darks') or '', item.get('gos') or ''),
-        })
+    rows = [item for item in bikes[:40] if isinstance(item, dict)]
+    ensure_xdevice_loop()
+    refresh_xdevice_points(force=False)
+    try:
+        bike_lookup()
+    except Exception:
+        pass
+    if len(rows) > 1:
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            maps = list(pool.map(_bot_map_row, rows))
+    else:
+        maps = [_bot_map_row(item) for item in rows]
     return jsonify({'success': True, 'maps': maps})
 
 @app.route('/api/curator_dispute', methods=['POST'])
@@ -3152,6 +3323,27 @@ def api_bike_search():
         if len(hits) >= 20:
             break
     return jsonify({'success': True, 'items': hits})
+
+@app.route('/api/darks_options')
+@login_required
+def api_darks_options():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    try:
+        ref = load_darks_reference() or {}
+    except Exception:
+        return jsonify({'success': False, 'error': 'Список дарксторов не открылся'})
+    items = []
+    for number, info in ref.items():
+        number = str(number or '').strip()
+        if not number:
+            continue
+        items.append({
+            'number': number,
+            'address': (info.get('address') or '').strip(),
+        })
+    items.sort(key=lambda item: (item['address'] or item['number']))
+    return jsonify({'success': True, 'items': items})
 
 @app.route('/api/darks_bikes')
 @login_required
@@ -5104,9 +5296,19 @@ def master_report_save(name):
     except Exception as exc:
         sheet_ok = False
         logger.warning(f'Отчёт в таблицу: {exc}')
+    debrief_ok = True
+    try:
+        append_shift_debrief(item)
+    except Exception as exc:
+        debrief_ok = False
+        logger.warning(f'Отчёт в «Дебрифы мастеров»: {exc}')
     note = ''
-    if not sheet_ok:
-        note = 'Отчёт принят. В таблицу Excel сейчас не записался, копия в базе сайта есть.'
+    if not sheet_ok and not debrief_ok:
+        note = 'Отчёт принят. В таблицы сейчас не записался, копия в базе сайта есть.'
+    elif not debrief_ok:
+        note = 'Отчёт принят. В лист «Дебрифы мастеров» сейчас не записался.'
+    elif not sheet_ok:
+        note = 'Отчёт принят. В таблицу Excel сейчас не записался, в «Дебрифы мастеров» строка есть.'
     elif not db_ok:
         note = 'Отчёт принят и записан в таблицу.'
     return jsonify({'success': True, 'message': note or 'Отчёт сохранён', 'next': url_for('master_overview', name=name)})
