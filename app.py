@@ -2503,12 +2503,6 @@ def append_shift_debrief(item):
             break
     if sheet is None:
         raise RuntimeError('Лист «Дебрифы мастеров» не найден')
-    column = sheet.col_values(1)
-    start = len(column) + 1
-    for index, value in enumerate(column, start=1):
-        if index > 1 and not str(value).strip():
-            start = index
-            break
     mileage = str(item.get('mileage') or '').strip()
     if mileage.lower() == 'нет':
         mileage = ''
@@ -2517,21 +2511,29 @@ def append_shift_debrief(item):
         stamp = datetime.strptime(stamp, '%Y-%m-%d %H:%M:%S').strftime('%d.%m.%Y %H:%M:%S')
     except ValueError:
         stamp = get_msk_now().strftime('%d.%m.%Y %H:%M:%S')
-    sheet.update(
-        values=[[
-            stamp,
-            item.get('master') or '',
-            item.get('date_ru') or '',
-            item.get('start') or '',
-            item.get('end') or '',
-            mileage,
-            item.get('expenses') or '',
-            debrief_status(item),
-            item.get('comment') or '',
-        ]],
-        range_name=f'A{start}:I{start}',
-        value_input_option='USER_ENTERED',
-    )
+    status_text = (item.get('status_label') or '').strip() or debrief_status(item)
+    row = [
+        stamp,
+        item.get('master') or '',
+        item.get('date_ru') or '',
+        item.get('start') or '',
+        item.get('end') or '',
+        mileage,
+        item.get('expenses') or '',
+        status_text,
+        item.get('comment') or '',
+    ]
+    try:
+        result = sheet.append_row(row, value_input_option='USER_ENTERED', table_range='A:I')
+    except TypeError:
+        result = sheet.append_row(row, value_input_option='USER_ENTERED')
+    updated = ''
+    if isinstance(result, dict):
+        updated = str((result.get('updates') or {}).get('updatedRange') or '')
+    numbers = re.findall(r'[A-Z]+(\d+)', updated.split('!')[-1])
+    start = int(numbers[-1]) if numbers else 0
+    if not start:
+        return
     try:
         source = sheet.get('J2:P2', value_render_option='FORMULA')
         cells = source[0] if source else []
@@ -2543,7 +2545,10 @@ def append_shift_debrief(item):
             else:
                 copied.append('')
         if any(copied):
-            sheet.update(values=[copied], range_name=f'J{start}:P{start}', value_input_option='USER_ENTERED')
+            try:
+                sheet.update(values=[copied], range_name=f'J{start}:P{start}', value_input_option='USER_ENTERED')
+            except TypeError:
+                sheet.update(f'J{start}:P{start}', [copied], value_input_option='USER_ENTERED')
     except Exception as exc:
         logger.warning(f'Формулы дебрифа не скопировались: {exc}')
 
@@ -4096,12 +4101,7 @@ def upload_act(filename, payload):
     local_path = os.path.join(ACTS_DIR, local_name)
     with open(local_path, 'wb') as handle:
         handle.write(payload)
-    link = ''
-    try:
-        link = yandex_upload(local_name, payload)
-    except Exception as exc:
-        logger.warning(f'Акт на Яндекс Диск не ушёл: {exc}')
-    return local_name, link
+    return local_name, ''
 
 def _sheet_cell(row, index):
     if not row or index >= len(row) or row[index] is None:
@@ -4657,9 +4657,7 @@ def api_make_document():
         logger.warning(f'Журнал поставки не записался: {exc}')
         log_note = 'sheet-failed'
     filename = f'{darks}_{operation}_{date.replace(".", "")}.docx'
-    _local_name, drive_link = upload_act(filename, buffer.getvalue())
-    if not drive_link:
-        log_note = 'drive-failed' if log_note == 'ok' else log_note + ',drive-failed'
+    local_name, _link = upload_act(filename, buffer.getvalue())
     buffer.seek(0)
     response = send_file(
         buffer,
@@ -4668,8 +4666,7 @@ def api_make_document():
         mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     )
     response.headers['X-Log-Note'] = log_note
-    if drive_link:
-        response.headers['X-Drive-Link'] = drive_link
+    response.headers['X-Local-File'] = local_name
     return response
 
 # ============================================================
@@ -5466,16 +5463,22 @@ def master_report_save(name):
         sheet_ok = False
         logger.warning(f'Отчёт в таблицу: {exc}')
     debrief_ok = True
+    debrief_error = ''
     try:
         append_shift_debrief(item)
     except Exception as exc:
         debrief_ok = False
+        debrief_error = str(exc)
         logger.warning(f'Отчёт в «Дебрифы мастеров»: {exc}')
     note = ''
     if not sheet_ok and not debrief_ok:
         note = 'Отчёт принят. В таблицы сейчас не записался, копия в базе сайта есть.'
     elif not debrief_ok:
-        note = 'Отчёт принят. В лист «Дебрифы мастеров» сейчас не записался.'
+        low = debrief_error.lower()
+        if '403' in low or 'permission' in low or 'forbidden' in low or 'доступ' in low:
+            note = 'Отчёт принят. Лист «Дебрифы мастеров» не пускает запись. Откройте эту таблицу и дайте редактирование адресу route-cache@telegramsenderbot.iam.gserviceaccount.com'
+        else:
+            note = 'Отчёт принят. В «Дебрифы мастеров» не записался: ' + debrief_error.replace('\n', ' ')[:180]
     elif not sheet_ok:
         note = 'Отчёт принят. В таблицу Excel сейчас не записался, в «Дебрифы мастеров» строка есть.'
     elif not db_ok:
