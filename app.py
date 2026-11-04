@@ -2524,8 +2524,15 @@ def append_shift_debrief(item):
         item.get('comment') or '',
     ]
     names = sheet.col_values(2)
-    dates = sheet.col_values(3)
-    start = max(len(names), len(dates), 1) + 1
+    start = None
+    for index, value in enumerate(names, start=1):
+        if index > 1 and not str(value or '').strip():
+            start = index
+            break
+    if start is None:
+        start = max(len(names), 1) + 1
+        if start > sheet.row_count:
+            sheet.add_rows(start - sheet.row_count)
     try:
         sheet.update(values=[row], range_name=f'A{start}:I{start}', value_input_option='USER_ENTERED')
     except TypeError:
@@ -5264,8 +5271,8 @@ def api_build_route_for_master():
     if len(points) < 2:
         return 'Не хватает координат для маршрута', 400
     user_agent = request.headers.get('User-Agent', '').lower()
-    is_mobile = any(x in user_agent for x in ['android', 'iphone', 'ipad', 'mobile'])
-    if is_mobile:
+    is_android = 'android' in user_agent
+    if is_android:
         start = points[0]
         finish = points[-1]
         vias = points[1:-1][:20]

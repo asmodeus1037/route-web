@@ -1082,4 +1082,14 @@ body { padding-bottom: 96px; }
     text-decoration: none;
 }
 .part-suggest.is-float { position: absolute; left: 0; right: 0; }
+.fast-panel .part-suggest,
+.fast-panel .part-suggest.is-float {
+    position: static;
+    top: auto;
+    right: auto;
+    bottom: auto !important;
+    left: auto;
+    margin-top: 0;
+}
+.fast-panel > .fast-ok { width: 100%; min-height: 48px; }
 

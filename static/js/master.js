@@ -690,6 +690,9 @@ function showPartMatches(box, query) {
     var q = partKey(query).trim();
     if (q === 'нет') {
         suggest.innerHTML = '<div class="part-miss">Запчасти не использовал. Нажмите «Отправить».</div>';
+        var send = box.closest('form');
+        var button = send && send.querySelector('button[type="submit"]');
+        if (button && button.scrollIntoView) button.scrollIntoView({block: 'nearest'});
         return;
     }
     if (q.length < 2) {
