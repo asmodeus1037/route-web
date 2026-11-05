@@ -1232,9 +1232,17 @@ function submitDoc() {
             });
         }
         if (!response.ok) throw new Error('Не создалось');
-        var match = /filename=\"?([^\";]+)\"?/.exec(response.headers.get('Content-Disposition') || '');
-        var name = match ? match[1] : 'document.docx';
+        var header = response.headers.get('Content-Disposition') || '';
+        var star = /filename\*=UTF-8''([^;]+)/i.exec(header);
+        var plain = /filename="([^"]+)"/.exec(header);
+        var name = 'document.docx';
+        if (star) {
+            try { name = decodeURIComponent(star[1]); } catch (e) { name = 'document.docx'; }
+        } else if (plain) {
+            name = plain[1];
+        }
         return response.blob().then(function(blob) {
+            if (!blob || !blob.size) throw new Error('Файл пришёл пустым');
             return { blob: blob, name: name, note: note };
         });
     })

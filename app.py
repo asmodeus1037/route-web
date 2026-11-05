@@ -4663,7 +4663,10 @@ def api_make_document():
         logger.warning(f'Журнал поставки не записался: {exc}')
         log_note = 'sheet-failed'
     filename = f'{darks}_{operation}_{date.replace(".", "")}.docx'
-    local_name, _link = upload_act(filename, buffer.getvalue())
+    try:
+        upload_act(filename, buffer.getvalue())
+    except Exception as exc:
+        logger.warning(f'Локальная копия акта не сохранилась: {exc}')
     buffer.seek(0)
     response = send_file(
         buffer,
@@ -4672,7 +4675,6 @@ def api_make_document():
         mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     )
     response.headers['X-Log-Note'] = log_note
-    response.headers['X-Local-File'] = local_name
     return response
 
 # ============================================================
