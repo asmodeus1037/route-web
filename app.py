@@ -1031,6 +1031,22 @@ def load_bike_rows():
     _bike_rows_cache['ts'] = now_ts
     return _bike_rows_cache['rows']
 
+def frame_numbers():
+    rows = load_bike_rows()
+    header = [str(cell or '').strip().lower() for cell in (rows[0] if rows else [])]
+    index = 0
+    for cell_index, title in enumerate(header):
+        if 'рам' in title or 'серийн' in title:
+            index = cell_index
+            break
+    found = set()
+    for row in rows[1:]:
+        raw = row[index] if len(row) > index else ''
+        key = re.sub(r'\s+', '', str(raw or ''))
+        if key:
+            found.add(key)
+    return found
+
 def bike_lookup():
     now_ts = time.time()
     if _bike_lookup_cache['by_dark_gos'] and now_ts - _bike_lookup_cache['ts'] < 600:
@@ -1510,6 +1526,9 @@ def _read_tickets_from_google():
                 elif 'IoT' in model:
                     bike_type = 'IoT'
                 gos = row[9].strip() if len(row) > 9 else ''
+                display_type = bike_type
+                if bike_type == 'Электровелосипед':
+                    display_type = bike_types.get(normalize_gos(gos)) or 'Неопределен тип вело, ошибка в гос номере'
                 uid = row[1].strip() if len(row) > 1 else ''
                 status_raw = row[3].strip() if len(row) > 3 else ''
                 status_l = row[11].strip() if len(row) > 11 else ''
@@ -1539,7 +1558,7 @@ def _read_tickets_from_google():
                     'source': 'Импорт М4',
                     'darks': darks_num,
                     'type': bike_type,
-                    'bike_type': bike_type,
+                    'bike_type': display_type,
                     'supplier': supplier_of(gos),
                     'desc': row[7].strip() if len(row) > 7 else '',
                     'gos': gos,
@@ -2297,9 +2316,9 @@ def load_work_history():
 SHIFT_REPORTS_FILE = 'shift_reports.json'
 SHIFT_SEEN_FILE = 'shift_seen.json'
 SHIFT_STATUSES = {
-    'done': 'Все запланированные выезды выполнены',
-    'partial': 'Выполнено частично',
-    'failed': 'Не выполнен',
+    'done': '✅ Все запланированные выезды выполнены',
+    'partial': '⚠ Выполнено частично (см. комментарий)',
+    'failed': '❌ Не выполнен (см. комментарий)',
 }
 
 def shift_report_items():
@@ -2328,14 +2347,18 @@ def mark_shift_seen(name):
 def missing_shift_day(name):
     today = get_msk_now().date()
     reported = {row.get('date') for row in shift_report_items() if row.get('master') == name}
-    missing = []
-    for day in shift_seen_map().get(name) or []:
-        try:
-            parsed = datetime.strptime(day, '%Y-%m-%d').date()
-        except ValueError:
+    worked = set()
+    for row in work_history_items():
+        if (row.get('master') or '') != name:
             continue
-        if parsed < today and day not in reported:
-            missing.append(parsed)
+        stamp = history_stamp(row)
+        if stamp:
+            worked.add(stamp.date())
+    for row in history_rows(name):
+        stamp = history_stamp(row)
+        if stamp:
+            worked.add(stamp.date())
+    missing = [day for day in worked if day < today and day.isoformat() not in reported]
     return min(missing) if missing else None
 
 def history_rows(master):
@@ -5490,24 +5513,6 @@ def master_report_save(name):
     missing = missing_shift_day(name)
     if missing and day != missing:
         return jsonify({'success': False, 'error': 'Сначала закройте отчёт за ' + missing.strftime('%d.%m.%Y')})
-    if data.get('day_off'):
-        if not missing or day != missing:
-            return jsonify({'success': False, 'error': 'Выходной можно отметить только за пропущенный день'})
-        item = {
-            'date': day.isoformat(),
-            'date_ru': day.strftime('%d.%m.%Y'),
-            'master': name,
-            'start': '',
-            'end': '',
-            'mileage': '0',
-            'expenses': '0',
-            'status': 'dayoff',
-            'status_label': 'Выходной',
-            'comment': 'Выходной',
-            'closed_count': 0,
-            'saved_at': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
-        }
-        return finish_shift_report(name, item)
     start = (data.get('start') or '').strip()
     end = (data.get('end') or '').strip()
     status = (data.get('status') or '').strip()
@@ -6128,12 +6133,18 @@ def append_bike_swap(address, darks_number, old_data, new_data, master='', uid='
         value_input_option='USER_ENTERED',
     )
     try:
+        known = frame_numbers()
+        taken_key = re.sub(r'\s+', '', str((old_data or {}).get('serial') or ''))
+        given_key = re.sub(r'\s+', '', str((new_data or {}).get('serial') or ''))
+        taken_cell = (old_data or {}).get('serial', '') if taken_key and taken_key in known else 'Не найден в базе'
+        given_cell = (new_data or {}).get('serial', '') if given_key and given_key in known else 'Не найден в базе'
+        mark = 'Применить' if taken_cell != 'Не найден в базе' and given_cell != 'Не найден в базе' else 'Ждет уточнения'
         sheet.update(
             f'K{target}:L{target}',
-            [[(old_data or {}).get('serial', ''), (new_data or {}).get('serial', '')]],
+            [[taken_cell, given_cell]],
             value_input_option='USER_ENTERED',
         )
-        sheet.update(f'Q{target}', [['Применить']], value_input_option='USER_ENTERED')
+        sheet.update(f'Q{target}', [[mark]], value_input_option='USER_ENTERED')
     except Exception as exc:
         logger.warning(f'Серийные номера или «Применить» в строку {target} не встали: {exc}')
     try:
