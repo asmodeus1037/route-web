@@ -23,6 +23,11 @@
             border: 0; border-radius: 14px; background: #e11d48; color: #fff;
             font-weight: 800; min-height: 48px; font-size: 16px;
         }
+        .send.dayoff {
+            background: #fff;
+            color: #9f1239;
+            border: 2px solid #e11d48;
+        }
         .banner { background: #fff7ed; color: #9a3412; border-radius: 12px; padding: 12px; font-weight: 700; }
         .out { float: right; color: #64748b; font-weight: 700; text-decoration: none; }
         .back { color: #9f1239; font-weight: 800; text-decoration: none; }
@@ -34,6 +39,7 @@
     <h1>Отчёт за {{ day_ru }}</h1>
     {% if forced %}
     <p class="banner">Смена не закрыта. Маршрут откроется после этого отчёта.</p>
+    <button class="send dayoff" type="button" id="dayOff">Был выходной</button>
     {% endif %}
     <p class="hint">За этот день в истории закрыто заявок: {{ closed_count }}</p>
     <form class="report" id="shiftForm">
@@ -100,6 +106,29 @@
                 alert('Нет сети');
             });
         });
+        var dayOff = document.getElementById('dayOff');
+        if (dayOff) {
+            dayOff.addEventListener('click', function() {
+                if (!confirm('Отметить {{ day_ru }} как выходной? Пробег и расходы будут 0.')) return;
+                dayOff.disabled = true;
+                fetch(window.location.pathname, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ date: {{ day|tojson }}, day_off: true })
+                }).then(function(response) { return response.json(); }).then(function(data) {
+                    dayOff.disabled = false;
+                    if (!data.success) {
+                        alert(data.error || 'Не сохранилось');
+                        return;
+                    }
+                    if (data.message) alert(data.message);
+                    window.location.href = data.next || '/master/{{ name }}';
+                }).catch(function() {
+                    dayOff.disabled = false;
+                    alert('Нет сети');
+                });
+            });
+        }
     </script>
 </body>
 </html>

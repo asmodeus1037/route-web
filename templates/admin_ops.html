@@ -35,6 +35,15 @@
             <button type="button" class="btn btn-ok" onclick="ackOp('{{ item.id }}')">Выполнено</button>
         </div>
         {% endfor %}
+        <h2 style="font-size:18px;margin:18px 0 8px;">Споры из бота</h2>
+        {% for item in items if item.kind == 'dispute' %}
+        <div class="remind">
+            <b>Спор · даркстор {{ item.darks }} · {{ item.date }}</b>
+            <p>Вело: {{ item.bikes or '—' }}. {{ item.text }}</p>
+        </div>
+        {% else %}
+        <p class="muted">Споров пока нет.</p>
+        {% endfor %}
         <table>
             <tr>
                 <th>Дата</th>
@@ -45,7 +54,7 @@
                 <th>АКБ</th>
                 <th>Документ</th>
             </tr>
-            {% for item in items %}
+            {% for item in items if item.kind != 'dispute' %}
             <tr>
                 <td>{{ item.date }}</td>
                 <td>{{ item.operation }}{% if item.remind and item.remind_done %}<div class="done">В ГАИ перенесено</div>{% endif %}</td>

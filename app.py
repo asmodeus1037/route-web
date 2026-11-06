@@ -3273,6 +3273,7 @@ def api_curator_dispute():
                 'skip_report': True,
             },
         })
+        remember_dispute(ticket, darks, text)
         return jsonify({'success': True, 'reopened': False})
     line = f"Оспорено куратором {moment}: {text}"
     note = f'{previous}\n{line}'.strip() if previous else line
@@ -3307,6 +3308,7 @@ def api_curator_dispute():
                 send_via_master_notify(chat_id, f'Куратор не принял {label}. Заявка снята с вас: {text}')
             except Exception as exc:
                 logger.warning(f'Не ушло мастеру о споре: {exc}')
+    remember_dispute(ticket, darks, text)
     return jsonify({'success': True, 'reopened': True})
 
 def send_bike_command(object_id, command):
@@ -3994,6 +3996,25 @@ def append_repair_operation(date, operation, company, darks, bikes, akb, link, c
         value_input_option='USER_ENTERED',
     )
 
+def remember_dispute(ticket, darks, text):
+    gos = ((ticket or {}).get('gos') or '').strip()
+    remember_operation({
+        'id': 'dispute-' + str((ticket or {}).get('uid') or '') + '-' + get_msk_now().strftime('%Y%m%d%H%M%S'),
+        'date': get_msk_now().strftime('%d.%m.%Y %H:%M'),
+        'operation': 'Спор',
+        'kind': 'dispute',
+        'company': '',
+        'darks': str((ticket or {}).get('darks') or darks or ''),
+        'bikes': gos,
+        'akb': '',
+        'doc': '',
+        'doc_url': '',
+        'remind': False,
+        'remind_done': False,
+        'seen': False,
+        'text': text,
+    })
+
 def remember_operation(item):
     with _ops_lock:
         items = load_ops()
@@ -4476,7 +4497,7 @@ def master_gai_done(name, uid):
         'operation': 'Замена ГАИ',
         'company': company,
         'darks': str(ticket.get('darks') or ''),
-        'bikes': 1,
+        'bikes': 'забрали ' + (taken or '—') + ', отдали ' + (new_data.get('gos') or '—'),
         'akb': 1 if with_akb else 0,
         'doc': local_name,
         'doc_url': link,
@@ -4534,6 +4555,25 @@ def admin_ops_ack(uid):
     if not found:
         return jsonify({'success': False, 'error': 'Напоминание не найдено'})
     return jsonify({'success': True})
+
+@app.route('/api/darks_priority', methods=['GET', 'POST'])
+@login_required
+def api_darks_priority():
+    if request.method == 'GET':
+        return jsonify({'success': True, 'items': load_priorities()})
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    data = request.json or {}
+    number = str(data.get('darks') or '').strip()
+    if not number:
+        return jsonify({'success': False, 'error': 'Нет даркстора'})
+    items = load_priorities()
+    if data.get('level') == 'high':
+        items[number] = 'high'
+    else:
+        items.pop(number, None)
+    save_priorities(items)
+    return jsonify({'success': True, 'level': items.get(number) or 'normal'})
 
 @app.route('/api/resolve_bikes', methods=['POST'])
 @login_required
@@ -5231,10 +5271,15 @@ def api_build_route_for_master():
     
     cache_data = get_master_cache(master)
     if cache_data:
-        master_tickets = cache_data.get('tickets', [])
+        master_tickets = list(cache_data.get('tickets', []))
     else:
         tickets = get_tickets_from_sheets()
         master_tickets = [t for t in tickets if t.get('master') == master and is_active_status(t.get('status'))]
+    priorities = load_priorities()
+    master_tickets = [pair[1] for pair in sorted(
+        enumerate(master_tickets),
+        key=lambda pair: (0 if priorities.get(str(pair[1].get('darks') or '')) == 'high' else 1, pair[0]),
+    )]
     
     ordered = []
     seen = set()
@@ -5306,6 +5351,7 @@ def master_groups(name):
     else:
         enrich_tickets(master_tickets)
     groups = []
+    priority_map = load_priorities()
     if master_tickets:
         groups_dict = {}
         for t in master_tickets:
@@ -5324,7 +5370,11 @@ def master_groups(name):
                 groups_dict[darks_num]['pending'] += 1
             else:
                 groups_dict[darks_num]['done'] += 1
-        for darks_num in sorted(groups_dict.keys(), key=lambda x: int(x) if str(x).isdigit() else 999999):
+        def group_sort(darks_num):
+            number = int(darks_num) if str(darks_num).isdigit() else 999999
+            high = 0 if priority_map.get(str(darks_num)) == 'high' else 1
+            return (high, number)
+        for darks_num in sorted(groups_dict.keys(), key=group_sort):
             item = groups_dict[darks_num]
             groups.append({
                 'darks_number': item['darks_number'],
@@ -5332,9 +5382,19 @@ def master_groups(name):
                 'contact': item['contact'],
                 'pending': item['pending'],
                 'done': item['done'],
+                'priority': 'high' if priority_map.get(str(item['darks_number'])) == 'high' else 'normal',
                 'tickets': item['tickets'],
             })
     return groups, master_tickets, cache_data.get('updated_at', '')
+
+PRIORITY_FILE = 'darks_priority.json'
+
+def load_priorities():
+    raw = read_cache(PRIORITY_FILE) or {}
+    return raw if isinstance(raw, dict) else {}
+
+def save_priorities(items):
+    write_cache(PRIORITY_FILE, items if isinstance(items, dict) else {})
 
 @app.route('/admin/history')
 @login_required
@@ -5430,6 +5490,24 @@ def master_report_save(name):
     missing = missing_shift_day(name)
     if missing and day != missing:
         return jsonify({'success': False, 'error': 'Сначала закройте отчёт за ' + missing.strftime('%d.%m.%Y')})
+    if data.get('day_off'):
+        if not missing or day != missing:
+            return jsonify({'success': False, 'error': 'Выходной можно отметить только за пропущенный день'})
+        item = {
+            'date': day.isoformat(),
+            'date_ru': day.strftime('%d.%m.%Y'),
+            'master': name,
+            'start': '',
+            'end': '',
+            'mileage': '0',
+            'expenses': '0',
+            'status': 'dayoff',
+            'status_label': 'Выходной',
+            'comment': 'Выходной',
+            'closed_count': 0,
+            'saved_at': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+        return finish_shift_report(name, item)
     start = (data.get('start') or '').strip()
     end = (data.get('end') or '').strip()
     status = (data.get('status') or '').strip()
@@ -5458,6 +5536,10 @@ def master_report_save(name):
         'closed_count': closed_on_day(name, day.isoformat()),
         'saved_at': get_msk_now().strftime('%Y-%m-%d %H:%M:%S'),
     }
+    save_shift_report_item(item)
+    return finish_shift_report(name, item)
+
+def finish_shift_report(name, item):
     save_shift_report_item(item)
     db_ok = False
     try:
@@ -5528,6 +5610,7 @@ def api_master_home(name):
             'darks_number': g['darks_number'],
             'address': g['address'],
             'pending': g['pending'],
+            'priority': g.get('priority') or 'normal',
         } for g in groups],
     })
 
@@ -5576,6 +5659,7 @@ def master_darks(name, darks_number):
                           address=address,
                           contact=contact,
                           tickets=filtered,
+                          priority='high' if load_priorities().get(str(darks_number)) == 'high' else 'normal',
                           now=get_msk_now().strftime('%H:%M:%S'))
 
 @app.route('/master/<name>/text_plan')
@@ -5955,6 +6039,38 @@ def master_replace_no(name, darks_number, uid):
 # ============================================================
 REPLACEMENT_BOOK_ID = "1s_hXPSWueMAo3W1pgLCG0eHhYKoW0uoIZ6CGWFf55VU"
 REPLACEMENT_GID = 1296698244
+SWAP_DONE_FILE = 'swap_done.json'
+_swap_lock = threading.Lock()
+_swap_inflight = set()
+
+def swap_already_done(uid):
+    data = read_cache(SWAP_DONE_FILE) or {}
+    done = data.get('uids') if isinstance(data, dict) else []
+    return str(uid) in {str(item) for item in (done or [])}
+
+def mark_swap_done(uid):
+    data = read_cache(SWAP_DONE_FILE) or {}
+    done = list(data.get('uids') or []) if isinstance(data, dict) else []
+    if str(uid) not in {str(item) for item in done}:
+        done.append(str(uid))
+    write_cache(SWAP_DONE_FILE, {'uids': done[-2000:]})
+
+def begin_swap(uid):
+    key = str(uid or '').strip()
+    if not key:
+        return False
+    with _swap_lock:
+        if key in _swap_inflight or swap_already_done(key):
+            return False
+        _swap_inflight.add(key)
+        return True
+
+def finish_swap(uid, ok):
+    key = str(uid or '').strip()
+    with _swap_lock:
+        _swap_inflight.discard(key)
+        if ok and key:
+            mark_swap_done(key)
 
 def append_bike_swap(address, darks_number, old_data, new_data, master='', uid='', kind='Эвакуация'):
     try:
@@ -5978,11 +6094,24 @@ def append_bike_swap(address, darks_number, old_data, new_data, master='', uid='
         names = ', '.join(item.title for item in book.worksheets())
         raise RuntimeError(f'Лист «Замены вело» не найден. В файле есть: {names}')
     filled = sheet.get('A:I')
-    last = 1
-    for index, row in enumerate(filled, start=1):
-        if any(str(cell).strip() for cell in row):
-            last = index
-    target = last + 1
+    existing = None
+    if uid:
+        try:
+            marks = sheet.col_values(20)
+        except Exception:
+            marks = []
+        for index, value in enumerate(marks, start=1):
+            if str(value).strip() == str(uid):
+                existing = index
+                break
+    if existing:
+        target = existing
+    else:
+        last = 1
+        for index, row in enumerate(filled, start=1):
+            if any(str(cell).strip() for cell in row):
+                last = index
+        target = last + 1
     sheet.update(
         f'A{target}:I{target}',
         [[
@@ -5998,6 +6127,15 @@ def append_bike_swap(address, darks_number, old_data, new_data, master='', uid='
         ]],
         value_input_option='USER_ENTERED',
     )
+    try:
+        sheet.update(
+            f'K{target}:L{target}',
+            [[(old_data or {}).get('serial', ''), (new_data or {}).get('serial', '')]],
+            value_input_option='USER_ENTERED',
+        )
+        sheet.update(f'Q{target}', [['Применить']], value_input_option='USER_ENTERED')
+    except Exception as exc:
+        logger.warning(f'Серийные номера или «Применить» в строку {target} не встали: {exc}')
     try:
         if sheet.col_count < 20:
             sheet.add_cols(20 - sheet.col_count)
@@ -6054,13 +6192,15 @@ def write_transit_replacement(uid, master_name, darks_number, address, old_data,
 @app.route('/master/transit/replace', methods=['POST'])
 @login_required
 def transit_replace():
-    data = request.json
+    data = request.json or {}
     uid = data.get('uid')
     master_name = data.get('master')
     darks_number = data.get('darks_number')
     address = data.get('address', '')
     old_data = data.get('old_data', {})
     new_data = data.get('new_data', {})
+    if not begin_swap(uid):
+        return jsonify({'success': True, 'message': 'Замена уже отправлена'})
     try:
         write_transit_replacement(uid, master_name, darks_number, address, old_data, new_data)
         update_ticket_in_admin_cache(uid, 'done', 'Заменен')
@@ -6070,8 +6210,10 @@ def transit_replace():
             'type': 'transit_replace',
             'data': {'master': master_name, 'darks_number': darks_number}
         })
+        finish_swap(uid, True)
         return jsonify({'success': True, 'message': 'Замена выполнена'})
     except Exception as e:
+        finish_swap(uid, False)
         logger.error(f"Ошибка замены велосипеда: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
@@ -6253,8 +6395,9 @@ def write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data,
 @app.route('/master/evacuation/replace', methods=['POST'])
 @login_required
 def master_evacuation_replace():
+    uid = ''
     try:
-        data = request.json
+        data = request.json or {}
         uid = data.get('uid')
         master_name = data.get('master')
         darks_number = data.get('darks_number')
@@ -6270,11 +6413,14 @@ def master_evacuation_replace():
         
         if not new_data.get('serial') or not new_data.get('gos') or not new_data.get('iot'):
             return jsonify({'success': False, 'error': 'Заполните все поля НОВОГО велосипеда'}), 400
+        if not begin_swap(uid):
+            return jsonify({'success': True, 'message': 'Замена уже отправлена'})
         
         ticket = find_cached_ticket(uid) or {}
         reason = evacuation_reason(ticket)
         saved, err = write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data, reason)
         if not saved:
+            finish_swap(uid, False)
             return jsonify({'success': False, 'error': err or 'Не удалось записать замену в таблицу'})
         
         update_ticket_in_admin_cache(uid, 'done', 'Заменен при эвакуации', '✅ Выполнено')
@@ -6288,7 +6434,7 @@ def master_evacuation_replace():
                 'operation': 'Замена',
                 'company': '',
                 'darks': str(darks_number or ''),
-                'bikes': 1,
+                'bikes': 'забрали ' + (old_data.get('gos') or '—') + ', отдали ' + (new_data.get('gos') or '—'),
                 'akb': '',
                 'doc': '',
                 'doc_url': '',
@@ -6318,9 +6464,11 @@ def master_evacuation_replace():
             tickets = [t for t in tickets if t.get('uid') != uid]
             save_master_cache(master_name, tickets, '')
         
+        finish_swap(uid, True)
         return jsonify({'success': True, 'message': 'Эвакуация выполнена'})
         
     except Exception as e:
+        finish_swap(uid, False)
         logger.error(f"Ошибка эвакуации: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 

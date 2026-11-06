@@ -19,10 +19,20 @@ function refreshMasterHome() {
             var sub = document.querySelector('.sub-title');
             if (sub) sub.textContent = data.total + ' заявок';
             var html = '';
+            var titledHigh = false;
+            var titledRest = false;
             (data.groups || []).forEach(function(g) {
-                html += '<a class="darks-card" href="/master/' + encodeURIComponent(name) + '/darks/' + encodeURIComponent(g.darks_number) + '">';
+                if (g.priority === 'high' && !titledHigh) {
+                    html += '<h2 class="prio-title">Сначала сюда</h2>';
+                    titledHigh = true;
+                }
+                if (g.priority !== 'high' && titledHigh && !titledRest) {
+                    html += '<h2 class="prio-title quiet">Остальные</h2>';
+                    titledRest = true;
+                }
+                html += '<a class="darks-card' + (g.priority === 'high' ? ' high' : '') + '" href="/master/' + encodeURIComponent(name) + '/darks/' + encodeURIComponent(g.darks_number) + '">';
                 html += '<div class="card-copy"><div class="address">' + escapeHtml(g.address || 'Адрес не указан') + '</div>';
-                html += '<div class="number">Даркстор ' + escapeHtml(g.darks_number) + '</div></div>';
+                html += '<div class="number">Даркстор ' + escapeHtml(g.darks_number) + (g.priority === 'high' ? ' · высокий' : '') + '</div></div>';
                 html += '<span class="count-pill">' + (g.pending || 0) + '</span></a>';
             });
             grid.innerHTML = html || '<p>Сейчас заявок нет.</p>';
@@ -251,8 +261,12 @@ function submitEvacuation(name, darksNumber, uid, gos) {
     message += '  Айот: ' + newIot.value;
     
     if (!confirm(message)) return false;
+    if (window.swapLock && window.swapLock[uid]) return false;
+    window.swapLock = window.swapLock || {};
+    window.swapLock[uid] = true;
+    var button = document.getElementById('swapSend_' + uid);
+    if (button) button.disabled = true;
     
-    // Собираем данные
     var data = {
         uid: uid,
         master: name,
@@ -270,34 +284,14 @@ function submitEvacuation(name, darksNumber, uid, gos) {
         }
     };
     
-    // Отправка
-    fetch('/master/evacuation/replace', {
+    sendOrQueue({
+        url: '/master/evacuation/replace',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify(data)
-    })
-    .then(readJsonResponse)
-    .then(function(result) {
-        if (result.success) {
-            var card = document.getElementById('ticket-' + uid);
-            if (card) card.style.display = 'none';
-            showToast('Замена отправлена');
-        } else {
-            showToast(result.error || 'Не получилось', true);
-        }
-    })
-    .catch(function() {
-        queueAction({
-            url: '/master/evacuation/replace',
-            method: 'POST',
-            body: JSON.stringify(data),
-            contentType: 'application/json',
-            uid: uid
-        });
-        var card = document.getElementById('ticket-' + uid);
-        if (card) card.style.display = 'none';
-        showToast('Сохранено на телефоне. Отправится, когда будет сеть.');
+        body: JSON.stringify(data),
+        contentType: 'application/json',
+        uid: uid,
+        okText: 'Замена ушла',
+        hideNow: true
     });
     
     return false;
@@ -411,18 +405,25 @@ function sendOrQueue(opts) {
         hideCard(true);
         return;
     }
+    if (opts.hideNow) hideCard(false);
     fetch(opts.url, fetchOpts)
         .then(readJsonResponse)
         .then(function(data) {
             if (!data || data.success === false) {
-                showToast((data && data.error) ? data.error : 'Не получилось', true);
+                var message = (data && data.error) ? data.error : 'Не получилось';
+                if (opts.hideNow && message.indexOf('Заполните') === -1 && message.indexOf('Недостаточно') === -1) {
+                    queueAction(opts);
+                    showToast('Сохранено на телефоне. Отправится, когда будет сеть.', true);
+                    return;
+                }
+                showToast(message, true);
                 return;
             }
             if (opts.reload) {
                 window.location.reload();
                 return;
             }
-            hideCard(false);
+            if (!opts.hideNow) hideCard(false);
         })
         .catch(function() {
             queueAction(opts);

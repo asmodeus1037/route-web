@@ -6,18 +6,27 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <title>{{ name }}</title>
-    <link rel="stylesheet" href="/static/css/master.css?v=18">
+    <link rel="stylesheet" href="/static/css/master.css?v=19">
 </head>
 <body data-master="{{ name }}" data-page="route">
     <div class="brand"><img src="/static/img/vanta.png" alt="Vanta"></div>
     <h1>{{ name }}</h1>
     <p class="sub-title">{{ total_tickets }} заявок</p>
     <div class="darks-grid">
+        {% set flags = namespace(high=false, rest=false) %}
         {% for g in groups %}
-        <a class="darks-card" href="/master/{{ name }}/darks/{{ g.darks_number }}">
+        {% if g.priority == 'high' and not flags.high %}
+        <h2 class="prio-title">Сначала сюда</h2>
+        {% set flags.high = true %}
+        {% endif %}
+        {% if g.priority != 'high' and flags.high and not flags.rest %}
+        <h2 class="prio-title quiet">Остальные</h2>
+        {% set flags.rest = true %}
+        {% endif %}
+        <a class="darks-card{% if g.priority == 'high' %} high{% endif %}" href="/master/{{ name }}/darks/{{ g.darks_number }}">
             <div class="card-copy">
                 <div class="address">{{ g.address }}</div>
-                <div class="number">Даркстор {{ g.darks_number }}</div>
+                <div class="number">Даркстор {{ g.darks_number }}{% if g.priority == 'high' %} · высокий{% endif %}</div>
             </div>
             <span class="count-pill">{{ g.pending }}</span>
         </a>
@@ -26,6 +35,6 @@
         {% endfor %}
     </div>
     <nav class="dock"></nav>
-    <script src="/static/js/master.js?v=16"></script>
+    <script src="/static/js/master.js?v=23"></script>
 </body>
 </html>

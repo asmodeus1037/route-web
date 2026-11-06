@@ -1003,6 +1003,25 @@ body { padding-bottom: 96px; }
     gap: 12px;
 }
 .darks-card .address { font-size: 17px; font-weight: 800; }
+.darks-card.high {
+    border: 2px solid #e11d48;
+    background: #fff1f2;
+}
+.prio-title {
+    grid-column: 1 / -1;
+    margin: 8px 0 0;
+    font-size: 15px;
+    color: #9f1239;
+}
+.prio-title.quiet { color: #64748b; }
+.prio-banner {
+    background: #fff1f2;
+    color: #9f1239;
+    border-radius: 12px;
+    padding: 10px 12px;
+    font-weight: 800;
+    margin: 0 0 10px;
+}
 .count-pill {
     flex: 0 0 auto;
     min-width: 40px;

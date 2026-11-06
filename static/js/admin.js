@@ -1578,6 +1578,9 @@ function renderTicketsGrouped(tickets, containerId) {
     });
     
     var sortedKeys = Object.keys(darksGroups).sort(function(a, b) {
+        var highA = window.darksPriority && window.darksPriority[String(a)] === 'high' ? 0 : 1;
+        var highB = window.darksPriority && window.darksPriority[String(b)] === 'high' ? 0 : 1;
+        if (highA !== highB) return highA - highB;
         var numA = parseInt(a) || 999999;
         var numB = parseInt(b) || 999999;
         return numA - numB;
@@ -1587,8 +1590,10 @@ function renderTicketsGrouped(tickets, containerId) {
     for (var si = 0; si < sortedKeys.length; si++) {
         var key = sortedKeys[si];
         var group = darksGroups[key];
-        html += '<div class="darks-group">';
-        html += '<div class="darks-header"><span class="address">📍 ' + group.address + '</span><span class="darks-num">ДС ' + group.darks + ' · ' + group.tickets.length + '</span></div>';
+        var level = window.darksPriority && window.darksPriority[String(group.darks)] === 'high';
+        html += '<div class="darks-group' + (level ? ' is-high' : '') + '">';
+        html += '<div class="darks-header"><span class="address">📍 ' + group.address + '</span><span class="darks-num">ДС ' + group.darks + ' · ' + group.tickets.length + '</span>';
+        html += '<button type="button" class="prio-btn' + (level ? ' on' : '') + '" data-darks="' + String(group.darks).replace(/"/g, '') + '" onclick="toggleDarksPriority(this)">' + (level ? 'Высокий' : 'Обычный') + '</button></div>';
         html += sentMark(group.darks, group.tickets.length);
         if (group.contact) { html += '<div class="darks-contact">📞 ' + group.contact + '</div>'; }
         for (var j = 0; j < group.tickets.length; j++) {
@@ -1982,6 +1987,31 @@ function syncAll() {
 // ============================================================
 // ИНИЦИАЛИЗАЦИЯ
 // ============================================================
+function toggleDarksPriority(button) {
+    var number = button.getAttribute('data-darks');
+    var next = button.classList.contains('on') ? 'normal' : 'high';
+    button.disabled = true;
+    fetch('/api/darks_priority', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ darks: number, level: next })
+    }).then(function(response) { return response.json(); }).then(function(data) {
+        button.disabled = false;
+        if (!data.success) {
+            alert(data.error || 'Не сохранилось');
+            return;
+        }
+        window.darksPriority = window.darksPriority || {};
+        if (next === 'high') window.darksPriority[number] = 'high';
+        else delete window.darksPriority[number];
+        renderCurrentTab();
+    }).catch(function() {
+        button.disabled = false;
+        alert('Нет сети');
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     var tabs = document.querySelectorAll('.tab-btn');
     for (var i = 0; i < tabs.length; i++) {
@@ -2003,6 +2033,14 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         })(tabs[i]);
     }
+    window.darksPriority = {};
+    fetch('/api/darks_priority', { credentials: 'same-origin', cache: 'no-store' })
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
+            window.darksPriority = (data && data.items) || {};
+            renderCurrentTab();
+        })
+        .catch(function() {});
     var savedTab = '';
     try { savedTab = localStorage.getItem('adminTab') || ''; } catch (e) {}
     var savedBtn = savedTab ? document.querySelector('.tab-btn[data-tab="' + savedTab + '"]') : null;

@@ -405,6 +405,24 @@ h1 {
     border-radius: 30px;
     line-height: 22px;
 }
+.prio-btn {
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    color: #475569;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 800;
+    padding: 4px 10px;
+    cursor: pointer;
+}
+.prio-btn.on, .darks-group.is-high {
+    border-color: #e11d48;
+}
+.prio-btn.on {
+    background: #e11d48;
+    color: #fff;
+}
+.darks-group.is-high { background: #fff1f2; }
 
 .darks-contact {
     font-size: 11px;
