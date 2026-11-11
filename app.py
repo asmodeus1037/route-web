@@ -58,6 +58,7 @@ PARTS = [
 ]
 PARTS_PRICE = {name: price for name, price in PARTS}
 PARTS_SET = set(PARTS_PRICE)
+SEED_PARTS = list(PARTS)
 CACHE_TTL = 300
 CACHE_DIR = "/data/cache"
 BOT_API_URL = "https://route-bot-dzufear.waw0.amvera.tech"
@@ -241,6 +242,33 @@ def save_admin_cache(tickets):
             sorted_directions[key] = value
     
     return write_cache("admin_cache.json", {'directions': sorted_directions})
+
+def rebucket_admin(directions):
+    """Вкладка берётся из актуального листа «Дарксторы», а не из старого столбца заявки."""
+    tickets = []
+    for bucket in (directions or {}).values():
+        tickets.extend(bucket.get('tickets') or [])
+    if darks_ref:
+        for ticket in tickets:
+            current = ((darks_ref.get(str(ticket.get('darks') or '').strip()) or {}).get('direction') or '').strip()
+            if current:
+                ticket['direction'] = current
+    grouped = {}
+    for ticket in tickets:
+        name = ticket.get('direction') or 'Без направления'
+        if name not in grouped:
+            grouped[name] = {'tickets': [], 'active_count': 0}
+        grouped[name]['tickets'].append(ticket)
+        grouped[name]['active_count'] += 1
+    order = ['Напр 1', 'Напр 2', 'Напр 3', 'Напр 4', 'Без направления']
+    sorted_directions = {}
+    for key in order:
+        if key in grouped:
+            sorted_directions[key] = grouped[key]
+    for key, value in grouped.items():
+        if key not in sorted_directions:
+            sorted_directions[key] = value
+    return sorted_directions
 
 def build_uid_index(tickets):
     index = {}
@@ -606,8 +634,9 @@ def enrich_tickets(tickets):
             ticket['address'] = info['address']
         if info.get('coords'):
             ticket['coords'] = info['coords']
-        if info.get('direction') and not ticket.get('direction'):
-            ticket['direction'] = info['direction']
+        current = (info.get('direction') or '').strip()
+        if current:
+            ticket['direction'] = current
     try:
         attach_iot(tickets)
     except Exception as exc:
@@ -1450,9 +1479,8 @@ def _read_tickets_from_google():
                                 worksheet.update_cell(idx, 11, uid)
                             except:
                                 pass
-                    direction = row[11].strip() if len(row) > 11 else ''
-                    if not direction and darks_num in darks_ref:
-                        direction = darks_ref[darks_num].get('direction', '')
+                    written = row[11].strip() if len(row) > 11 else ''
+                    direction = (darks_ref.get(darks_num) or {}).get('direction') or written
                     display_desc = row[2].strip() if len(row) > 2 else ''
                     if status == 'todo' and note and 'ЗАБРАЛИ:' in note:
                         match = re.search(r'ЗАБРАЛИ:\s*(\d+)', note)
@@ -2590,7 +2618,128 @@ def guard_shift(name):
 
 TRUNK_FILE = os.path.join(CACHE_DIR, "trunks.json")
 PARTS_QUEUE_FILE = os.path.join(CACHE_DIR, "parts_queue.json")
+ZEL_FILE = os.path.join(CACHE_DIR, "zelenograd.json")
 _trunk_lock = threading.Lock()
+_parts_cache = {'ts': 0}
+
+def use_parts(rows):
+    global PARTS, PARTS_PRICE, PARTS_SET
+    clean = []
+    seen = set()
+    for name, price in rows or []:
+        title = str(name or '').strip()
+        if not title or title.lower() in ('запчасть', 'название') or title in seen:
+            continue
+        try:
+            cost = int(float(str(price or '0').replace(' ', '').replace(',', '.')))
+        except Exception:
+            cost = 0
+        seen.add(title)
+        clean.append((title, cost))
+    if not clean:
+        return PARTS
+    PARTS = clean
+    PARTS_PRICE = {title: cost for title, cost in clean}
+    PARTS_SET = set(PARTS_PRICE)
+    try:
+        db.configure(PARTS)
+    except Exception:
+        pass
+    return PARTS
+
+def read_parts_sheet():
+    book = get_sheet_client()
+    try:
+        ws = book.worksheet('Запчасти')
+    except Exception:
+        ws = book.add_worksheet('Запчасти', 300, 2)
+        ws.update('A1', [['Запчасть', 'Цена']] + [[name, price] for name, price in SEED_PARTS], value_input_option='RAW')
+        try:
+            ws.hide()
+        except Exception as exc:
+            logger.warning(f'Лист «Запчасти» не скрылся: {exc}')
+        return list(SEED_PARTS)
+    rows = []
+    for row in ws.get_all_values()[1:]:
+        title = str(row[0] if row else '').strip()
+        if not title:
+            continue
+        cost = row[1] if len(row) > 1 else 0
+        rows.append((title, cost))
+    return rows
+
+def parts_now():
+    now_ts = time.time()
+    if PARTS and now_ts - _parts_cache['ts'] < 600 and _parts_cache['ts']:
+        return PARTS
+    try:
+        rows = read_parts_sheet()
+        if rows:
+            use_parts(rows)
+            _parts_cache['ts'] = now_ts
+    except Exception as exc:
+        logger.warning(f'Список запчастей не прочитался, оставлен прошлый: {exc}')
+    return PARTS
+
+def load_zelenograd():
+    data = _read_json(ZEL_FILE, {})
+    if not isinstance(data, dict):
+        data = {}
+    if data.get('_loaded'):
+        return data
+    try:
+        ws = get_sheet_client().worksheet('Склад Зеленоград')
+        for row in ws.get_all_values()[1:]:
+            title = str(row[0] if row else '').strip()
+            if not title:
+                continue
+            try:
+                data[title] = int(float(str(row[1] if len(row) > 1 else '0').replace(' ', '').replace(',', '.')))
+            except Exception:
+                data[title] = 0
+    except Exception as exc:
+        if is_quota_error(exc):
+            logger.warning(f'Склад Зеленоград не прочитался: {exc}')
+            return data
+        logger.warning(f'Склад Зеленоград ещё пуст: {exc}')
+    data['_loaded'] = 1
+    _write_json(ZEL_FILE, data)
+    return data
+
+def save_zelenograd(data):
+    _write_json(ZEL_FILE, data)
+
+def change_zelenograd(name, delta):
+    parts_now()
+    if name not in PARTS_SET:
+        return False, 0
+    with _trunk_lock:
+        data = load_zelenograd()
+        current = int(data.get(name) or 0)
+        new_qty = current + int(delta)
+        if new_qty < 0:
+            return False, current
+        data[name] = new_qty
+        data['_loaded'] = 1
+        save_zelenograd(data)
+    return True, new_qty
+
+def write_zelenograd_sheet():
+    parts_now()
+    book = get_sheet_client()
+    try:
+        ws = book.worksheet('Склад Зеленоград')
+    except Exception:
+        ws = book.add_worksheet('Склад Зеленоград', 300, 3)
+        ws.update('A1:C1', [['Запчасть', 'Количество', 'Цена']], value_input_option='RAW')
+    stock = load_zelenograd()
+    rows = [['Запчасть', 'Количество', 'Цена']]
+    for name, price in PARTS:
+        qty = int(stock.get(name) or 0)
+        if qty > 0:
+            rows.append([name, qty, price])
+    ws.batch_clear(['A:C'])
+    ws.update('A1', rows, value_input_option='RAW')
 
 def _read_json(path, fallback):
     try:
@@ -2615,12 +2764,13 @@ def save_trunks(data):
     db.mirror_trunks(data)
 
 def trunk_rows(master):
+    parts_now()
     bag = load_trunks().get(master) or {}
     rows = []
     total_qty = 0
     for name, price in PARTS:
         qty = int(bag.get(name) or 0)
-        rows.append({'name': name, 'qty': qty})
+        rows.append({'name': name, 'qty': qty, 'price': price})
         total_qty += qty
     return rows, total_qty
 
@@ -2628,6 +2778,7 @@ def trunk_qty(master, name):
     return int((load_trunks().get(master) or {}).get(name) or 0)
 
 def change_trunk(master, name, delta):
+    parts_now()
     if name not in PARTS_SET:
         return False, 0
     with _trunk_lock:
@@ -2695,6 +2846,7 @@ def flush_parts_queue():
     return len(moves)
 
 def write_trunk_sheet(sheet):
+    parts_now()
     try:
         ws = sheet.worksheet('Багажник')
     except Exception:
@@ -2712,6 +2864,7 @@ def write_trunk_sheet(sheet):
     ws.update('A1', rows, value_input_option='RAW')
 
 def spend_parts(master, items, uid='', gos='', darks=''):
+    parts_now()
     clean = []
     for item in items:
         name = (item.get('name') or '').strip()
@@ -4840,14 +4993,15 @@ def admin_panel():
     if session.get('role') != 'admin':
         return redirect(url_for('master_overview', name=session.get('master_name')))
     cache_data = get_admin_cache()
-    if cache_data and 'directions' in cache_data:
-        directions = cache_data.get('directions', {})
-    else:
+    if not (cache_data and 'directions' in cache_data):
         tickets = get_tickets_from_sheets()
         save_admin_cache(tickets)
         cache_data = get_admin_cache()
-        directions = cache_data.get('directions', {})
-    load_darks_reference(force=True)
+    try:
+        load_darks_reference(force=True)
+    except Exception:
+        load_darks_reference()
+    directions = rebucket_admin(cache_data.get('directions') or {})
     darks_people = {}
     for number, info in (darks_ref or {}).items():
         names = ((info or {}).get('curators') or '').strip()
@@ -5732,11 +5886,34 @@ def master_trunk(name):
         return blocked
     notice = ''
     error = ''
-    if request.method == 'POST':
+    parts_now()
+    if request.method == 'POST' and request.form.get('action') == 'transfer':
+        other = (request.form.get('to') or '').strip()
+        part_name = (request.form.get('part') or '').strip()
+        try:
+            qty = int(request.form.get('qty') or 0)
+        except Exception:
+            qty = 0
+        if other not in MASTERS or other == name:
+            error = 'Выберите другого мастера'
+        elif qty <= 0 or part_name not in PARTS_SET:
+            error = 'Выберите запчасть и количество'
+        else:
+            ok, left = change_trunk(name, part_name, -qty)
+            if not ok:
+                error = f'В багажнике только {left} шт. «{part_name}»'
+            else:
+                change_trunk(other, part_name, qty)
+                queue_part_move(name, 'Отдал ' + other, part_name, qty)
+                queue_part_move(other, 'Получил от ' + name, part_name, qty)
+                notice = f'Отдано {other}: {part_name} × {qty}'
+    elif request.method == 'POST':
         names = request.form.getlist('part')
         qtys = request.form.getlist('qty')
         chosen = set(request.form.getlist('take'))
+        source = (request.form.get('source') or 'ceh').strip()
         loaded = []
+        plan = []
         for part_name, qty_raw in zip(names, qtys):
             if part_name not in chosen or part_name not in PARTS_SET:
                 continue
@@ -5746,20 +5923,50 @@ def master_trunk(name):
                 qty = 0
             if qty <= 0:
                 continue
-            change_trunk(name, part_name, qty)
-            queue_part_move(name, 'Взял', part_name, qty)
-            loaded.append(f'{part_name} × {qty}')
-        if not loaded:
+            plan.append((part_name, qty))
+        if source == 'zelenograd':
+            stock = load_zelenograd()
+            for part_name, qty in plan:
+                have = int(stock.get(part_name) or 0)
+                if have < qty:
+                    error = f'На складе Зеленоград «{part_name}» только {have} шт.'
+                    plan = []
+                    break
+        if not plan and not error:
             error = 'Отметьте запчасти и укажите количество'
-        else:
+        for part_name, qty in plan:
+            if source == 'zelenograd':
+                ok, left = change_zelenograd(part_name, -qty)
+                if not ok:
+                    error = f'На складе Зеленоград «{part_name}» только {left} шт.'
+                    continue
+                queue_part_move(name, 'Взял со склада Зеленоград', part_name, qty)
+            else:
+                queue_part_move(name, 'Взял', part_name, qty)
+            change_trunk(name, part_name, qty)
+            loaded.append(f'{part_name} × {qty}')
+        if source == 'zelenograd' and loaded:
+            try:
+                write_zelenograd_sheet()
+            except Exception as exc:
+                logger.warning(f'Склад Зеленоград в таблицу не записался: {exc}')
+        if loaded:
             notice = 'Загружено: ' + ', '.join(loaded)
     rows, total_qty = trunk_rows(name)
     stock = [row for row in rows if row['qty'] > 0]
+    zel = load_zelenograd()
+    zelenograd = []
+    for part_name, price in PARTS:
+        qty = int(zel.get(part_name) or 0)
+        if qty > 0:
+            zelenograd.append({'name': part_name, 'qty': qty})
     return render_template(
         'trunk.html',
         name=name,
         parts=rows,
         stock=stock,
+        masters=[master for master in MASTERS if master != name],
+        zelenograd=zelenograd,
         total_qty=total_qty,
         error=error,
         notice=notice,
@@ -5836,7 +6043,38 @@ def admin_trunks():
 @app.route('/api/parts_catalog')
 @login_required
 def api_parts_catalog():
+    parts_now()
     return jsonify({'parts': [name for name, price in PARTS]})
+
+@app.route('/admin/zelenograd', methods=['GET', 'POST'])
+@login_required
+def admin_zelenograd():
+    if session.get('role') != 'admin':
+        return redirect(url_for('login_page'))
+    parts_now()
+    notice = ''
+    error = ''
+    if request.method == 'POST':
+        part_name = (request.form.get('part') or '').strip()
+        try:
+            qty = int(request.form.get('qty') or 0)
+        except Exception:
+            qty = 0
+        if part_name not in PARTS_SET or qty <= 0:
+            error = 'Выберите запчасть и количество'
+        else:
+            change_zelenograd(part_name, qty)
+            queue_part_move('Админ', 'Пополнил склад Зеленоград', part_name, qty)
+            try:
+                write_zelenograd_sheet()
+            except Exception as exc:
+                logger.warning(f'Склад Зеленоград в таблицу не записался: {exc}')
+                error = 'На сайте лежит, в таблицу сейчас не записалось. Повторите позже.'
+            else:
+                notice = f'На склад Зеленоград: {part_name} × {qty}'
+    stock = load_zelenograd()
+    rows = [{'name': name, 'qty': int(stock.get(name) or 0), 'price': price} for name, price in PARTS]
+    return render_template('admin_zelenograd.html', rows=rows, parts=PARTS, notice=notice, error=error)
 
 @app.route('/master/<name>/darks/<darks_number>/done/<uid>', methods=['POST'])
 @login_required

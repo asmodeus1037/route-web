@@ -485,6 +485,11 @@ document.addEventListener('DOMContentLoaded', function() {
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('/sw.js').catch(function() {});
     }
+    if (navigator.onLine) {
+        document.querySelectorAll('a.darks-card').forEach(function(link) {
+            fetch(link.href, { credentials: 'same-origin' }).catch(function() {});
+        });
+    }
 });
 document.addEventListener('visibilitychange', function() {
     if (!document.hidden) refreshMasterHome();

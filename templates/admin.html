@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Админ-панель</title>
     <link rel="manifest" href="/manifest.json">
-    <link rel="stylesheet" href="/static/css/admin.css?v=27">
+    <link rel="stylesheet" href="/static/css/admin.css?v=28">
     <style>
         .origin-badge, .supplier-badge { display:inline-block; margin:0 6px 0 0; padding:2px 8px; border-radius:8px; font-size:12px; font-weight:800; vertical-align:middle; }
         .origin-site { background:#dbeafe; color:#1d4ed8; }
@@ -112,6 +112,7 @@
         <div class="action-group">
             <span class="action-label">Смотреть</span>
             <a class="btn btn-view" href="/admin/trunks">Багажники мастеров</a>
+            <a class="btn btn-view" href="/admin/zelenograd">Склад Зеленоград</a>
             <button class="btn btn-view" onclick="showRoutes()">Просмотр маршрутов</button>
             <button class="btn btn-view" type="button" onclick="openBikeSearch()">Поиск вело</button>
             <button class="btn btn-view" type="button" onclick="openDocs()">Документы</button>
@@ -443,6 +444,6 @@
         now: '{{ now }}'
     };
 </script>
-<script src="/static/js/admin.js?v=36"></script>
+<script src="/static/js/admin.js?v=37"></script>
 </body>
 </html>

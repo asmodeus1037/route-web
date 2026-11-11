@@ -379,6 +379,11 @@
                         <span class="age {% if is_hot %}hot{% endif %}">{{ (t.hours_since or 0)|round(0)|int }} ч</span>
                     </div>
                     <div class="fast-desc">{{ t.desc }}</div>
+                    {% if t.note and 'Доделать:' in t.note %}
+                    {% for line in t.note.split('\n') %}
+                    {% if 'Доделать:' in line %}<div class="warning">{{ line }}</div>{% endif %}
+                    {% endfor %}
+                    {% endif %}
                     {% if not is_battery %}
                     <div class="bike-kind {% if 'Неопределен' in (t.bike_type or '') %}kind-bad{% endif %}">{{ t.bike_type }}{% if t.supplier %} · {{ t.supplier }}{% endif %}</div>
                     {% endif %}
@@ -464,7 +469,7 @@
 
     <div class="footer">Обновлено: {{ now }}</div>
     
-    <script src="/static/js/master.js?v=23"></script>
+    <script src="/static/js/master.js?v=24"></script>
     <nav class="dock"></nav>
 </body>
 </html>

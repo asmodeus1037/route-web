@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Склад Зеленоград</title>
+    <link rel="stylesheet" href="/static/css/admin.css?v=28">
+    <style>
+        body { background: #f8fafc; padding: 16px; }
+        .box { max-width: 720px; margin: 0 auto; background: #fff; border-radius: 16px; padding: 16px; }
+        h1 { font-size: 22px; }
+        label { display: block; font-weight: 800; margin: 12px 0 6px; }
+        select, input { width: 100%; height: 44px; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0 10px; font: inherit; }
+        button { margin-top: 12px; height: 46px; border: 0; border-radius: 12px; background: #15803d; color: #fff; font-weight: 800; width: 100%; }
+        .row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+        .err { background: #fee2e2; color: #991b1b; padding: 10px; border-radius: 10px; }
+        .ok { background: #dcfce7; color: #166534; padding: 10px; border-radius: 10px; }
+        a { color: #9f1239; font-weight: 800; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <a href="/admin">← В админку</a>
+        <h1>Склад Зеленоград</h1>
+        <p>Сюда запчасти кладёте только вы. Мастера забирают их себе в багажник.</p>
+        {% if error %}<div class="err">{{ error }}</div>{% endif %}
+        {% if notice %}<div class="ok">{{ notice }}</div>{% endif %}
+        <form method="post">
+            <label>Запчасть</label>
+            <select name="part" required>
+                {% for name, price in parts %}
+                <option value="{{ name }}">{{ name }}</option>
+                {% endfor %}
+            </select>
+            <label>Сколько положить</label>
+            <input name="qty" type="number" min="1" value="1" required>
+            <button type="submit">Положить на склад</button>
+        </form>
+        <h2>Сейчас на складе</h2>
+        {% for row in rows if row.qty > 0 %}
+        <div class="row"><span>{{ row.name }}</span><b>{{ row.qty }} шт</b></div>
+        {% else %}
+        <p>Пока пусто.</p>
+        {% endfor %}
+    </div>
+</body>
+</html>

@@ -107,13 +107,36 @@
 
     <form class="trunk-card" id="loadForm" method="post">
         <strong>Взять со склада</strong>
-        <p class="muted">Напишите запчасть, выберите её из списка и укажите количество. Потом можно следующую.</p>
+        <p class="muted">Выберите, откуда забирать. Цех пока без ограничения. Со склада Зеленоград спишется столько, сколько там есть.</p>
+        <label class="stock"><span><input type="radio" name="source" value="ceh" checked> Цех-Склад</span></label>
+        <label class="stock"><span><input type="radio" name="source" value="zelenograd"> Склад Зеленоград</span></label>
+        {% if zelenograd %}
+        <p class="muted">Сейчас в Зеленограде: {% for item in zelenograd %}{{ item.name }} {{ item.qty }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+        {% else %}
+        <p class="muted">Склад Зеленоград пока пуст.</p>
+        {% endif %}
         <div id="picker"></div>
         <div id="chosen"></div>
         <button class="load-btn" type="submit">Загрузить багажник</button>
     </form>
+
+    <form class="trunk-card" method="post">
+        <strong>Отдать другому мастеру</strong>
+        <p class="muted">Спишется у вас и появится у него. Больше, чем лежит в багажнике, отдать нельзя.</p>
+        <input type="hidden" name="action" value="transfer">
+        <select name="to" required style="width:100%;height:48px;margin-top:10px;border-radius:12px;font:inherit;">
+            <option value="">Кому</option>
+            {% for master in masters %}<option value="{{ master }}">{{ master }}</option>{% endfor %}
+        </select>
+        <select name="part" required style="width:100%;height:48px;margin-top:8px;border-radius:12px;font:inherit;">
+            <option value="">Запчасть</option>
+            {% for part in stock %}<option value="{{ part.name }}">{{ part.name }} · {{ part.qty }} шт</option>{% endfor %}
+        </select>
+        <input name="qty" type="number" min="1" value="1" required style="width:100%;height:48px;margin-top:8px;border-radius:12px;font:inherit;padding:0 12px;">
+        <button class="load-btn" type="submit">Передать</button>
+    </form>
     <nav class="dock"></nav>
-    <script src="/static/js/master.js?v=16"></script>
+    <script src="/static/js/master.js?v=24"></script>
     <script>
         var catalog = {{ parts|map(attribute='name')|list|tojson }};
         var picker = document.getElementById('picker');

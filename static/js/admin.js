@@ -1644,6 +1644,26 @@ function renderTicketsGrouped(tickets, containerId) {
             if (t.contact) {
                 html += '<span class="who">отправил: ' + String(t.contact).replace(/[&<>]/g, '') + '</span>';
             }
+            if (t.note) {
+                var noteLines = String(t.note).split('\n');
+                for (var ni = 0; ni < noteLines.length; ni++) {
+                    if (noteLines[ni].indexOf('Доделать:') !== -1) {
+                        html += '<span class="who redo-line">' + noteLines[ni].replace(/[&<>]/g, '') + '</span>';
+                    }
+                }
+            }
+            if (t.status === 'evacuation') {
+                var evacText = t.evac_reason || '';
+                if (!evacText && t.note) {
+                    var evacLines = String(t.note).split('\n');
+                    for (var ei = 0; ei < evacLines.length; ei++) {
+                        if (evacLines[ei].indexOf('ЭВАКУАЦИЯ:') !== -1) evacText = evacLines[ei].replace('ЭВАКУАЦИЯ:', '').trim();
+                    }
+                }
+                if (evacText) {
+                    html += '<span class="who evac-line">Эвакуация: ' + String(evacText).replace(/[&<>]/g, '') + '</span>';
+                }
+            }
             if (t.note && (String(t.note).indexOf('Оспорено куратором') !== -1 || String(t.note).indexOf('Повторный спор') !== -1)) {
                 var disputeLines = String(t.note).split('\n');
                 var disputeText = '';

@@ -502,6 +502,8 @@ h1 {
     font-size: 14px;
     font-weight: 600;
 }
+.ticket-row .who.redo-line { color: #1d4ed8; font-weight: 800; }
+.ticket-row .who.evac-line { color: #9a3412; font-weight: 800; }
 
 .ticket-row .type-badge {
     font-size: 12px;
@@ -515,12 +517,14 @@ h1 {
 
 .ticket-row select.master-select {
     padding: 2px 4px;
-    border: 1px solid #d1d5db;
+    border: 1px solid #94a3b8;
     border-radius: 4px;
-    font-size: 10px;
-    background: white;
+    font-size: 13px;
+    font-weight: 800;
+    color: #0f172a;
+    background: #f8fafc;
     width: 100%;
-    max-width: 80px;
+    max-width: 110px;
 }
 
 .ticket-row .status-select {
@@ -1032,7 +1036,9 @@ h1 {
     
     .ticket-row select.master-select,
     .ticket-row .status-select {
-        font-size: 9px;
+        font-size: 13px;
+        font-weight: 800;
+        color: #0f172a;
         padding: 1px 3px;
         max-width: 100%;
     }
@@ -1066,9 +1072,10 @@ h1 {
     
     .ticket-row select.master-select,
     .ticket-row .status-select {
-        font-size: 8px;
+        font-size: 12px;
         padding: 1px 2px;
     }
+    .ticket-row select.master-select { font-weight: 800; color: #0f172a; }
     
     .ticket-row .hours {
         font-size: 9px;
@@ -1140,7 +1147,9 @@ h1 {
     
     .ticket-row select.master-select,
     .ticket-row .status-select {
-        font-size: 7px;
+        font-size: 13px;
+        font-weight: 800;
+        color: #0f172a;
         padding: 1px 2px;
     }
     
