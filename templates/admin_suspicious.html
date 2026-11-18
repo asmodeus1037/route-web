@@ -4,26 +4,56 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Подозрительные</title>
-    <link rel="stylesheet" href="/static/css/admin.css">
+    <link rel="icon" href="/static/img/vb.jpg" type="image/jpeg">
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #eef2f6; color: #0f172a; font: 16px/1.45 "Segoe UI", sans-serif; }
+        .page { max-width: 980px; margin: 0 auto; padding: 28px 20px 60px; }
+        .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+        .brand img { width: 46px; height: 46px; border-radius: 50%; }
+        a.back { color: #334155; font-weight: 700; text-decoration: none; }
+        h1 { margin: 8px 0 4px; font-size: 32px; }
+        .lead { color: #64748b; margin: 0 0 22px; }
+        h2 { margin: 26px 0 10px; font-size: 18px; }
+        .card { background: #fff; border-radius: 16px; padding: 16px 18px; margin: 0 0 10px; box-shadow: 0 1px 2px rgba(15,23,42,.06); }
+        .orange { background: #fff7ed; border: 1px solid #fdba74; }
+        .top { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+        .gos { font-size: 20px; font-weight: 800; }
+        .count { color: #9a3412; font-weight: 800; }
+        .plain { margin: 8px 0 0; }
+        .step { margin-top: 10px; padding-top: 10px; border-top: 1px solid #fed7aa; }
+        .step b { display: block; }
+        .empty { color: #64748b; }
+    </style>
 </head>
 <body>
-<div class="container">
-    <p><a href="/admin">← В админку</a></p>
+<div class="page">
+    <div class="brand"><img src="/static/img/vb.jpg" alt="VB"><a class="back" href="/admin">← В админку</a></div>
     <h1>Подозрительные</h1>
-    <p>Повторы за неделю по листу «Отчёт мастера». {{ now }}</p>
-    {% if rows %}
-    <table>
-        <tr><th>Вело или мастер</th><th>Когда</th><th>Почему</th></tr>
-        {% for row in rows %}
-        <tr>
-            <td>{{ row.gos }}</td>
-            <td>{{ row.when }}</td>
-            <td>{{ row.text }}</td>
-        </tr>
+    <p class="lead">Последние 30 дней. Повтор детали — только если это одна и та же запчасть из багажника. {{ now }}</p>
+    <h2>Повторная замена</h2>
+    {% if evacuations %}
+        {% for row in evacuations %}
+        <article class="card orange">
+            <div class="top"><span class="gos">{{ row.gos }}</span><span class="count">{{ row.count }} замены</span></div>
+            {% for step in row.steps %}
+            <div class="step"><b>{{ step.n }}. {{ step.when }}, {{ step.master }}</b>{{ step.reason }}</div>
+            {% endfor %}
+        </article>
         {% endfor %}
-    </table>
     {% else %}
-    <p>Повторов за неделю нет.</p>
+        <p class="empty">Повторных замен за месяц нет.</p>
+    {% endif %}
+    <h2>Одна деталь дважды</h2>
+    {% if repeats %}
+        {% for row in repeats %}
+        <article class="card">
+            <div class="top"><span class="gos">{{ row.gos }}</span><span>{{ row.when }}</span></div>
+            <p class="plain">{{ row.text }}</p>
+        </article>
+        {% endfor %}
+    {% else %}
+        <p class="empty">Повторов одной детали за месяц нет.</p>
     {% endif %}
 </div>
 </body>

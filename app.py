@@ -3196,8 +3196,9 @@ def curator_notice_groups():
             if master and master not in names:
                 names.append(master)
         master_title = 'Вам назначен мастер' if len(names) < 2 else 'Вам назначены мастера'
-        transit = [ticket for ticket in items if is_transit_master(ticket.get('master'))]
-        repair = [ticket for ticket in items if not is_transit_master(ticket.get('master'))]
+        transit = [ticket for ticket in items if is_transit_master(ticket.get('master')) and not is_power_ticket(ticket)]
+        power = [ticket for ticket in items if is_power_ticket(ticket)]
+        repair = [ticket for ticket in items if not is_power_ticket(ticket) and not is_transit_master(ticket.get('master'))]
         lines = [
             'Привет!',
             f'{master_title}: {", ".join(names)}',
@@ -3210,6 +3211,11 @@ def curator_notice_groups():
             lines.append(f'Заявки ({len(transit)}):')
             for ticket in transit:
                 lines.append(curator_ticket_line(ticket))
+        if power:
+            lines.append('')
+            lines.append(f'Заявки ({len(power)}):')
+            for ticket in power:
+                lines.append(curator_ticket_line(ticket))
         if repair:
             lines.append('')
             lines.append(f'Заявки ({len(repair)}):')
@@ -3218,7 +3224,7 @@ def curator_notice_groups():
         lines.append('')
         if repair:
             lines.append('Подготовьте, пожалуйста, технику к ремонту')
-        else:
+        if transit:
             lines.append('Подготовьте, пожалуйста, велосипед к эвакуации')
         lines.append('Хорошего дня!')
         payload.append({'darks': dark, 'text': '\n'.join(lines), 'count': len(items)})
@@ -3265,6 +3271,10 @@ def notify_curators(message):
             sent = by_dark.get(dark, 1 if not body.get('results') else 0)
             rows.append({'darks': dark, 'sent': sent, 'tickets': int(group.get('count') or 0)})
         marks = remember_curator_sent(rows)
+        try:
+            remember_notified_routes()
+        except Exception as exc:
+            logger.warning(f'Маршрут дня не сохранился: {exc}')
         return {'success': True, 'marks': marks, 'count': body.get('count', 0)}
     except Exception as e:
         logger.warning(f'Не отправились сообщения кураторам: {e}')
@@ -5417,29 +5427,53 @@ def api_batch_update():
             refresh_master_cache(master)
     return jsonify({'success': True, 'updated': updated})
 
-def remember_route_day(master):
-    try:
-        _, tickets, _ = master_groups(master)
-    except Exception:
-        return
+def remember_notified_routes():
+    tickets = []
+    cache = get_admin_cache() or {}
+    for dir_data in cache.get('directions', {}).values():
+        tickets.extend(dir_data.get('tickets') or [])
+    if not tickets:
+        tickets = get_tickets_from_sheets()
     day = get_msk_now().date().isoformat()
-    raw = read_cache('route_days.json') or {}
-    items = raw.get('items') if isinstance(raw, dict) else []
-    if not isinstance(items, list):
-        items = []
-    items = [row for row in items if not (row.get('master') == master and row.get('date') == day)]
-    snap = []
+    fresh = {}
     for ticket in tickets:
-        snap.append({
+        master = (ticket.get('master') or '').strip()
+        if not master or not is_active_status(ticket.get('status')):
+            continue
+        fresh.setdefault(master, []).append({
             'uid': ticket.get('uid') or '',
             'gos': ticket.get('gos') or '',
             'type': ticket.get('type') or '',
             'desc': ticket.get('desc') or '',
-            'darks': ticket.get('darks') or '',
+            'darks': str(ticket.get('darks') or ''),
             'status': ticket.get('status') or '',
         })
-    items.append({'master': master, 'date': day, 'tickets': snap})
-    write_cache('route_days.json', {'items': items[-500:]})
+    raw = read_cache('route_days.json') or {}
+    items = raw.get('items') if isinstance(raw, dict) else []
+    if not isinstance(items, list):
+        items = []
+    for master, rows in fresh.items():
+        current = None
+        for item in items:
+            if item.get('master') == master and item.get('date') == day:
+                current = item
+                break
+        if current is None:
+            items.append({'master': master, 'date': day, 'tickets': rows})
+            continue
+        stored = current.get('tickets') or []
+        known = {str(row.get('uid')) for row in stored if row.get('uid')}
+        for row in rows:
+            uid = str(row.get('uid') or '')
+            if uid and uid in known:
+                continue
+            if not uid and any(old.get('gos') == row.get('gos') and old.get('darks') == row.get('darks') and old.get('desc') == row.get('desc') for old in stored):
+                continue
+            stored.append(row)
+            if uid:
+                known.add(uid)
+        current['tickets'] = stored
+    write_cache('route_days.json', {'items': items[-800:]})
 
 @app.route('/api/send_route', methods=['POST'])
 @login_required
@@ -5449,7 +5483,6 @@ def api_send_route():
     if not master:
         return jsonify({'success': False, 'error': 'Не указан мастер'})
     count = refresh_master_cache(master)
-    remember_route_day(master)
     info = notify_master_route(master)
     return jsonify({
         'success': True,
@@ -5464,7 +5497,6 @@ def api_send_route():
 def api_send_route_all():
     refresh_all_master_caches()
     for master in MASTERS:
-        remember_route_day(master)
         notify_master_route(master)
     return jsonify({'success': True, 'message': 'Кэши всех мастеров обновляются'})
 
@@ -5816,7 +5848,7 @@ def admin_history():
     master = (request.args.get('master') or '').strip()
     day = (request.args.get('day') or '').strip()
     items = []
-    if query and not master:
+    if query:
         needle = normalize_gos(query)
         folded = query.lower()
         for row in reversed(load_work_history()):
@@ -5824,12 +5856,8 @@ def admin_history():
             who = str(row.get('master') or '').lower()
             if (needle and needle in gos) or folded in who:
                 items.append(row)
-    routes = []
-    detail = None
-    if master:
-        routes = master_route_days(master)
-        if day:
-            detail = master_route_detail(master, day)
+    routes = month_routes(master)
+    detail = master_route_detail(master, day) if master and day else None
     return render_template(
         'admin_history.html',
         items=items[:300],
@@ -5847,37 +5875,42 @@ def route_snapshots():
     items = raw.get('items') if isinstance(raw, dict) else []
     return items if isinstance(items, list) else []
 
-def master_route_days(master):
-    days = {}
-    for snap in route_snapshots():
-        if snap.get('master') != master:
-            continue
-        bucket = days.setdefault(snap.get('date') or '', {'date': snap.get('date') or '', 'assigned': 0, 'done': 0})
-        bucket['assigned'] = len(snap.get('tickets') or [])
-    for row in work_history_items():
-        if row.get('master') != master:
-            continue
-        stamp = str(row.get('timestamp') or '')[:10]
-        if not stamp:
-            continue
-        bucket = days.setdefault(stamp, {'date': stamp, 'assigned': 0, 'done': 0})
-        bucket['done'] += 1
-        if bucket['assigned'] < bucket['done']:
-            bucket['assigned'] = bucket['done']
-    today = get_msk_now().date().isoformat()
+def month_routes(master=''):
+    start = (get_msk_now().date() - timedelta(days=30)).isoformat()
+    history = work_history_items()
     rows = []
-    for bucket in days.values():
-        if not bucket.get('date'):
+    for snap in route_snapshots():
+        day = snap.get('date') or ''
+        who = snap.get('master') or ''
+        if not day or day < start or (master and who != master):
             continue
-        bucket['report'] = any(item.get('master') == master and item.get('date') == bucket['date'] for item in shift_report_items())
-        bucket['report_late'] = (not bucket['report']) and bucket['date'] < today
+        tickets = snap.get('tickets') or []
+        done_ids = set()
+        for row in history:
+            if row.get('master') != who or str(row.get('timestamp') or '')[:10] != day:
+                continue
+            if row.get('uid'):
+                done_ids.add(str(row.get('uid')))
+        done = sum(1 for ticket in tickets if str(ticket.get('uid') or '') and str(ticket.get('uid')) in done_ids)
         try:
-            bucket['title'] = datetime.strptime(bucket['date'], '%Y-%m-%d').strftime('%d.%m.%Y')
+            title = datetime.strptime(day, '%Y-%m-%d').strftime('%d.%m.%Y')
         except ValueError:
-            bucket['title'] = bucket['date']
-        rows.append(bucket)
-    rows.sort(key=lambda item: item['date'], reverse=True)
+            title = day
+        reported = any(item.get('master') == who and item.get('date') == day for item in shift_report_items())
+        rows.append({
+            'date': day,
+            'title': title,
+            'master': who,
+            'assigned': len(tickets),
+            'done': done,
+            'report': reported,
+            'report_late': (not reported) and day < get_msk_now().date().isoformat(),
+        })
+    rows.sort(key=lambda item: (item['date'], item['master']), reverse=True)
     return rows
+
+def master_route_days(master):
+    return month_routes(master)
 
 def dispute_uid_of(item):
     text = str((item or {}).get('id') or '')
@@ -5904,23 +5937,13 @@ def master_route_detail(master, day):
         gos = normalize_gos(row.get('gos'))
         if gos:
             done_gos.add(gos)
-    if not assigned:
-        for row in done_rows:
-            assigned.append({
-                'uid': row.get('uid') or '',
-                'gos': row.get('gos') or '',
-                'type': '',
-                'desc': row.get('desc') or '',
-                'darks': row.get('darks') or '',
-                'status': 'done',
-                'only_done': True,
-            })
+    saved = bool(assigned)
     tickets = []
     for ticket in assigned:
-        gos = normalize_gos(ticket.get('gos'))
-        done = str(ticket.get('uid') or '') in done_uid or (gos and gos in done_gos) or ticket.get('status') == 'done'
+        uid = str(ticket.get('uid') or '')
+        done = bool(uid and uid in done_uid)
         tickets.append({
-            'uid': ticket.get('uid') or '',
+            'uid': uid,
             'gos': ticket.get('gos') or ticket.get('type') or '—',
             'desc': ticket.get('desc') or '',
             'darks': ticket.get('darks') or '',
@@ -5958,7 +5981,7 @@ def master_route_detail(master, day):
         'done_rows': done_rows,
         'disputes': disputes,
         'report': reported,
-        'saved_assignment': any(not ticket.get('only_done') for ticket in assigned) if assigned else False,
+        'saved_assignment': saved,
     }
 
 @app.route('/admin/history/dispute/<uid>/hide', methods=['POST'])
@@ -6045,8 +6068,8 @@ def report_event_time(value):
     return None
 
 def suspicious_events():
-    cached = read_cache('suspicious_cache.json') or {}
-    if isinstance(cached, dict) and cached.get('ts') and time.time() - float(cached.get('ts') or 0) < 600:
+    cached = read_cache('suspicious_cache_v2.json') or {}
+    if isinstance(cached, dict) and cached.get('ts') and time.time() - float(cached.get('ts') or 0) < 600 and cached.get('rows'):
         return cached.get('rows') or []
     rows = []
     try:
@@ -6059,7 +6082,9 @@ def suspicious_events():
                 'master': row[1] if len(row) > 1 else '',
                 'gos': row[3] if len(row) > 3 else '',
                 'desc': row[4] if len(row) > 4 else '',
+                'status': row[7] if len(row) > 7 else '',
                 'parts': row[8] if len(row) > 8 else '',
+                'comment': row[9] if len(row) > 9 else '',
             })
     except Exception as exc:
         logger.warning(f'Подозрительные читаю из истории, таблица не открылась: {exc}')
@@ -6069,103 +6094,146 @@ def suspicious_events():
                 'master': row.get('master') or '',
                 'gos': row.get('gos') or '',
                 'desc': row.get('desc') or '',
+                'status': row.get('label') or '',
                 'parts': row.get('detail') or '',
+                'comment': row.get('detail') or '',
             })
-    write_cache('suspicious_cache.json', {'ts': time.time(), 'rows': rows[-8000:]})
+    write_cache('suspicious_cache_v2.json', {'ts': time.time(), 'rows': rows[-8000:]})
     return rows[-8000:]
 
+def catalog_part_name(text):
+    folded = clean_name(text)
+    if not folded:
+        return ''
+    for name in PARTS_SET:
+        if clean_name(name) == folded:
+            return name
+    return ''
+
+def visit_parts(text):
+    found = []
+    for chunk in split_part_names(text):
+        name = catalog_part_name(chunk)
+        if name and name not in found:
+            found.append(name)
+    return found
+
+def is_evacuation_report(row):
+    status = str(row.get('status') or '').lower()
+    parts = str(row.get('parts') or '').strip().lower()
+    comment = str(row.get('comment') or '').lower()
+    if 'эвак' in status or 'эвак' in comment or 'эвак' in parts:
+        return True
+    return parts in ('заменен', 'заменено', 'заменен при эвакуации')
+
+def evacuation_reason_text(row):
+    comment = str(row.get('comment') or '').strip()
+    parts = str(row.get('parts') or '').strip()
+    if comment and comment not in ('-', '—'):
+        return comment
+    if parts and parts.lower() not in ('заменен', 'заменено', '-', '—'):
+        return parts
+    desc = str(row.get('desc') or '').strip()
+    return desc or 'Причина не записана'
+
 def suspicious_flags():
-    events = []
+    part_events = {}
+    evac_events = {}
+    cutoff = get_msk_now().replace(tzinfo=None) - timedelta(days=37)
+    fresh = get_msk_now().replace(tzinfo=None) - timedelta(days=30)
     for row in suspicious_events():
         stamp = report_event_time(row.get('time'))
-        gos = normalize_gos(row.get('gos'))
-        if not stamp or not gos:
+        gos_key = normalize_gos(row.get('gos'))
+        if not stamp or not gos_key or stamp < cutoff:
             continue
-        events.append({
-            'time': stamp,
-            'master': row.get('master') or '',
-            'gos': row.get('gos') or '',
-            'gos_key': gos,
-            'desc': row.get('desc') or '',
-            'parts': split_part_names(row.get('parts')),
+        if is_evacuation_report(row):
+            evac_events.setdefault(gos_key, []).append({
+                'time': stamp,
+                'master': row.get('master') or '',
+                'gos': row.get('gos') or gos_key,
+                'reason': evacuation_reason_text(row),
+            })
+        for part in visit_parts(row.get('parts')):
+            part_events.setdefault((gos_key, part), []).append({
+                'time': stamp,
+                'master': row.get('master') or '',
+                'gos': row.get('gos') or gos_key,
+            })
+    repeats = []
+    for (gos_key, part), events in part_events.items():
+        events.sort(key=lambda item: item['time'])
+        unique = []
+        for event in events:
+            if unique and unique[-1]['time'] == event['time'] and unique[-1]['master'] == event['master']:
+                continue
+            unique.append(event)
+        chain = []
+        for event in unique:
+            if chain and (event['time'] - chain[-1]['time']).days > 7:
+                if len(chain) >= 2 and chain[-1]['time'] >= fresh:
+                    repeats.append(part_repeat_card(part, chain))
+                chain = []
+            chain.append(event)
+        if len(chain) >= 2 and chain[-1]['time'] >= fresh:
+            repeats.append(part_repeat_card(part, chain))
+    evacuations = []
+    for events in evac_events.values():
+        events.sort(key=lambda item: item['time'])
+        by_day = {}
+        for event in events:
+            key = event['time'].date()
+            previous = by_day.get(key)
+            if previous is None or len(event['reason']) > len(previous['reason']):
+                by_day[key] = event
+        unique = [by_day[key] for key in sorted(by_day)]
+        chain = []
+        for event in unique:
+            if chain and (event['time'] - chain[-1]['time']).days > 7:
+                if len(chain) >= 2 and chain[-1]['time'] >= fresh:
+                    evacuations.append(evac_repeat_card(chain))
+                chain = []
+            chain.append(event)
+        if len(chain) >= 2 and chain[-1]['time'] >= fresh:
+            evacuations.append(evac_repeat_card(chain))
+    repeats.sort(key=lambda item: item['sort'], reverse=True)
+    evacuations.sort(key=lambda item: item['sort'], reverse=True)
+    return {'repeats': repeats[:40], 'evacuations': evacuations[:40]}
+
+def part_repeat_card(part, chain):
+    bits = [f"{item['time'].strftime('%d.%m')} {item['master'] or 'мастер не указан'}" for item in chain]
+    times = 'раза' if 2 <= len(chain) <= 4 else 'раз'
+    return {
+        'gos': chain[0]['gos'],
+        'part': part,
+        'count': len(chain),
+        'when': bits[0].split()[0] + ' – ' + bits[-1].split()[0],
+        'text': f'{chain[0]["gos"]}: {part} ставили {len(chain)} {times}, ' + ' и '.join(bits),
+        'sort': chain[-1]['time'].strftime('%Y-%m-%d %H:%M:%S'),
+    }
+
+def evac_repeat_card(chain):
+    steps = []
+    for index, item in enumerate(chain, start=1):
+        steps.append({
+            'n': index,
+            'when': item['time'].strftime('%d.%m.%Y'),
+            'master': item['master'] or 'мастер не указан',
+            'reason': item['reason'],
         })
-    events.sort(key=lambda item: item['time'])
-    flags = []
-    by_gos = {}
-    for event in events:
-        by_gos.setdefault(event['gos_key'], []).append(event)
-    for group in by_gos.values():
-        for index, event in enumerate(group):
-            window = [other for other in group[index:] if (other['time'] - event['time']).days <= 7]
-            names = []
-            for other in window:
-                for part in other['parts']:
-                    if part not in names:
-                        names.append(part)
-            if len(names) >= 3:
-                flags.append({
-                    'gos': event['gos'],
-                    'when': event['time'].strftime('%d.%m.%Y'),
-                    'text': 'За неделю разные запчасти: ' + ', '.join(names[:6]),
-                })
-            seen = {}
-            for other in window:
-                for part in other['parts']:
-                    seen.setdefault(part, []).append(other)
-            for part, hits in seen.items():
-                if len(hits) >= 2:
-                    flags.append({
-                        'gos': event['gos'],
-                        'when': event['time'].strftime('%d.%m.%Y'),
-                        'text': f'«{part}» ставили {len(hits)} раза за неделю',
-                    })
-            words = set(re.findall(r'[A-Za-zА-Яа-яЁё]{4,}', event['desc'].lower()))
-            if event['parts'] and words:
-                for other in window[1:]:
-                    later = set(re.findall(r'[A-Za-zА-Яа-яЁё]{4,}', other['desc'].lower()))
-                    if words & later:
-                        flags.append({
-                            'gos': event['gos'],
-                            'when': other['time'].strftime('%d.%m.%Y'),
-                            'text': 'Запчасть списали, а жалоба повторилась: ' + (other['desc'] or '')[:120],
-                        })
-                        break
-    expensive = {name for name, price in PARTS if price >= 750}
-    month_ago = get_msk_now().replace(tzinfo=None) - timedelta(days=30)
-    by_master = {}
-    for event in events:
-        if event['time'] < month_ago:
-            continue
-        for part in event['parts']:
-            if part in expensive:
-                by_master.setdefault(part, {}).setdefault(event['master'] or '—', 0)
-                by_master[part][event['master'] or '—'] += 1
-    for part, people in by_master.items():
-        counts = sorted(people.values())
-        middle = counts[len(counts) // 2] if counts else 0
-        for master, qty in people.items():
-            if qty >= 4 and (middle == 0 or qty >= middle * 2):
-                flags.append({
-                    'gos': master,
-                    'when': 'месяц',
-                    'text': f'Часто ставит «{part}»: {qty} за месяц',
-                })
-    unique = []
-    seen_flags = set()
-    for flag in flags:
-        key = (flag['gos'], flag['text'])
-        if key in seen_flags:
-            continue
-        seen_flags.add(key)
-        unique.append(flag)
-    return unique[:80]
+    return {
+        'gos': chain[0]['gos'],
+        'count': len(chain),
+        'steps': steps,
+        'sort': chain[-1]['time'].strftime('%Y-%m-%d %H:%M:%S'),
+    }
 
 @app.route('/admin/suspicious')
 @login_required
 def admin_suspicious():
     if session.get('role') != 'admin':
         return redirect(url_for('login_page'))
-    return render_template('admin_suspicious.html', rows=suspicious_flags(), now=get_msk_now().strftime('%d.%m.%Y %H:%M'))
+    pack = suspicious_flags()
+    return render_template('admin_suspicious.html', repeats=pack['repeats'], evacuations=pack['evacuations'], now=get_msk_now().strftime('%d.%m.%Y %H:%M'))
 
 @app.route('/admin/stats')
 @login_required
@@ -6650,15 +6718,23 @@ def admin_trunks():
     if request.method == 'POST':
         master = (request.form.get('master') or '').strip()
         part_name = (request.form.get('part') or '').strip()
-        try:
-            qty = int(request.form.get('qty'))
-        except (TypeError, ValueError):
-            qty = None
+        if request.form.get('save') == '1':
+            try:
+                qty = int(request.form.get('qty_typed'))
+            except (TypeError, ValueError):
+                qty = None
+        else:
+            try:
+                qty = int(request.form.get('qty'))
+            except (TypeError, ValueError):
+                qty = None
         if master not in MASTERS or part_name not in PARTS_SET or qty is None:
             error = 'Выберите мастера, запчасть и число'
         else:
-            set_trunk_qty(master, part_name, qty)
+            sheet_error = set_trunk_qty(master, part_name, qty)
             notice = f'{master}: {part_name} теперь {qty}'
+            if sheet_error:
+                error = sheet_error
     masters = []
     for master in MASTERS:
         rows, total_qty = trunk_rows(master)
@@ -6738,6 +6814,8 @@ def set_trunk_qty(master, name, qty):
         write_trunk_sheet(get_sheet_client())
     except Exception as exc:
         logger.warning(f'Багажник в таблицу не записался: {exc}')
+        return 'Количество на сайте изменено. В лист «Багажник» сейчас не записалось.'
+    return ''
 
 # ============================================================
 # API ДЛЯ МАСТЕРОВ

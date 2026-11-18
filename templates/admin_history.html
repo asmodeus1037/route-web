@@ -4,114 +4,124 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>История мастеров</title>
-    <link rel="stylesheet" href="/static/css/admin.css?v=26">
+    <link rel="icon" href="/static/img/vb.jpg" type="image/jpeg">
     <style>
-        body { padding: 16px; }
-        .wrap { max-width: 1100px; margin: 0 auto; }
-        h1 { font-size: 26px; margin: 0 0 6px; }
-        .muted { color: #64748b; margin-bottom: 16px; }
-        form { display: flex; gap: 8px; margin-bottom: 14px; }
-        input { flex: 1; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 12px; font: inherit; }
-        button { border: 0; background: #0f172a; color: #fff; border-radius: 10px; padding: 10px 14px; font-weight: 800; cursor: pointer; }
-        table { width: 100%; border-collapse: collapse; background: #fff; }
-        th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #eef2f6; font-size: 14px; vertical-align: top; }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #eef2f6; color: #0f172a; font: 16px/1.45 "Segoe UI", sans-serif; }
+        .page { max-width: 1040px; margin: 0 auto; padding: 28px 20px 60px; }
+        .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+        .brand img { width: 46px; height: 46px; border-radius: 50%; }
+        a.back, a.chip { color: #334155; font-weight: 700; text-decoration: none; }
+        h1 { margin: 8px 0 4px; font-size: 32px; }
+        .lead { color: #64748b; margin: 0 0 16px; }
+        .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+        .chip { background: #fff; border-radius: 999px; padding: 8px 14px; }
+        .chip.on { background: #0f172a; color: #fff; }
+        h2 { margin: 22px 0 8px; font-size: 18px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+        .card { display: block; background: #fff; border-radius: 16px; padding: 14px 16px; text-decoration: none; color: inherit; box-shadow: 0 1px 2px rgba(15,23,42,.06); }
+        .card b { display: block; font-size: 18px; margin-bottom: 6px; }
+        .nums { display: flex; gap: 14px; font-weight: 700; }
+        .bad { color: #b45309; }
+        .ok { color: #15803d; }
+        .note { color: #64748b; font-size: 13px; margin-top: 6px; }
+        table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 16px; overflow: hidden; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #eef2f6; vertical-align: top; }
         th { font-size: 12px; color: #64748b; }
-        .back { display: inline-block; margin-bottom: 12px; color: #334155; font-weight: 700; }
-        .empty { color: #64748b; }
+        .done { color: #15803d; font-weight: 800; }
+        .wait { color: #b45309; font-weight: 800; }
+        form { display: flex; gap: 8px; margin: 28px 0 12px; }
+        input { flex: 1; border: 1px solid #cbd5e1; border-radius: 12px; padding: 12px 14px; font: inherit; }
+        button { border: 0; background: #0f172a; color: #fff; border-radius: 12px; padding: 12px 16px; font-weight: 800; cursor: pointer; }
+        .quiet { background: #e2e8f0; color: #0f172a; margin-left: 8px; }
     </style>
 </head>
 <body>
-    <div class="wrap">
-        <a class="back" href="/admin">← К заявкам</a>
-        <h1>История мастеров</h1>
-        <p class="muted">Маршрут по дням: что было назначено и что из этого сделано. {{ now }}</p>
-        <p>
-            {% for name in masters %}
-            <a href="/admin/history?master={{ name }}">{{ name }}</a>{% if not loop.last %} · {% endif %}
-            {% endfor %}
-        </p>
-        {% if master %}
-        <h2>{{ master }}</h2>
-        {% if day and detail %}
-        <p><a href="/admin/history?master={{ master }}">← Все маршруты</a></p>
-        <h3>Маршрут {{ detail.title }}</h3>
-        {% if detail.report %}
-        <p>Отчёт за этот день написан.</p>
-        {% else %}
-        <p><b>Отчёт за этот день не написан.</b></p>
-        {% endif %}
-        {% if not detail.saved_assignment %}
-        <p class="muted">Назначение этого дня не сохранялось. Ниже только то, что мастер отметил.</p>
-        {% endif %}
-        <table>
-            <tr><th>Что</th><th>Описание</th><th>Дарк</th><th>Статус</th></tr>
-            {% for ticket in detail.tickets %}
-            <tr>
-                <td>{{ ticket.gos }}</td>
-                <td>{{ ticket.desc or '—' }}</td>
-                <td>{{ ticket.darks or '—' }}</td>
-                <td>{% if ticket.done %}Выполнено{% else %}Не выполнено{% endif %}</td>
-            </tr>
-            {% else %}
-            <tr><td colspan="4">В этот день записей нет.</td></tr>
-            {% endfor %}
-        </table>
-        {% if detail.disputes %}
-        <h3>Споры</h3>
-        {% for dispute in detail.disputes %}
-        <p>{{ dispute.bikes }} — {{ dispute.text }}
-            {% if dispute.closed %}
-            <button type="button" onclick="hideDispute('{{ dispute.id }}')">Скрыть</button>
-            {% endif %}
-        </p>
+<div class="page">
+    <div class="brand"><img src="/static/img/vb.jpg" alt="VB"><a class="back" href="/admin">← К заявкам</a></div>
+    <h1>История мастеров</h1>
+    <p class="lead">Последний месяц. Маршрут появляется, когда нажимаешь «Уведомить кураторов». {{ now }}</p>
+    <div class="chips">
+        <a class="chip {% if not master %}on{% endif %}" href="/admin/history">Все</a>
+        {% for name in masters %}
+        <a class="chip {% if master == name %}on{% endif %}" href="/admin/history?master={{ name }}">{{ name }}</a>
         {% endfor %}
-        {% endif %}
-        {% else %}
-        {% for route in routes %}
-        <p>
-            <a href="/admin/history?master={{ master }}&day={{ route.date }}">Маршрут {{ route.title }}</a>
-            — назначено {{ route.assigned }}, сделано {{ route.done }}
-            {% if route.report_late %}<b>Отчёт не написан</b>{% elif not route.report %}отчёт ещё не сдан{% endif %}
-        </p>
-        {% else %}
-        <p class="empty">У этого мастера пока нет сохранённых маршрутов.</p>
-        {% endfor %}
-        {% endif %}
-        {% endif %}
-        <form method="get" action="/admin/history">
-            <input name="q" value="{{ query }}" placeholder="Госномер, например РЕ621Р">
-            <button type="submit">Найти</button>
-        </form>
-        {% if items %}
-        <table>
-            <tr>
-                <th>Когда</th>
-                <th>Мастер</th>
-                <th>Госномер</th>
-                <th>Что сделал</th>
-                <th>Комментарий</th>
-                <th>Прошло</th>
-                <th>Дарк</th>
-            </tr>
-            {% for row in items %}
-            <tr>
-                <td>{{ row.timestamp }}</td>
-                <td>{{ row.master }}</td>
-                <td>{{ row.gos or '—' }}</td>
-                <td>{{ row.label or '—' }}{% if row.desc %}<div class="empty">{{ row.desc }}</div>{% endif %}</td>
-                <td>{{ row.detail or '—' }}</td>
-                <td>{% if row.hours is not none and row.hours != '' %}{{ row.hours }} ч{% else %}—{% endif %}</td>
-                <td>{{ row.darks or '—' }}</td>
-            </tr>
-            {% endfor %}
-        </table>
-        {% endif %}
     </div>
-    <script>
-    function hideDispute(uid) {
-        fetch('/admin/history/dispute/' + encodeURIComponent(uid) + '/hide', {method: 'POST', credentials: 'same-origin'})
-            .then(function() { location.reload(); });
-    }
-    </script>
+    {% if detail %}
+    <p><a class="back" href="/admin/history{% if master %}?master={{ master }}{% endif %}">← Все маршруты</a></p>
+    <h2>{{ master }} · {{ detail.title }}</h2>
+    {% if detail.report %}<p>Отчёт за этот день написан.</p>{% else %}<p class="bad">Отчёт за этот день не написан.</p>{% endif %}
+    {% if not detail.saved_assignment %}
+    <p class="lead">Это утро в маршрут не попадало: кнопку «Уведомить кураторов» тогда не нажимали.</p>
+    {% endif %}
+    <table>
+        <tr><th>Заявка</th><th>Описание</th><th>Дарк</th><th></th></tr>
+        {% for ticket in detail.tickets %}
+        <tr>
+            <td>{{ ticket.gos }}</td>
+            <td>{{ ticket.desc or '—' }}</td>
+            <td>{{ ticket.darks or '—' }}</td>
+            <td class="{% if ticket.done %}done{% else %}wait{% endif %}">{% if ticket.done %}Сделано{% else %}Не сделано{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4">В этом маршруте заявок нет.</td></tr>
+        {% endfor %}
+    </table>
+    {% if detail.disputes %}
+    <h2>Споры</h2>
+    {% for dispute in detail.disputes %}
+    <article class="card">{{ dispute.bikes }} — {{ dispute.text }}
+        {% if dispute.closed %}<button class="quiet" type="button" onclick="hideDispute('{{ dispute.id }}')">Скрыть</button>{% endif %}
+    </article>
+    {% endfor %}
+    {% endif %}
+    {% else %}
+    {% if routes %}
+        {% set ns = namespace(day='') %}
+        {% for route in routes %}
+            {% if route.date != ns.day %}
+            <h2>{{ route.title }}</h2>
+            <div class="grid">
+            {% set ns.day = route.date %}
+            {% endif %}
+            <a class="card" href="/admin/history?master={{ route.master }}&day={{ route.date }}">
+                <b>{{ route.master }}</b>
+                <div class="nums"><span>Назначено {{ route.assigned }}</span><span class="{% if route.done < route.assigned %}bad{% else %}ok{% endif %}">Сделано {{ route.done }}</span></div>
+                {% if route.report_late %}<div class="note">Отчёт не написан</div>{% endif %}
+            </a>
+            {% if loop.last or routes[loop.index].date != route.date %}
+            </div>
+            {% endif %}
+        {% endfor %}
+    {% else %}
+        <p class="lead">За месяц маршрутов ещё нет. Они появятся после кнопки «Уведомить кураторов».</p>
+    {% endif %}
+    {% endif %}
+    <form method="get" action="/admin/history">
+        <input name="q" value="{{ query }}" placeholder="Госномер, например РЕ621Р">
+        <button type="submit">Найти</button>
+    </form>
+    {% if items %}
+    <table>
+        <tr><th>Когда</th><th>Мастер</th><th>Госномер</th><th>Что сделал</th><th>Комментарий</th><th>Дарк</th></tr>
+        {% for row in items %}
+        <tr>
+            <td>{{ row.timestamp }}</td>
+            <td>{{ row.master }}</td>
+            <td>{{ row.gos or '—' }}</td>
+            <td>{{ row.label or '—' }}</td>
+            <td>{{ row.detail or '—' }}</td>
+            <td>{{ row.darks or '—' }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% endif %}
+</div>
+<script>
+function hideDispute(uid) {
+    fetch('/admin/history/dispute/' + encodeURIComponent(uid) + '/hide', {method: 'POST', credentials: 'same-origin'})
+        .then(function() { location.reload(); });
+}
+</script>
 </body>
 </html>

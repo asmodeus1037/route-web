@@ -4,72 +4,97 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Багажники мастеров</title>
-    <link rel="stylesheet" href="/static/css/admin.css">
+    <link rel="icon" href="/static/img/vb.jpg" type="image/jpeg">
     <style>
-        .card { background: #fff; border-radius: 14px; padding: 14px; margin: 12px 0; }
-        .row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid #f1f5f9; }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #eef2f6; color: #0f172a; font: 16px/1.45 "Segoe UI", sans-serif; }
+        .page { max-width: 980px; margin: 0 auto; padding: 28px 20px 60px; }
+        .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+        .brand img { width: 46px; height: 46px; border-radius: 50%; }
+        a.back { color: #334155; font-weight: 700; text-decoration: none; }
+        h1 { margin: 8px 0 4px; font-size: 32px; }
+        .lead { color: #64748b; }
+        .banner { background: #fff; border-radius: 14px; padding: 12px 14px; margin: 10px 0; }
+        .card { background: #fff; border-radius: 18px; padding: 8px 16px 14px; margin: 14px 0; box-shadow: 0 1px 2px rgba(15,23,42,.06); }
+        .head, .line { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px 0; }
+        .head { border-bottom: 1px solid #e2e8f0; font-size: 20px; }
+        .line { border-bottom: 1px solid #f1f5f9; }
+        .qty { display: flex; align-items: center; gap: 6px; }
+        .qty button, .add button, .period button { border: 0; border-radius: 10px; background: #0f172a; color: #fff; font-weight: 800; cursor: pointer; }
+        .qty button { width: 36px; height: 36px; font-size: 20px; }
+        .qty input { width: 72px; height: 36px; text-align: center; border: 1px solid #cbd5e1; border-radius: 10px; font: inherit; font-weight: 700; }
+        .minus { color: #b91c1c; }
+        .add, .period { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin: 12px 0; }
+        select, .add input, .period input { height: 40px; border: 1px solid #cbd5e1; border-radius: 10px; padding: 0 10px; font: inherit; background: #fff; }
+        .add button, .period button { height: 40px; padding: 0 14px; }
+        .period a { align-self: center; font-weight: 700; color: #334155; }
     </style>
 </head>
 <body>
-<div class="container">
+<div class="page">
+    <div class="brand"><img src="/static/img/vb.jpg" alt="VB"><a class="back" href="/admin">← В админку</a></div>
     <h1>Багажники мастеров</h1>
-    <p><a href="/admin">← В админку</a></p>
-    <p>Остаток, который сейчас числится у мастера. Минус значит, что деталь поставили, а приход не записали.</p>
-    {% if notice %}<p>{{ notice }}</p>{% endif %}
-    {% if error %}<p>{{ error }}</p>{% endif %}
-    <form method="post" style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin:12px 0;">
+    <p class="lead">Минус и плюс меняют количество на одну штуку. Число можно вписать и нажать «Ок». Запись уходит в листы «Багажник» и «Движение запчастей 2».</p>
+    {% if notice %}<p class="banner">{{ notice }}</p>{% endif %}
+    {% if error %}<p class="banner">{{ error }}</p>{% endif %}
+    <form class="add" method="post">
         <label>Мастер
             <select name="master">
-                {% for master in masters %}
-                <option value="{{ master.name }}">{{ master.name }}</option>
-                {% endfor %}
+                {% for master in masters %}<option value="{{ master.name }}">{{ master.name }}</option>{% endfor %}
             </select>
         </label>
         <label>Запчасть
             <select name="part">
-                {% for name in catalog %}
-                <option value="{{ name }}">{{ name }}</option>
-                {% endfor %}
+                {% for name in catalog %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
             </select>
         </label>
         <label>Количество <input name="qty" type="number" required></label>
-        <button class="btn btn-view" type="submit">Записать</button>
+        <button type="submit">Записать</button>
     </form>
-    <p>Для Excel откройте в таблице листы «Багажник» и «Движение запчастей 2». Старый лист «Движение запчастей» не используйте: там столбцы съехали.</p>
     {% for master in masters %}
-    <div class="card">
-        <div class="row"><b>{{ master.name }}</b><span>{{ master.total_qty }} шт</span></div>
+    <section class="card">
+        <div class="head"><b>{{ master.name }}</b><span>{{ master.total_qty }} шт</span></div>
         {% for row in master.rows %}
-        <div class="row"><span>{{ row.name }}</span><b {% if row.qty < 0 %}style="color:#b91c1c"{% endif %}>{{ row.qty }} шт</b></div>
+        <div class="line">
+            <span>{{ row.name }}</span>
+            <form class="qty" method="post">
+                <input type="hidden" name="master" value="{{ master.name }}">
+                <input type="hidden" name="part" value="{{ row.name }}">
+                <button type="submit" name="qty" value="{{ row.qty - 1 }}" aria-label="Меньше">−</button>
+                <input name="qty_typed" value="{{ row.qty }}" inputmode="numeric" class="{% if row.qty < 0 %}minus{% endif %}">
+                <button type="submit" name="qty" value="{{ row.qty + 1 }}" aria-label="Больше">+</button>
+                <button type="submit" name="save" value="1">Ок</button>
+            </form>
+        </div>
         {% else %}
-        <p>Пусто</p>
+        <p class="lead">Пусто</p>
         {% endfor %}
-    </div>
+    </section>
     {% endfor %}
-    <form method="get" style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin:12px 0;">
+    <form class="period" method="get">
         <label>С <input type="date" name="start" value="{{ start }}"></label>
         <label>По <input type="date" name="end" value="{{ end }}"></label>
-        <button class="btn btn-view" type="submit">Показать</button>
+        <button type="submit">Показать</button>
         <a href="/admin/trunks?start={{ week_start }}&end={{ today }}">Неделя</a>
         <a href="/admin/trunks?start={{ month_start }}&end={{ today }}">Месяц</a>
     </form>
-    <div class="card">
-        <b>Уже поставлено на велосипеды за период</b>
+    <section class="card">
+        <div class="head"><b>Поставлено за период</b></div>
         {% for row in spent %}
-        <div class="row"><span>{{ row.name }}</span><span>{{ row.qty }} шт</span></div>
+        <div class="line"><span>{{ row.name }}</span><b>{{ row.qty }} шт</b></div>
         {% else %}
-        <p>За этот период никто ничего не списал.</p>
+        <p class="lead">За этот период списаний нет.</p>
         {% endfor %}
-    </div>
+    </section>
     {% for master in spent_masters %}
-    <div class="card">
-        <div class="row"><b>{{ master.name }}</b><span>{{ master.qty }} шт</span></div>
+    <section class="card">
+        <div class="head"><b>{{ master.name }}</b><span>{{ master.qty }} шт</span></div>
         {% for row in master.rows %}
-        <div class="row"><span>{{ row.name }}</span><span>{{ row.qty }} шт</span></div>
+        <div class="line"><span>{{ row.name }}</span><span>{{ row.qty }} шт</span></div>
         {% else %}
-        <p>В этот период ничего не ставил.</p>
+        <p class="lead">В этот период ничего не ставил.</p>
         {% endfor %}
-    </div>
+    </section>
     {% endfor %}
 </div>
 </body>
