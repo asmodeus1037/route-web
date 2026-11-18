@@ -24,7 +24,60 @@
     <div class="wrap">
         <a class="back" href="/admin">← К заявкам</a>
         <h1>История мастеров</h1>
-        <p class="muted">Кто закрыл заявку, когда и сколько прошло от создания до отметки. Поиск по госномеру. {{ now }}</p>
+        <p class="muted">Маршрут по дням: что было назначено и что из этого сделано. {{ now }}</p>
+        <p>
+            {% for name in masters %}
+            <a href="/admin/history?master={{ name }}">{{ name }}</a>{% if not loop.last %} · {% endif %}
+            {% endfor %}
+        </p>
+        {% if master %}
+        <h2>{{ master }}</h2>
+        {% if day and detail %}
+        <p><a href="/admin/history?master={{ master }}">← Все маршруты</a></p>
+        <h3>Маршрут {{ detail.title }}</h3>
+        {% if detail.report %}
+        <p>Отчёт за этот день написан.</p>
+        {% else %}
+        <p><b>Отчёт за этот день не написан.</b></p>
+        {% endif %}
+        {% if not detail.saved_assignment %}
+        <p class="muted">Назначение этого дня не сохранялось. Ниже только то, что мастер отметил.</p>
+        {% endif %}
+        <table>
+            <tr><th>Что</th><th>Описание</th><th>Дарк</th><th>Статус</th></tr>
+            {% for ticket in detail.tickets %}
+            <tr>
+                <td>{{ ticket.gos }}</td>
+                <td>{{ ticket.desc or '—' }}</td>
+                <td>{{ ticket.darks or '—' }}</td>
+                <td>{% if ticket.done %}Выполнено{% else %}Не выполнено{% endif %}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4">В этот день записей нет.</td></tr>
+            {% endfor %}
+        </table>
+        {% if detail.disputes %}
+        <h3>Споры</h3>
+        {% for dispute in detail.disputes %}
+        <p>{{ dispute.bikes }} — {{ dispute.text }}
+            {% if dispute.closed %}
+            <button type="button" onclick="hideDispute('{{ dispute.id }}')">Скрыть</button>
+            {% endif %}
+        </p>
+        {% endfor %}
+        {% endif %}
+        {% else %}
+        {% for route in routes %}
+        <p>
+            <a href="/admin/history?master={{ master }}&day={{ route.date }}">Маршрут {{ route.title }}</a>
+            — назначено {{ route.assigned }}, сделано {{ route.done }}
+            {% if route.report_late %}<b>Отчёт не написан</b>{% elif not route.report %}отчёт ещё не сдан{% endif %}
+        </p>
+        {% else %}
+        <p class="empty">У этого мастера пока нет сохранённых маршрутов.</p>
+        {% endfor %}
+        {% endif %}
+        {% endif %}
         <form method="get" action="/admin/history">
             <input name="q" value="{{ query }}" placeholder="Госномер, например РЕ621Р">
             <button type="submit">Найти</button>
@@ -52,9 +105,13 @@
             </tr>
             {% endfor %}
         </table>
-        {% else %}
-        <p class="empty">Пока записей нет. История копится отдельно и не стирается вместе с заявкой.</p>
         {% endif %}
     </div>
+    <script>
+    function hideDispute(uid) {
+        fetch('/admin/history/dispute/' + encodeURIComponent(uid) + '/hide', {method: 'POST', credentials: 'same-origin'})
+            .then(function() { location.reload(); });
+    }
+    </script>
 </body>
 </html>

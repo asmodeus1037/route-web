@@ -20,7 +20,9 @@
         .btn { display: inline-block; border: 0; border-radius: 10px; padding: 8px 12px; font-weight: 800; cursor: pointer; text-decoration: none; }
         .btn-ok { background: #16a34a; color: #fff; }
         .btn-file { background: #e2e8f0; color: #0f172a; margin-right: 6px; }
-        .done { color: #166534; font-weight: 700; }
+        .btn-quiet { background: #e2e8f0; color: #0f172a; margin-left: 8px; }
+        .dispute-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin: 18px 0 8px; }
+        .dispute-head h2 { font-size: 18px; margin: 0; }
     </style>
 </head>
 <body>
@@ -35,14 +37,32 @@
             <button type="button" class="btn btn-ok" onclick="ackOp('{{ item.id }}')">Выполнено</button>
         </div>
         {% endfor %}
-        <h2 style="font-size:18px;margin:18px 0 8px;">Споры из бота</h2>
-        {% for item in items if item.kind == 'dispute' %}
-        <div class="remind">
+        <div class="dispute-head">
+            <h2>Споры из бота</h2>
+            {% if items|selectattr('kind', 'equalto', 'dispute')|rejectattr('read')|list %}
+            <button type="button" class="btn btn-quiet" onclick="readDisputes()">Прочитать все</button>
+            {% endif %}
+        </div>
+        {% for item in items if item.kind == 'dispute' and not item.read %}
+        <div class="remind" id="dispute-{{ item.id }}">
             <b>Спор · даркстор {{ item.darks }} · {{ item.date }}</b>
-            <p>Вело: {{ item.bikes or '—' }}. {{ item.text }}</p>
+            <p>IoT: {{ item.bikes_view or '—' }}. {{ item.text }}</p>
+            <button type="button" class="btn btn-ok" onclick="readDispute('{{ item.id }}')">Прочитано</button>
         </div>
         {% else %}
         <p class="muted">Споров пока нет.</p>
+        {% endfor %}
+        <div class="dispute-head">
+            <h2>Багажник в минусе</h2>
+        </div>
+        {% for item in items if item.kind == 'trunk' and not item.read %}
+        <div class="remind">
+            <b>{{ item.date }}</b>
+            <p>{{ item.text }}</p>
+            <button type="button" class="btn btn-ok" onclick="readDispute('{{ item.id }}')">Прочитано</button>
+        </div>
+        {% else %}
+        <p class="muted">Минуса нет.</p>
         {% endfor %}
         <table>
             <tr>
@@ -50,17 +70,17 @@
                 <th>Операция</th>
                 <th>Компания</th>
                 <th>Даркстор</th>
-                <th>Вело</th>
+                <th>IoT</th>
                 <th>АКБ</th>
                 <th>Документ</th>
             </tr>
-            {% for item in items if item.kind != 'dispute' %}
+            {% for item in items if item.kind != 'dispute' and item.kind != 'trunk' %}
             <tr>
                 <td>{{ item.date }}</td>
                 <td>{{ item.operation }}{% if item.remind and item.remind_done %}<div class="done">В ГАИ перенесено</div>{% endif %}</td>
                 <td>{{ item.company or '—' }}</td>
                 <td>{{ item.darks }}</td>
-                <td>{{ item.bikes }}</td>
+                <td>{{ item.bikes_view or item.bikes }}</td>
                 <td>{{ item.akb }}</td>
                 <td>
                     {% if item.doc %}
@@ -89,6 +109,31 @@
                 }
                 var box = document.getElementById('remind-' + uid);
                 if (box) box.remove();
+                location.reload();
+            })
+            .catch(function() { alert('Нет сети'); });
+    }
+    function readDispute(uid) {
+        fetch('/admin/ops/' + encodeURIComponent(uid) + '/read', { method: 'POST', credentials: 'same-origin' })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (!data.success) {
+                    alert(data.error || 'Не отметилось');
+                    return;
+                }
+                var box = document.getElementById('dispute-' + uid);
+                if (box) box.remove();
+            })
+            .catch(function() { alert('Нет сети'); });
+    }
+    function readDisputes() {
+        fetch('/admin/ops/read_disputes', { method: 'POST', credentials: 'same-origin' })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (!data.success) {
+                    alert(data.error || 'Не отметилось');
+                    return;
+                }
                 location.reload();
             })
             .catch(function() { alert('Нет сети'); });

@@ -22,6 +22,13 @@
         <span>🟡 В работе: {{ pending_count }}</span>
         <span>🔧 Доделать: {{ todo_count }}</span>
     </div>
+    {% if plan_bikes or plan_akb or plan_chargers %}
+    <div class="stats" style="display:block;margin-top:8px;">
+        {% if plan_bikes %}<div>Сегодня нужно: {{ plan_bikes|join(', ') }}</div>{% endif %}
+        {% if plan_akb %}<div>Аккумуляторы к замене: {{ plan_akb }}</div>{% endif %}
+        {% if plan_chargers %}<div>Зарядки к замене: {{ plan_chargers }}</div>{% endif %}
+    </div>
+    {% endif %}
     
     <div id="tickets-list">
         {% for t in tickets %}

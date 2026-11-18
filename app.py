@@ -466,6 +466,19 @@ def clean_name(value):
 def is_transit_master(name):
     return clean_name(name) in ('транзит', 'сергей транзит')
 
+def is_power_ticket(ticket):
+    return (ticket or {}).get('type') in ('Аккумуляторная батарея', 'Зарядное устройство')
+
+def ensure_iot_prefix(value):
+    text = re.sub(r'\s+', '', str(value or ''))
+    if not text:
+        return ''
+    if text.lower().startswith('25-'):
+        return '25-' + text[3:]
+    if re.fullmatch(r'\d{3,6}', text):
+        return '25-' + text
+    return text
+
 def same_master(left, right):
     if clean_name(left) == clean_name(right):
         return True
@@ -2522,6 +2535,15 @@ def append_shift_sheet(item):
         item.get('saved_at') or '',
     ]]
     column = sheet.col_values(1)
+    masters = sheet.col_values(2)
+    date_ru = str(item.get('date_ru') or item.get('date') or '').strip()
+    master_name = item.get('master') or ''
+    for index, value in enumerate(column):
+        if index == 0:
+            continue
+        other = masters[index] if index < len(masters) else ''
+        if str(value).strip() == date_ru and str(other).strip() == master_name:
+            return
     start = len(column) + 1
     for index, value in enumerate(column, start=1):
         if index > 1 and not str(value).strip():
@@ -2575,6 +2597,15 @@ def append_shift_debrief(item):
         item.get('comment') or '',
     ]
     names = sheet.col_values(2)
+    dates = sheet.col_values(3)
+    master_name = item.get('master') or ''
+    date_ru = item.get('date_ru') or ''
+    for index, value in enumerate(names):
+        if index == 0:
+            continue
+        day = dates[index] if index < len(dates) else ''
+        if str(value).strip() == master_name and str(day).strip() == str(date_ru).strip():
+            return
     start = None
     for index, value in enumerate(names, start=1):
         if index > 1 and not str(value or '').strip():
@@ -2786,11 +2817,11 @@ def change_trunk(master, name, delta):
         bag = data.get(master) or {}
         current = int(bag.get(name) or 0)
         new_qty = current + int(delta)
-        if new_qty < 0:
-            return False, current
         bag[name] = new_qty
         data[master] = bag
         save_trunks(data)
+    if new_qty < 0:
+        notify_trunk_minus(master, name, new_qty)
     return True, new_qty
 
 def queue_part_move(master, action, name, qty, uid='', gos='', darks=''):
@@ -2857,7 +2888,7 @@ def write_trunk_sheet(sheet):
         bag = stored.get(master) or {}
         for name, price in PARTS:
             qty = int(bag.get(name) or 0)
-            if qty <= 0:
+            if qty == 0:
                 continue
             rows.append([master, name, qty, price, qty * price])
     ws.clear()
@@ -2879,52 +2910,130 @@ def spend_parts(master, items, uid='', gos='', darks=''):
         bag = dict(data.get(master) or {})
         for name, qty in clean:
             have = int(bag.get(name) or 0)
-            bag[name] = max(0, have - qty)
+            bag[name] = have - qty
         data[master] = bag
         save_trunks(data)
     lines = []
     for name, qty in clean:
         queue_part_move(master, 'Поставил', name, qty, uid, gos, darks)
+        left = int((load_trunks().get(master) or {}).get(name) or 0)
+        if left < 0:
+            notify_trunk_minus(master, name, left)
         lines.append(f'{name} x{qty}')
     return True, ', '.join(lines)
+
+REPORT_STATUS = {
+    'done': '✅ Выполнено',
+    'fail': '⏹️ Обработано',
+    'evacuation': '🔧 Эвакуация',
+    'replace_yes': '✅ Выполнено',
+    'taken_no_replace': '🔵 Доделать',
+    'replace_no': '🔵 Доделать',
+    'redo': '🔵 Доделать',
+    'transit_replace': '✅ Выполнено',
+    'evacuation_and_replace': '✅ Выполнено',
+    'transit_bulk_close': '✅ Выполнено',
+}
+
+def report_label(task):
+    return REPORT_STATUS.get((task or {}).get('type'), '✅ Выполнено')
+
+def report_task_key(task):
+    return str((task or {}).get('uid') or '').strip() + '|' + report_label(task)
+
+def load_report_ledger():
+    data = read_cache('report_keys.json') or {}
+    keys = data.get('keys') if isinstance(data, dict) else []
+    return set(keys or [])
+
+def save_report_ledger(keys):
+    write_cache('report_keys.json', {'keys': list(keys)[-20000:]})
+
+def sheet_report_keys():
+    try:
+        sheet = get_sheet_client().worksheet('Отчет мастера')
+    except gspread.exceptions.WorksheetNotFound:
+        return set()
+    rows = sheet.get_all_values()
+    keys = set()
+    for row in rows[1:]:
+        uid = row[2].strip() if len(row) > 2 else ''
+        status = row[7].strip() if len(row) > 7 else ''
+        if uid:
+            keys.add(uid + '|' + status)
+    return keys
+
+def set_queue_note(error):
+    with queue_lock:
+        data = _load_queue()
+        data['last_error'] = str(error or '')
+        data['last_error_at'] = get_msk_now().strftime('%d.%m.%Y %H:%M') if error else ''
+        _save_queue(data)
+
+def report_tasks_of(tasks):
+    rows = []
+    for task in tasks or []:
+        data = task.get('data') or {}
+        if data.get('skip_report') or task.get('type') == 'status_update':
+            continue
+        rows.append(task)
+    return rows
 
 def flush_queue():
     if not flush_lock.acquire(blocking=False):
         return 0
     try:
-        with queue_lock:
-            queue_data = _load_queue()
-            tasks = list(queue_data.get('tasks') or [])
-            if not tasks:
-                return 0
-            for i, task in enumerate(tasks):
-                if not task.get('qid'):
-                    task['qid'] = f"legacy-{i}-{task.get('uid')}"
-            _save_queue(queue_data)
-            taken = [dict(task) for task in tasks]
-            taken_ids = {task['qid'] for task in taken}
-        skipped = apply_queue_to_sheets(taken) or set()
-        report_tasks = []
-        for task in taken:
-            if task.get('qid') in skipped:
-                continue
-            data = task.get('data') or {}
-            if data.get('skip_report') or task.get('type') == 'status_update':
-                continue
-            report_tasks.append(task)
-        if report_tasks:
-            write_to_report(report_tasks)
+        try:
+            with queue_lock:
+                queue_data = _load_queue()
+                tasks = list(queue_data.get('tasks') or [])
+                if not tasks:
+                    return 0
+                for i, task in enumerate(tasks):
+                    if not task.get('qid'):
+                        task['qid'] = f"legacy-{i}-{task.get('uid')}"
+                _save_queue(queue_data)
+                taken = [dict(task) for task in tasks]
+                taken_ids = {task['qid'] for task in taken}
+            skipped = apply_queue_to_sheets(taken) or set()
+            report_tasks = []
+            for task in taken:
+                if task.get('qid') in skipped:
+                    continue
+                report_tasks.extend(report_tasks_of([task]))
+            ledger = load_report_ledger()
+            need_sheet = [task for task in report_tasks if report_task_key(task) not in ledger]
+            if need_sheet:
+                ledger |= sheet_report_keys()
+            fresh = []
             for task in report_tasks:
-                data = dict(task.get('data') or {})
-                data['uid'] = task.get('uid')
-                append_master_history(data.get('master'), task.get('type'), data)
-        with queue_lock:
-            queue_data = _load_queue()
-            queue_data['tasks'] = [task for task in (queue_data.get('tasks') or []) if task.get('qid') not in taken_ids or task.get('qid') in skipped]
-            queue_data['last_sync'] = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
-            _save_queue(queue_data)
-        logger.info(f"✅ Очередь записана и очищена: {len(taken)}")
-        return len(taken)
+                if report_task_key(task) in ledger:
+                    continue
+                fresh.append(task)
+            if fresh:
+                write_to_report(fresh)
+                for task in fresh:
+                    ledger.add(report_task_key(task))
+                    data = dict(task.get('data') or {})
+                    data['uid'] = task.get('uid')
+                    append_master_history(data.get('master'), task.get('type'), data)
+            if report_tasks or fresh:
+                save_report_ledger(ledger)
+            with queue_lock:
+                queue_data = _load_queue()
+                queue_data['tasks'] = [task for task in (queue_data.get('tasks') or []) if task.get('qid') not in taken_ids or task.get('qid') in skipped]
+                queue_data['last_sync'] = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
+                queue_data['last_error'] = ''
+                queue_data['last_error_at'] = ''
+                _save_queue(queue_data)
+            logger.info(f"✅ Очередь записана и очищена: {len(taken)}, новых строк отчёта: {len(fresh)}")
+            return len(fresh)
+        except Exception as exc:
+            try:
+                set_queue_note(exc)
+            except Exception:
+                logger.error(f'Не записал ошибку очереди: {exc}')
+            raise
     finally:
         try:
             flush_parts_queue()
@@ -4172,8 +4281,41 @@ def append_repair_operation(date, operation, company, darks, bikes, akb, link, c
         value_input_option='USER_ENTERED',
     )
 
+def plate_iot_map():
+    rows = load_bike_rows()
+    header = rows[0] if rows else []
+    gos_i = sheet_col(header, ['гос номер', 'госномер'], 1)
+    iot_i = sheet_col(header, ['iot', 'айот', 'иот', 'номер iot'], 2)
+    mapping = {}
+    for row in rows[1:]:
+        gos = normalize_gos(row[gos_i] if len(row) > gos_i else '')
+        iot = str(row[iot_i] if len(row) > iot_i else '').strip()
+        if gos and iot and iot.lower() not in ('—', '-', 'нет'):
+            mapping[gos] = iot
+    return mapping
+
+def show_iot(value):
+    text = str(value or '').strip()
+    if not text or text.isdigit():
+        return text
+    try:
+        mapping = plate_iot_map()
+    except Exception as exc:
+        logger.warning(f'IoT для уведомления не подставился: {exc}')
+        return text
+    def swap(match):
+        token = match.group(0)
+        return mapping.get(normalize_gos(token)) or token
+    return re.sub(r'[0-9A-Za-zА-Яа-яЁё]+', swap, text)
+
 def remember_dispute(ticket, darks, text):
     gos = ((ticket or {}).get('gos') or '').strip()
+    iot = ((ticket or {}).get('iot') or '').strip()
+    if not iot and gos:
+        try:
+            iot = plate_iot_map().get(normalize_gos(gos), '')
+        except Exception:
+            iot = ''
     remember_operation({
         'id': 'dispute-' + str((ticket or {}).get('uid') or '') + '-' + get_msk_now().strftime('%Y%m%d%H%M%S'),
         'date': get_msk_now().strftime('%d.%m.%Y %H:%M'),
@@ -4181,7 +4323,7 @@ def remember_dispute(ticket, darks, text):
         'kind': 'dispute',
         'company': '',
         'darks': str((ticket or {}).get('darks') or darks or ''),
-        'bikes': gos,
+        'bikes': iot or gos,
         'akb': '',
         'doc': '',
         'doc_url': '',
@@ -4196,6 +4338,27 @@ def remember_operation(item):
         items = load_ops()
         items.append(item)
         save_ops(items)
+
+def notify_trunk_minus(master, name, qty):
+    try:
+        remember_operation({
+            'id': 'trunk-' + get_msk_now().strftime('%Y%m%d%H%M%S') + '-' + str(master) + '-' + str(name),
+            'date': get_msk_now().strftime('%d.%m.%Y %H:%M'),
+            'operation': 'Багажник в минусе',
+            'kind': 'trunk',
+            'company': '',
+            'darks': '',
+            'bikes': '',
+            'akb': '',
+            'doc': '',
+            'doc_url': '',
+            'remind': False,
+            'remind_done': False,
+            'seen': False,
+            'text': f'{master}: «{name}» стало {qty}. Приход в багажник не записан.',
+        })
+    except Exception as exc:
+        logger.warning(f'Уведомление о минусе в багажнике не сохранилось: {exc}')
 
 def build_act_bytes(kind, company, date, darks, address, bikes, akb_count):
     template_name, operation = DOC_KINDS[kind]
@@ -4673,7 +4836,7 @@ def master_gai_done(name, uid):
         'operation': 'Замена ГАИ',
         'company': company,
         'darks': str(ticket.get('darks') or ''),
-        'bikes': 'забрали ' + (taken or '—') + ', отдали ' + (new_data.get('gos') or '—'),
+        'bikes': 'забрали ' + (old_data.get('iot') or taken or '—') + ', отдали ' + (new_data.get('iot') or new_data.get('gos') or '—'),
         'akb': 1 if with_akb else 0,
         'doc': local_name,
         'doc_url': link,
@@ -4692,6 +4855,8 @@ def admin_ops():
         items = load_ops()
         changed = False
         for item in items:
+            if item.get('kind') == 'dispute':
+                continue
             if item.get('remind') and not item.get('remind_done'):
                 continue
             if not item.get('seen'):
@@ -4699,7 +4864,12 @@ def admin_ops():
                 changed = True
         if changed:
             save_ops(items)
-    return render_template('admin_ops.html', items=list(reversed(items)))
+    shown = []
+    for item in reversed(items):
+        row = dict(item)
+        row['bikes_view'] = show_iot(row.get('bikes'))
+        shown.append(row)
+    return render_template('admin_ops.html', items=shown)
 
 @app.route('/admin/ops/<uid>/file')
 @login_required
@@ -4730,6 +4900,39 @@ def admin_ops_ack(uid):
             save_ops(items)
     if not found:
         return jsonify({'success': False, 'error': 'Напоминание не найдено'})
+    return jsonify({'success': True})
+
+@app.route('/admin/ops/<uid>/read', methods=['POST'])
+@login_required
+def admin_ops_read(uid):
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    with _ops_lock:
+        items = load_ops()
+        found = False
+        for item in items:
+            if str(item.get('id')) == str(uid) and item.get('kind') in ('dispute', 'trunk'):
+                item['read'] = True
+                item['seen'] = True
+                found = True
+        if found:
+            save_ops(items)
+    if not found:
+        return jsonify({'success': False, 'error': 'Уведомление не найдено'})
+    return jsonify({'success': True})
+
+@app.route('/admin/ops/read_disputes', methods=['POST'])
+@login_required
+def admin_ops_read_disputes():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    with _ops_lock:
+        items = load_ops()
+        for item in items:
+            if item.get('kind') == 'dispute':
+                item['read'] = True
+                item['seen'] = True
+        save_ops(items)
     return jsonify({'success': True})
 
 @app.route('/api/darks_priority', methods=['GET', 'POST'])
@@ -5032,6 +5235,10 @@ def admin_panel():
         ops_open = ops_alert_count()
     except Exception:
         ops_open = 0
+    try:
+        pending_open = len(pending_delivery_rows()[0])
+    except Exception:
+        pending_open = 0
     return render_template('admin.html',
                           directions=directions,
                           masters=MASTERS,
@@ -5039,6 +5246,7 @@ def admin_panel():
                           curator_sent=curator_sent_map(),
                           db_line=db_line,
                           ops_open=ops_open,
+                          pending_open=pending_open,
                           now=get_msk_now().strftime('%H:%M:%S'))
 
 # ============================================================
@@ -5209,6 +5417,30 @@ def api_batch_update():
             refresh_master_cache(master)
     return jsonify({'success': True, 'updated': updated})
 
+def remember_route_day(master):
+    try:
+        _, tickets, _ = master_groups(master)
+    except Exception:
+        return
+    day = get_msk_now().date().isoformat()
+    raw = read_cache('route_days.json') or {}
+    items = raw.get('items') if isinstance(raw, dict) else []
+    if not isinstance(items, list):
+        items = []
+    items = [row for row in items if not (row.get('master') == master and row.get('date') == day)]
+    snap = []
+    for ticket in tickets:
+        snap.append({
+            'uid': ticket.get('uid') or '',
+            'gos': ticket.get('gos') or '',
+            'type': ticket.get('type') or '',
+            'desc': ticket.get('desc') or '',
+            'darks': ticket.get('darks') or '',
+            'status': ticket.get('status') or '',
+        })
+    items.append({'master': master, 'date': day, 'tickets': snap})
+    write_cache('route_days.json', {'items': items[-500:]})
+
 @app.route('/api/send_route', methods=['POST'])
 @login_required
 def api_send_route():
@@ -5217,6 +5449,7 @@ def api_send_route():
     if not master:
         return jsonify({'success': False, 'error': 'Не указан мастер'})
     count = refresh_master_cache(master)
+    remember_route_day(master)
     info = notify_master_route(master)
     return jsonify({
         'success': True,
@@ -5231,6 +5464,7 @@ def api_send_route():
 def api_send_route_all():
     refresh_all_master_caches()
     for master in MASTERS:
+        remember_route_day(master)
         notify_master_route(master)
     return jsonify({'success': True, 'message': 'Кэши всех мастеров обновляются'})
 
@@ -5579,23 +5813,359 @@ def admin_history():
     if session.get('role') != 'admin':
         return redirect(url_for('login_page'))
     query = (request.args.get('q') or '').strip()
-    items = list(reversed(load_work_history()))
-    if query:
+    master = (request.args.get('master') or '').strip()
+    day = (request.args.get('day') or '').strip()
+    items = []
+    if query and not master:
         needle = normalize_gos(query)
         folded = query.lower()
-        picked = []
-        for row in items:
+        for row in reversed(load_work_history()):
             gos = normalize_gos(row.get('gos'))
-            master = str(row.get('master') or '').lower()
-            if (needle and needle in gos) or folded in master:
-                picked.append(row)
-        items = picked
+            who = str(row.get('master') or '').lower()
+            if (needle and needle in gos) or folded in who:
+                items.append(row)
+    routes = []
+    detail = None
+    if master:
+        routes = master_route_days(master)
+        if day:
+            detail = master_route_detail(master, day)
     return render_template(
         'admin_history.html',
         items=items[:300],
         query=query,
+        masters=MASTERS,
+        master=master,
+        day=day,
+        routes=routes,
+        detail=detail,
         now=get_msk_now().strftime('%d.%m.%Y %H:%M'),
     )
+
+def route_snapshots():
+    raw = read_cache('route_days.json') or {}
+    items = raw.get('items') if isinstance(raw, dict) else []
+    return items if isinstance(items, list) else []
+
+def master_route_days(master):
+    days = {}
+    for snap in route_snapshots():
+        if snap.get('master') != master:
+            continue
+        bucket = days.setdefault(snap.get('date') or '', {'date': snap.get('date') or '', 'assigned': 0, 'done': 0})
+        bucket['assigned'] = len(snap.get('tickets') or [])
+    for row in work_history_items():
+        if row.get('master') != master:
+            continue
+        stamp = str(row.get('timestamp') or '')[:10]
+        if not stamp:
+            continue
+        bucket = days.setdefault(stamp, {'date': stamp, 'assigned': 0, 'done': 0})
+        bucket['done'] += 1
+        if bucket['assigned'] < bucket['done']:
+            bucket['assigned'] = bucket['done']
+    today = get_msk_now().date().isoformat()
+    rows = []
+    for bucket in days.values():
+        if not bucket.get('date'):
+            continue
+        bucket['report'] = any(item.get('master') == master and item.get('date') == bucket['date'] for item in shift_report_items())
+        bucket['report_late'] = (not bucket['report']) and bucket['date'] < today
+        try:
+            bucket['title'] = datetime.strptime(bucket['date'], '%Y-%m-%d').strftime('%d.%m.%Y')
+        except ValueError:
+            bucket['title'] = bucket['date']
+        rows.append(bucket)
+    rows.sort(key=lambda item: item['date'], reverse=True)
+    return rows
+
+def dispute_uid_of(item):
+    text = str((item or {}).get('id') or '')
+    if not text.startswith('dispute-'):
+        return ''
+    body = text[len('dispute-'):]
+    match = re.match(r'(.+)-\d{14}$', body)
+    return match.group(1) if match else ''
+
+def master_route_detail(master, day):
+    assigned = []
+    for snap in route_snapshots():
+        if snap.get('master') == master and snap.get('date') == day:
+            assigned = list(snap.get('tickets') or [])
+    done_rows = []
+    done_uid = set()
+    done_gos = set()
+    for row in work_history_items():
+        if row.get('master') != master or str(row.get('timestamp') or '')[:10] != day:
+            continue
+        done_rows.append(row)
+        if row.get('uid'):
+            done_uid.add(str(row.get('uid')))
+        gos = normalize_gos(row.get('gos'))
+        if gos:
+            done_gos.add(gos)
+    if not assigned:
+        for row in done_rows:
+            assigned.append({
+                'uid': row.get('uid') or '',
+                'gos': row.get('gos') or '',
+                'type': '',
+                'desc': row.get('desc') or '',
+                'darks': row.get('darks') or '',
+                'status': 'done',
+                'only_done': True,
+            })
+    tickets = []
+    for ticket in assigned:
+        gos = normalize_gos(ticket.get('gos'))
+        done = str(ticket.get('uid') or '') in done_uid or (gos and gos in done_gos) or ticket.get('status') == 'done'
+        tickets.append({
+            'uid': ticket.get('uid') or '',
+            'gos': ticket.get('gos') or ticket.get('type') or '—',
+            'desc': ticket.get('desc') or '',
+            'darks': ticket.get('darks') or '',
+            'done': done,
+        })
+    disputes = []
+    blob_sources = [str(ticket.get('gos') or '') for ticket in tickets]
+    for item in load_ops():
+        if item.get('kind') != 'dispute' or item.get('read'):
+            continue
+        raw_date = str(item.get('date') or '')[:10]
+        try:
+            item_day = datetime.strptime(raw_date, '%d.%m.%Y').date().isoformat()
+        except ValueError:
+            continue
+        if item_day != day:
+            continue
+        blob = (item.get('bikes') or '') + ' ' + (item.get('text') or '')
+        if not any(source and source in blob for source in blob_sources):
+            continue
+        uid = dispute_uid_of(item)
+        ticket = find_cached_ticket(uid) if uid else None
+        closed = True
+        if ticket and ticket.get('status') not in ('done', 'processed', 'fail') and not ticket.get('is_done'):
+            closed = False
+        disputes.append({'id': item.get('id'), 'text': item.get('text') or '', 'bikes': item.get('bikes') or '', 'closed': closed})
+    reported = any(item.get('master') == master and item.get('date') == day for item in shift_report_items())
+    try:
+        title = datetime.strptime(day, '%Y-%m-%d').strftime('%d.%m.%Y')
+    except ValueError:
+        title = day
+    return {
+        'title': title,
+        'tickets': tickets,
+        'done_rows': done_rows,
+        'disputes': disputes,
+        'report': reported,
+        'saved_assignment': any(not ticket.get('only_done') for ticket in assigned) if assigned else False,
+    }
+
+@app.route('/admin/history/dispute/<uid>/hide', methods=['POST'])
+@login_required
+def admin_history_hide_dispute(uid):
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    with _ops_lock:
+        items = load_ops()
+        for item in items:
+            if str(item.get('id')) == str(uid) and item.get('kind') == 'dispute':
+                item['read'] = True
+                item['seen'] = True
+        save_ops(items)
+    return jsonify({'success': True})
+
+def pending_delivery_rows():
+    queue_data = _load_queue()
+    rows = []
+    for task in queue_data.get('tasks') or []:
+        if task.get('type') == 'status_update':
+            continue
+        data = task.get('data') or {}
+        rows.append({
+            'kind': 'Заявка',
+            'master': data.get('master') or '',
+            'uid': task.get('uid') or '',
+            'what': report_label(task),
+            'note': data.get('parts') or data.get('reason') or data.get('detail') or '',
+        })
+    for row in pending_shift_items():
+        item = row.get('item') or {}
+        where = []
+        if row.get('sheet'):
+            where.append('ежедневный отчёт')
+        if row.get('debrief'):
+            where.append('дебриф')
+        rows.append({
+            'kind': 'Смена',
+            'master': item.get('master') or '',
+            'uid': item.get('date_ru') or item.get('date') or '',
+            'what': ', '.join(where) or 'отчёт смены',
+            'note': row.get('error') or item.get('status_label') or '',
+        })
+    return rows, queue_data.get('last_error') or '', queue_data.get('last_error_at') or ''
+
+@app.route('/admin/pending', methods=['GET', 'POST'])
+@login_required
+def admin_pending():
+    if session.get('role') != 'admin':
+        return redirect(url_for('login_page'))
+    notice = ''
+    error = ''
+    if request.method == 'POST':
+        try:
+            flush_queue()
+            retry_pending_shifts()
+            notice = 'Проверил таблицу. Что уже было записано, второй раз не отправил.'
+        except Exception as exc:
+            error = 'Google не принял: ' + str(exc)[:240]
+    rows, last_error, last_at = pending_delivery_rows()
+    if not error and last_error and rows:
+        error = last_error
+    return render_template('admin_pending.html', rows=rows, notice=notice, error=error, last_at=last_at)
+
+def split_part_names(text):
+    raw = str(text or '').strip()
+    if not raw or raw.lower() in ('нет', '-', '—'):
+        return []
+    names = []
+    for chunk in re.split(r'[,;\n]+', raw):
+        name = re.sub(r'\s*[xх×]\s*\d+\s*$', '', chunk.strip(), flags=re.I).strip()
+        if name and name.lower() not in ('нет', '-', '—'):
+            names.append(name)
+    return names
+
+def report_event_time(value):
+    text = str(value or '')[:19]
+    for pattern in ('%Y-%m-%d %H:%M:%S', '%d.%m.%Y %H:%M:%S', '%d.%m.%Y %H:%M'):
+        try:
+            return datetime.strptime(text, pattern)
+        except ValueError:
+            continue
+    return None
+
+def suspicious_events():
+    cached = read_cache('suspicious_cache.json') or {}
+    if isinstance(cached, dict) and cached.get('ts') and time.time() - float(cached.get('ts') or 0) < 600:
+        return cached.get('rows') or []
+    rows = []
+    try:
+        sheet_rows = get_sheet_client().worksheet('Отчет мастера').get_all_values()
+        for row in sheet_rows[1:]:
+            if len(row) < 4:
+                continue
+            rows.append({
+                'time': row[0],
+                'master': row[1] if len(row) > 1 else '',
+                'gos': row[3] if len(row) > 3 else '',
+                'desc': row[4] if len(row) > 4 else '',
+                'parts': row[8] if len(row) > 8 else '',
+            })
+    except Exception as exc:
+        logger.warning(f'Подозрительные читаю из истории, таблица не открылась: {exc}')
+        for row in work_history_items():
+            rows.append({
+                'time': row.get('timestamp') or '',
+                'master': row.get('master') or '',
+                'gos': row.get('gos') or '',
+                'desc': row.get('desc') or '',
+                'parts': row.get('detail') or '',
+            })
+    write_cache('suspicious_cache.json', {'ts': time.time(), 'rows': rows[-8000:]})
+    return rows[-8000:]
+
+def suspicious_flags():
+    events = []
+    for row in suspicious_events():
+        stamp = report_event_time(row.get('time'))
+        gos = normalize_gos(row.get('gos'))
+        if not stamp or not gos:
+            continue
+        events.append({
+            'time': stamp,
+            'master': row.get('master') or '',
+            'gos': row.get('gos') or '',
+            'gos_key': gos,
+            'desc': row.get('desc') or '',
+            'parts': split_part_names(row.get('parts')),
+        })
+    events.sort(key=lambda item: item['time'])
+    flags = []
+    by_gos = {}
+    for event in events:
+        by_gos.setdefault(event['gos_key'], []).append(event)
+    for group in by_gos.values():
+        for index, event in enumerate(group):
+            window = [other for other in group[index:] if (other['time'] - event['time']).days <= 7]
+            names = []
+            for other in window:
+                for part in other['parts']:
+                    if part not in names:
+                        names.append(part)
+            if len(names) >= 3:
+                flags.append({
+                    'gos': event['gos'],
+                    'when': event['time'].strftime('%d.%m.%Y'),
+                    'text': 'За неделю разные запчасти: ' + ', '.join(names[:6]),
+                })
+            seen = {}
+            for other in window:
+                for part in other['parts']:
+                    seen.setdefault(part, []).append(other)
+            for part, hits in seen.items():
+                if len(hits) >= 2:
+                    flags.append({
+                        'gos': event['gos'],
+                        'when': event['time'].strftime('%d.%m.%Y'),
+                        'text': f'«{part}» ставили {len(hits)} раза за неделю',
+                    })
+            words = set(re.findall(r'[A-Za-zА-Яа-яЁё]{4,}', event['desc'].lower()))
+            if event['parts'] and words:
+                for other in window[1:]:
+                    later = set(re.findall(r'[A-Za-zА-Яа-яЁё]{4,}', other['desc'].lower()))
+                    if words & later:
+                        flags.append({
+                            'gos': event['gos'],
+                            'when': other['time'].strftime('%d.%m.%Y'),
+                            'text': 'Запчасть списали, а жалоба повторилась: ' + (other['desc'] or '')[:120],
+                        })
+                        break
+    expensive = {name for name, price in PARTS if price >= 750}
+    month_ago = get_msk_now().replace(tzinfo=None) - timedelta(days=30)
+    by_master = {}
+    for event in events:
+        if event['time'] < month_ago:
+            continue
+        for part in event['parts']:
+            if part in expensive:
+                by_master.setdefault(part, {}).setdefault(event['master'] or '—', 0)
+                by_master[part][event['master'] or '—'] += 1
+    for part, people in by_master.items():
+        counts = sorted(people.values())
+        middle = counts[len(counts) // 2] if counts else 0
+        for master, qty in people.items():
+            if qty >= 4 and (middle == 0 or qty >= middle * 2):
+                flags.append({
+                    'gos': master,
+                    'when': 'месяц',
+                    'text': f'Часто ставит «{part}»: {qty} за месяц',
+                })
+    unique = []
+    seen_flags = set()
+    for flag in flags:
+        key = (flag['gos'], flag['text'])
+        if key in seen_flags:
+            continue
+        seen_flags.add(key)
+        unique.append(flag)
+    return unique[:80]
+
+@app.route('/admin/suspicious')
+@login_required
+def admin_suspicious():
+    if session.get('role') != 'admin':
+        return redirect(url_for('login_page'))
+    return render_template('admin_suspicious.html', rows=suspicious_flags(), now=get_msk_now().strftime('%d.%m.%Y %H:%M'))
 
 @app.route('/admin/stats')
 @login_required
@@ -5732,7 +6302,61 @@ def finish_shift_report(name, item):
         note = 'Отчёт принят. В таблицу Excel сейчас не записался, в «Дебрифы мастеров» строка есть.'
     elif not db_ok:
         note = 'Отчёт принят и записан в таблицу.'
+    if not sheet_ok or not debrief_ok:
+        remember_pending_shift(item, sheet_ok, debrief_ok, debrief_error)
+    else:
+        drop_pending_shift(item)
     return jsonify({'success': True, 'message': note or 'Отчёт сохранён', 'next': url_for('master_overview', name=name)})
+
+def pending_shift_items():
+    raw = read_cache('pending_shifts.json') or {}
+    items = raw.get('items') if isinstance(raw, dict) else []
+    return items if isinstance(items, list) else []
+
+def remember_pending_shift(item, sheet_ok, debrief_ok, error=''):
+    rows = [row for row in pending_shift_items() if not (row.get('master') == item.get('master') and row.get('date') == item.get('date'))]
+    rows.append({
+        'item': item,
+        'sheet': not sheet_ok,
+        'debrief': not debrief_ok,
+        'error': str(error or '')[:300],
+        'at': get_msk_now().strftime('%d.%m.%Y %H:%M'),
+    })
+    write_cache('pending_shifts.json', {'items': rows[-500:]})
+
+def drop_pending_shift(item):
+    rows = [row for row in pending_shift_items() if not (row.get('item', {}).get('master') == item.get('master') and row.get('item', {}).get('date') == item.get('date'))]
+    write_cache('pending_shifts.json', {'items': rows})
+
+def retry_pending_shifts():
+    left = []
+    sent = 0
+    for row in pending_shift_items():
+        item = row.get('item') or {}
+        need_sheet = bool(row.get('sheet'))
+        need_debrief = bool(row.get('debrief'))
+        error = ''
+        if need_sheet:
+            try:
+                append_shift_sheet(item)
+                need_sheet = False
+            except Exception as exc:
+                error = str(exc)
+        if need_debrief:
+            try:
+                append_shift_debrief(item)
+                need_debrief = False
+            except Exception as exc:
+                error = str(exc)
+        if need_sheet or need_debrief:
+            row['sheet'] = need_sheet
+            row['debrief'] = need_debrief
+            row['error'] = error[:300]
+            left.append(row)
+        else:
+            sent += 1
+    write_cache('pending_shifts.json', {'items': left})
+    return sent, left
 
 @app.route('/master/<name>')
 @login_required
@@ -5844,7 +6468,50 @@ def master_text_plan(name):
                           tickets=master_tickets,
                           pending_count=pending_count,
                           todo_count=todo_count,
+                          plan_bikes=plan_bike_lines(name, master_tickets),
+                          plan_akb=plan_power_count(master_tickets, 'Аккумуляторная батарея'),
+                          plan_chargers=plan_power_count(master_tickets, 'Зарядное устройство'),
                           now=get_msk_now().strftime('%H:%M:%S'))
+
+def ticket_piece_count(ticket):
+    text = ' '.join([
+        str((ticket or {}).get('plan_qty') or ''),
+        str((ticket or {}).get('desc') or ''),
+        str((ticket or {}).get('note') or ''),
+    ])
+    match = re.search(r'количество:\s*(\d+)', text, re.I)
+    if not match:
+        match = re.search(r'(\d+)\s*шт', text, re.I)
+    if not match:
+        match = re.search(r'(\d+)\s*акб', text, re.I)
+    if match:
+        return max(1, int(match.group(1)))
+    return 1
+
+def plan_power_count(tickets, kind):
+    total = 0
+    for ticket in tickets or []:
+        if ticket.get('status') == 'done':
+            continue
+        if ticket.get('type') == kind:
+            total += ticket_piece_count(ticket)
+    return total
+
+def plan_bike_lines(name, tickets):
+    if not is_transit_master(name):
+        return []
+    counts = {}
+    for ticket in tickets or []:
+        if ticket.get('status') == 'done' or is_power_ticket(ticket):
+            continue
+        bike = (ticket.get('bike_type') or ticket.get('type') or 'Велосипед').strip()
+        company = (ticket.get('supplier') or ticket.get('company') or 'без компании').strip()
+        key = (bike, company)
+        counts[key] = counts.get(key, 0) + 1
+    lines = []
+    for (bike, company), qty in sorted(counts.items(), key=lambda item: (-item[1], item[0][0])):
+        lines.append(f'{qty} {bike} ({company})')
+    return lines
 
 @app.route('/master/<name>/history')
 @login_required
@@ -5973,15 +6640,29 @@ def master_trunk(name):
         now=get_msk_now().strftime('%H:%M:%S'),
     )
 
-@app.route('/admin/trunks')
+@app.route('/admin/trunks', methods=['GET', 'POST'])
 @login_required
 def admin_trunks():
     if session.get('role') != 'admin':
         return redirect(url_for('login_page'))
+    notice = ''
+    error = ''
+    if request.method == 'POST':
+        master = (request.form.get('master') or '').strip()
+        part_name = (request.form.get('part') or '').strip()
+        try:
+            qty = int(request.form.get('qty'))
+        except (TypeError, ValueError):
+            qty = None
+        if master not in MASTERS or part_name not in PARTS_SET or qty is None:
+            error = 'Выберите мастера, запчасть и число'
+        else:
+            set_trunk_qty(master, part_name, qty)
+            notice = f'{master}: {part_name} теперь {qty}'
     masters = []
     for master in MASTERS:
         rows, total_qty = trunk_rows(master)
-        stock = [row for row in rows if row['qty'] > 0]
+        stock = [row for row in rows if row['qty'] != 0]
         masters.append({'name': master, 'rows': stock, 'total_qty': total_qty})
     today = get_msk_now().date()
     month_start = today.replace(day=1)
@@ -6034,8 +6715,29 @@ def admin_trunks():
         week_start=week_start.isoformat(),
         month_start=month_start.isoformat(),
         today=today.isoformat(),
+        catalog=[name for name, price in PARTS],
+        notice=notice,
+        error=error,
         now=get_msk_now().strftime('%H:%M:%S'),
     )
+
+def set_trunk_qty(master, name, qty):
+    parts_now()
+    with _trunk_lock:
+        data = load_trunks()
+        bag = dict(data.get(master) or {})
+        old = int(bag.get(name) or 0)
+        bag[name] = int(qty)
+        data[master] = bag
+        save_trunks(data)
+    if int(qty) != old:
+        queue_part_move(master, 'Правка админа', name, abs(int(qty) - old))
+    if int(qty) < 0:
+        notify_trunk_minus(master, name, int(qty))
+    try:
+        write_trunk_sheet(get_sheet_client())
+    except Exception as exc:
+        logger.warning(f'Багажник в таблицу не записался: {exc}')
 
 # ============================================================
 # API ДЛЯ МАСТЕРОВ
@@ -6602,6 +7304,9 @@ def export_removal_reason(old_data, reason):
 
 def write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data, reason=''):
     try:
+        for blob in (old_data, new_data):
+            if isinstance(blob, dict):
+                blob['iot'] = ensure_iot_prefix(blob.get('iot'))
         append_bike_swap(address, darks_number, old_data, new_data, master_name, uid, 'Эвакуация')
         sheet_client = get_sheet_client()
         now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
@@ -6683,7 +7388,7 @@ def master_evacuation_replace():
                 'operation': 'Замена',
                 'company': '',
                 'darks': str(darks_number or ''),
-                'bikes': 'забрали ' + (old_data.get('gos') or '—') + ', отдали ' + (new_data.get('gos') or '—'),
+                'bikes': 'забрали ' + (old_data.get('iot') or old_data.get('gos') or '—') + ', отдали ' + (new_data.get('iot') or new_data.get('gos') or '—'),
                 'akb': '',
                 'doc': '',
                 'doc_url': '',

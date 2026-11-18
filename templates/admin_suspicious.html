@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Подозрительные</title>
+    <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+<div class="container">
+    <p><a href="/admin">← В админку</a></p>
+    <h1>Подозрительные</h1>
+    <p>Повторы за неделю по листу «Отчёт мастера». {{ now }}</p>
+    {% if rows %}
+    <table>
+        <tr><th>Вело или мастер</th><th>Когда</th><th>Почему</th></tr>
+        {% for row in rows %}
+        <tr>
+            <td>{{ row.gos }}</td>
+            <td>{{ row.when }}</td>
+            <td>{{ row.text }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p>Повторов за неделю нет.</p>
+    {% endif %}
+</div>
+</body>
+</html>

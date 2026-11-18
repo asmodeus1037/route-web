@@ -14,13 +14,33 @@
 <div class="container">
     <h1>Багажники мастеров</h1>
     <p><a href="/admin">← В админку</a></p>
-    <p>Остаток, который сейчас числится у мастера. Цены мастеру не показываются.</p>
+    <p>Остаток, который сейчас числится у мастера. Минус значит, что деталь поставили, а приход не записали.</p>
+    {% if notice %}<p>{{ notice }}</p>{% endif %}
+    {% if error %}<p>{{ error }}</p>{% endif %}
+    <form method="post" style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin:12px 0;">
+        <label>Мастер
+            <select name="master">
+                {% for master in masters %}
+                <option value="{{ master.name }}">{{ master.name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Запчасть
+            <select name="part">
+                {% for name in catalog %}
+                <option value="{{ name }}">{{ name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Количество <input name="qty" type="number" required></label>
+        <button class="btn btn-view" type="submit">Записать</button>
+    </form>
     <p>Для Excel откройте в таблице листы «Багажник» и «Движение запчастей 2». Старый лист «Движение запчастей» не используйте: там столбцы съехали.</p>
     {% for master in masters %}
     <div class="card">
         <div class="row"><b>{{ master.name }}</b><span>{{ master.total_qty }} шт</span></div>
         {% for row in master.rows %}
-        <div class="row"><span>{{ row.name }}</span><b>{{ row.qty }} шт</b></div>
+        <div class="row"><span>{{ row.name }}</span><b {% if row.qty < 0 %}style="color:#b91c1c"{% endif %}>{{ row.qty }} шт</b></div>
         {% else %}
         <p>Пусто</p>
         {% endfor %}

@@ -118,6 +118,8 @@
             <button class="btn btn-view" type="button" onclick="openDocs()">Документы</button>
             <a class="btn btn-view" href="/admin/stats">Статистика</a>
             <a class="btn btn-view" href="/admin/history">История мастеров</a>
+            <a class="btn btn-view" href="/admin/pending">Не дошло{% if pending_open %} ({{ pending_open }}){% endif %}</a>
+            <a class="btn btn-view" href="/admin/suspicious">Подозрительные</a>
             <a class="btn btn-view bell-link" href="/admin/ops">
                 <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 22a2.2 2.2 0 0 0 2.2-2.2h-4.4A2.2 2.2 0 0 0 12 22zm7-6V11a7 7 0 0 0-5-6.7V3.5a2 2 0 1 0-4 0v.8A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2z"/></svg>
                 Уведомления{% if ops_open %}<span class="bell-badge">{{ ops_open }}</span>{% endif %}
@@ -396,6 +398,9 @@
             </select>
             <label>Дата</label>
             <input id="docDate" placeholder="14.10.2026">
+            <label>Адрес</label>
+            <input id="docAddress" placeholder="Начните вводить адрес, номер дарка подставится" autocomplete="off" oninput="filterDocAddress()">
+            <div id="docAddressList" class="address-list"></div>
             <label>Номер даркстора</label>
             <input id="docDarks" placeholder="4824">
             <div id="docFullBox">
@@ -444,6 +449,6 @@
         now: '{{ now }}'
     };
 </script>
-<script src="/static/js/admin.js?v=37"></script>
+<script src="/static/js/admin.js?v=38"></script>
 </body>
 </html>
