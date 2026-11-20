@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>История заказов</title>
+    <link rel="icon" href="/static/img/vb.jpg" type="image/jpeg">
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #eef2f6; color: #0f172a; font: 15px/1.4 "Segoe UI", sans-serif; }
+        .page { max-width: 980px; margin: 0 auto; padding: 22px 18px 40px; }
+        .brand { display: flex; align-items: center; gap: 12px; }
+        .brand img { width: 42px; height: 42px; border-radius: 50%; }
+        a.back { color: #334155; font-weight: 700; text-decoration: none; }
+        h1 { margin: 8px 0 14px; font-size: 30px; }
+        .banner { border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; }
+        .banner.ok { background: #dcfce7; color: #166534; }
+        .banner.err { background: #fee2e2; color: #991b1b; }
+        a.row { display: grid; grid-template-columns: 1.4fr .8fr .8fr .6fr .6fr; gap: 8px; background: #fff; border-radius: 14px; padding: 14px 16px; margin-bottom: 8px; text-decoration: none; color: inherit; align-items: center; }
+        a.row b { font-size: 16px; }
+        .muted { color: #64748b; }
+        .status { font-weight: 800; }
+        .status.wait { color: #854d0e; }
+        .status.ok { color: #166534; }
+        .status.out { color: #991b1b; }
+        .empty { color: #64748b; }
+        @media (max-width: 720px) { a.row { grid-template-columns: 1fr 1fr; } }
+    </style>
+</head>
+<body>
+<div class="page">
+    <div class="brand"><img src="/static/img/vb.jpg" alt="VB"><a class="back" href="/admin/purchase">← К закупке</a></div>
+    <h1>История заказов</h1>
+    {% if notice %}<div class="banner ok">{{ notice }}</div>{% endif %}
+    {% if error %}<div class="banner err">{{ error }}</div>{% endif %}
+    {% if not orders %}<p class="empty">Пока пусто. Сохрани заказ из корзины.</p>{% endif %}
+    {% for order in orders %}
+    <a class="row" href="/admin/purchase/orders/{{ order.id }}">
+        <b>{{ order.id }}</b>
+        <span>{{ order.supplier }}</span>
+        <span class="status {% if order.status == 'Пришло' %}ok{% elif order.status == 'Отменён' %}out{% else %}wait{% endif %}">{{ order.status }}</span>
+        <span class="muted">{{ order.count }} поз.</span>
+        <span>{{ order.total }} ₽</span>
+    </a>
+    {% endfor %}
+</div>
+</body>
+</html>

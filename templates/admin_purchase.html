@@ -64,12 +64,13 @@
 <div class="page">
     <div class="brand"><img src="/static/img/vb.jpg" alt="VB"><a class="back" href="/admin">← В админку</a></div>
     <h1>Закупка</h1>
-    <p class="lead">Два каталога отдельно. Корзина копирует текст, который ты отправляешь поставщику. В его таблицу ничего не пишется.</p>
+    <p class="lead">VIRUS и JESTON отдельно. Сохранённый заказ копируется поставщику и ложится в лист «Поставка запчастей».</p>
     {% if notice %}<div class="banner ok">{{ notice }}</div>{% endif %}
     {% if error %}<div class="banner err">{{ error }}</div>{% endif %}
     <div class="tabs" id="tabs"></div>
-    <form method="post" action="/admin/purchase/refresh" style="margin:-4px 0 12px;">
+    <form method="post" action="/admin/purchase/refresh" style="margin:-4px 0 12px; display:flex; gap:8px; flex-wrap:wrap;">
         <button class="refresh" type="submit">Обновить цены и наличие</button>
+        <a class="refresh" href="/admin/purchase/orders" style="text-decoration:none; color:inherit;">История заказов</a>
     </form>
     <div class="layout">
         <aside class="side" id="sections"></aside>
@@ -195,7 +196,8 @@ function renderCart() {
         html += '<div class="line"><b>' + esc(article) + '</b><span>' + qty + ' шт</span><span class="muted">' + esc(item.name) + '</span><span>' + (item.price == null ? '' : Math.round(money(item, qty)) + ' ₽') + '</span></div>';
     });
     html += '<div class="sum">' + (total ? Math.round(total) + ' ₽' : '0 ₽') + '</div>';
-    html += '<button type="button" class="copy" onclick="copyOrder()">Скопировать заказ</button>';
+    html += '<button type="button" class="copy" onclick="saveOrder()">Сохранить заказ</button>';
+    html += '<button type="button" class="clear" onclick="copyOrder()">Скопировать заказ</button>';
     html += '<button type="button" class="clear" onclick="clearCart()">Очистить</button>';
     document.getElementById('cart').innerHTML = html;
 }
@@ -206,6 +208,34 @@ function orderText() {
     return 'Добрый день! Планируем заказ:\n\n' + lines.map(function(article) {
         return article + ' - ' + mine[article] + ' шт';
     }).join('\n');
+}
+function saveOrder() {
+    var text = orderText();
+    if (!text) { alert('Корзина пустая'); return; }
+    fetch('/api/purchase_order', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({catalog: active})
+    }).then(function(response) { return response.json(); }).then(function(data) {
+        if (!data.success) { alert(data.error || 'Не записалось'); return; }
+        cart = data.cart || {};
+        renderBoard();
+        renderCart();
+        var message = 'Заказ ' + data.order.id + ' сохранён';
+        if (data.warning) message += '. ' + data.warning;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(data.text || text).then(function() {
+                alert(message + '. Текст заказа скопирован');
+            }, function() {
+                fallbackCopy(data.text || text);
+                alert(message);
+            });
+            return;
+        }
+        fallbackCopy(data.text || text);
+        alert(message);
+    }).catch(function() { alert('Нет сети'); });
 }
 function copyOrder() {
     var text = orderText();

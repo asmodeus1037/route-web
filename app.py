@@ -7080,6 +7080,15 @@ def admin_zelenograd():
 
 PURCHASE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'purchase', 'catalog.json')
 PURCHASE_CART = os.path.join(CACHE_DIR, 'purchase_cart.json')
+PURCHASE_ORDERS = os.path.join(CACHE_DIR, 'purchase_orders.json')
+PURCHASE_TITLES = {'yuanhao': 'VIRUS', 'courier': 'JESTON'}
+PURCHASE_NOTES = {
+    'yuanhao': 'Поставщик VIRUS. В его таблицу ничего не пишется.',
+    'courier': 'Поставщик JESTON. В его таблицу ничего не пишется.',
+}
+SUPPLY_SHEET = 'Поставка запчастей'
+SUPPLY_HEADER = ['Номер', 'Дата', 'Поставщик', 'Статус', 'Артикул', 'Название', 'Количество', 'Цена', 'Сумма']
+SUPPLY_STATUSES = ('Заказано', 'Пришло', 'Отменён')
 PURCHASE_SOURCES = {
     'yuanhao': {
         'url': 'https://docs.google.com/spreadsheets/d/1gEAZNNPVQz2-ulr3dXNdGwNr7KbgQmzaZ4XU0lNBfBk/export?format=csv&gid=95439607',
@@ -7197,6 +7206,8 @@ def refresh_purchase_catalog():
             if row['section'] not in sections:
                 sections.append(row['section'])
         current = by_id.get(code) or {'id': code, 'title': code, 'note': ''}
+        current['title'] = PURCHASE_TITLES.get(code, code)
+        current['note'] = PURCHASE_NOTES.get(code, '')
         current['sections'] = sections
         current['items'] = fresh
         updated.append(current)
@@ -7251,6 +7262,233 @@ def api_purchase_cart():
     cart[code] = bag
     save_purchase_cart(cart)
     return jsonify({'success': True, 'cart': cart})
+
+def load_purchase_orders():
+    data = _read_json(PURCHASE_ORDERS, {})
+    orders = data.get('orders') if isinstance(data, dict) else []
+    return orders if isinstance(orders, list) else []
+
+def save_purchase_orders(orders):
+    _write_json(PURCHASE_ORDERS, {'orders': orders})
+
+def purchase_catalog_by_id(code):
+    for catalog in load_purchase_catalog():
+        if catalog.get('id') == code:
+            return catalog
+    return {'id': code, 'title': PURCHASE_TITLES.get(code, code), 'items': []}
+
+def order_total(order):
+    total = 0
+    for item in order.get('items') or []:
+        price = item.get('price')
+        if price is None:
+            continue
+        total += float(price) * int(item.get('qty') or 0)
+    return round(total)
+
+def next_purchase_number(supplier, date_ru, orders):
+    prefix = f'{supplier}-{date_ru}-'
+    taken = []
+    for order in orders:
+        number = str(order.get('id') or '')
+        if number.startswith(prefix) and number[len(prefix):].isdigit():
+            taken.append(int(number[len(prefix):]))
+    return prefix + str(max(taken or [0]) + 1)
+
+def purchase_order_text(order):
+    lines = []
+    for item in order.get('items') or []:
+        qty = int(item.get('qty') or 0)
+        if qty <= 0:
+            continue
+        lines.append(f"{item.get('article')} - {qty} шт")
+    if not lines:
+        return ''
+    return 'Добрый день! Планируем заказ:\n\n' + '\n'.join(lines)
+
+def write_supply_sheet(orders):
+    book = get_sheet_client()
+    try:
+        sheet = book.worksheet(SUPPLY_SHEET)
+    except Exception:
+        sheet = book.add_worksheet(SUPPLY_SHEET, rows=3000, cols=9)
+    header = sheet.row_values(1)
+    if header[:9] != SUPPLY_HEADER:
+        sheet.update(values=[SUPPLY_HEADER], range_name='A1:I1')
+    rows = []
+    for order in orders:
+        for item in order.get('items') or []:
+            qty = int(item.get('qty') or 0)
+            if qty <= 0:
+                continue
+            price = item.get('price')
+            amount = '' if price is None else round(float(price) * qty)
+            rows.append([
+                order.get('id') or '',
+                order.get('date') or '',
+                order.get('supplier') or '',
+                order.get('status') or '',
+                item.get('article') or '',
+                item.get('name') or '',
+                qty,
+                '' if price is None else price,
+                amount,
+            ])
+    sheet.batch_clear(['A2:I5000'])
+    if rows:
+        sheet.update(values=rows, range_name=f'A2:I{1 + len(rows)}', value_input_option='USER_ENTERED')
+
+def remember_supply(orders):
+    warning = ''
+    try:
+        write_supply_sheet(orders)
+    except Exception as exc:
+        logger.warning(f'Поставка в таблицу не записалась: {exc}')
+        warning = 'На сайте заказ лежит. В лист «Поставка запчастей» сейчас не записалось.'
+    return warning
+
+def items_for_order(order, payload):
+    catalog = {item.get('article'): item for item in purchase_catalog_by_id(order.get('supplier_id')).get('items') or []}
+    previous = {item.get('article'): item for item in order.get('items') or []}
+    cleaned = []
+    seen = set()
+    for raw in payload or []:
+        article = str((raw or {}).get('article') or '').strip()
+        if not article or article in seen:
+            continue
+        try:
+            qty = int((raw or {}).get('qty') or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        if qty <= 0:
+            continue
+        known = previous.get(article) or catalog.get(article)
+        if not known:
+            continue
+        price = previous.get(article, {}).get('price')
+        if price is None:
+            price = known.get('price')
+        cleaned.append({
+            'article': article,
+            'name': known.get('name') or article,
+            'qty': qty,
+            'price': price,
+        })
+        seen.add(article)
+    return cleaned
+
+@app.route('/api/purchase_order', methods=['POST'])
+@login_required
+def api_purchase_order():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    data = request.json or {}
+    code = str(data.get('catalog') or '').strip()
+    if code not in PURCHASE_TITLES:
+        return jsonify({'success': False, 'error': 'Нет такого поставщика'})
+    cart = load_purchase_cart()
+    bag = cart.get(code) if isinstance(cart.get(code), dict) else {}
+    catalog = {item.get('article'): item for item in purchase_catalog_by_id(code).get('items') or []}
+    items = []
+    for article, qty in bag.items():
+        try:
+            count = int(qty or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count <= 0:
+            continue
+        found = catalog.get(article) or {}
+        items.append({
+            'article': article,
+            'name': found.get('name') or article,
+            'qty': count,
+            'price': found.get('price'),
+        })
+    if not items:
+        return jsonify({'success': False, 'error': 'Корзина пустая'})
+    orders = load_purchase_orders()
+    now = get_msk_now()
+    supplier = PURCHASE_TITLES[code]
+    order = {
+        'id': next_purchase_number(supplier, now.strftime('%d.%m.%Y'), orders),
+        'date': now.strftime('%d.%m.%Y'),
+        'supplier_id': code,
+        'supplier': supplier,
+        'status': 'Заказано',
+        'items': items,
+    }
+    orders.insert(0, order)
+    save_purchase_orders(orders)
+    cart[code] = {}
+    save_purchase_cart(cart)
+    warning = remember_supply(orders)
+    return jsonify({
+        'success': True,
+        'order': order,
+        'text': purchase_order_text(order),
+        'cart': cart,
+        'warning': warning,
+    })
+
+@app.route('/admin/purchase/orders')
+@login_required
+def admin_purchase_orders():
+    if session.get('role') != 'admin':
+        return redirect(url_for('login_page'))
+    orders = []
+    for order in load_purchase_orders():
+        row = dict(order)
+        row['total'] = order_total(order)
+        row['count'] = len(order.get('items') or [])
+        orders.append(row)
+    return render_template(
+        'admin_purchase_orders.html',
+        orders=orders,
+        notice=request.args.get('notice') or '',
+        error=request.args.get('error') or '',
+    )
+
+@app.route('/admin/purchase/orders/<order_id>')
+@login_required
+def admin_purchase_order(order_id):
+    if session.get('role') != 'admin':
+        return redirect(url_for('login_page'))
+    order = next((item for item in load_purchase_orders() if item.get('id') == order_id), None)
+    if not order:
+        return redirect(url_for('admin_purchase_orders', error='Такого заказа нет'))
+    catalog = purchase_catalog_by_id(order.get('supplier_id'))
+    choices = [{'article': item.get('article'), 'name': item.get('name'), 'price': item.get('price')} for item in catalog.get('items') or []]
+    return render_template(
+        'admin_purchase_order.html',
+        order=order,
+        total=order_total(order),
+        choices=choices,
+        statuses=SUPPLY_STATUSES,
+        notice=request.args.get('notice') or '',
+        error=request.args.get('error') or '',
+    )
+
+@app.route('/api/purchase_order/<order_id>', methods=['POST'])
+@login_required
+def api_purchase_order_update(order_id):
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    orders = load_purchase_orders()
+    order = next((item for item in orders if item.get('id') == order_id), None)
+    if not order:
+        return jsonify({'success': False, 'error': 'Такого заказа нет'})
+    data = request.json or {}
+    status = str(data.get('status') or '').strip()
+    if status not in SUPPLY_STATUSES:
+        status = order.get('status') or 'Заказано'
+    items = items_for_order(order, data.get('items') or [])
+    if not items:
+        return jsonify({'success': False, 'error': 'Оставь хотя бы одну позицию'})
+    order['status'] = status
+    order['items'] = items
+    save_purchase_orders(orders)
+    warning = remember_supply(orders)
+    return jsonify({'success': True, 'warning': warning, 'total': order_total(order), 'text': purchase_order_text(order)})
 
 @app.route('/master/<name>/darks/<darks_number>/done/<uid>', methods=['POST'])
 @login_required

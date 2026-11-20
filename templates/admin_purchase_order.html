@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ order.id }}</title>
+    <link rel="icon" href="/static/img/vb.jpg" type="image/jpeg">
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #eef2f6; color: #0f172a; font: 15px/1.4 "Segoe UI", sans-serif; }
+        .page { max-width: 860px; margin: 0 auto; padding: 22px 18px 40px; }
+        .brand { display: flex; align-items: center; gap: 12px; }
+        .brand img { width: 42px; height: 42px; border-radius: 50%; }
+        a.back { color: #334155; font-weight: 700; text-decoration: none; }
+        h1 { margin: 8px 0 4px; font-size: 28px; }
+        .lead { color: #64748b; margin: 0 0 14px; }
+        .banner { border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; }
+        .banner.ok { background: #dcfce7; color: #166534; }
+        .banner.err { background: #fee2e2; color: #991b1b; }
+        .card { background: #fff; border-radius: 16px; padding: 14px; margin-bottom: 12px; }
+        label { font-weight: 800; display: block; margin-bottom: 6px; }
+        select, input[type="text"], input[type="number"] { height: 40px; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0 10px; font: inherit; }
+        .line { display: grid; grid-template-columns: 120px 1fr 90px 90px 40px; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+        .line button, .actions button, .hit { border: 0; border-radius: 10px; height: 36px; font-weight: 800; cursor: pointer; }
+        .line button { background: #fee2e2; color: #991b1b; }
+        .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+        .actions button { padding: 0 14px; background: #0f172a; color: #fff; }
+        .actions .ghost { background: #e2e8f0; color: #0f172a; }
+        .sum { font-size: 22px; font-weight: 800; margin-top: 10px; }
+        .hits { margin-top: 8px; }
+        .hit { display: block; width: 100%; text-align: left; background: #f8fafc; margin-top: 4px; padding: 0 10px; }
+        .muted { color: #64748b; font-size: 13px; }
+        @media (max-width: 720px) { .line { grid-template-columns: 1fr 1fr; } }
+    </style>
+</head>
+<body>
+<div class="page">
+    <div class="brand"><img src="/static/img/vb.jpg" alt="VB"><a class="back" href="/admin/purchase/orders">← История</a></div>
+    <h1>{{ order.id }}</h1>
+    <p class="lead">{{ order.date }} · {{ order.supplier }}. Цена остаётся той, по которой заказывали.</p>
+    {% if notice %}<div class="banner ok">{{ notice }}</div>{% endif %}
+    {% if error %}<div class="banner err">{{ error }}</div>{% endif %}
+    <div class="card">
+        <label for="status">Статус</label>
+        <select id="status">
+            {% for status in statuses %}
+            <option value="{{ status }}" {% if order.status == status %}selected{% endif %}>{{ status }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="card" id="lines"></div>
+    <div class="card">
+        <label for="find">Добавить из каталога {{ order.supplier }}</label>
+        <input id="find" type="text" placeholder="Артикул или название" oninput="renderHits()">
+        <div class="hits" id="hits"></div>
+    </div>
+    <div class="actions">
+        <button type="button" onclick="saveOrder()">Сохранить</button>
+        <button type="button" class="ghost" onclick="copyOrder()">Скопировать заказ</button>
+    </div>
+</div>
+<script>
+var choices = {{ choices|tojson }};
+var lines = {{ order['items']|tojson }};
+function esc(value) {
+    return String(value || '').replace(/[&<>"']/g, function(ch) {
+        return {'&':'&','<':'<','>':'>','"':'"',"'":'&#39;'}[ch];
+    });
+}
+function money(item) {
+    if (item.price == null) return 0;
+    return Math.round(Number(item.price) * Number(item.qty || 0));
+}
+function renderLines() {
+    var html = '';
+    var total = 0;
+    lines.forEach(function(item, index) {
+        total += money(item);
+        html += '<div class="line">';
+        html += '<b>' + esc(item.article) + '</b>';
+        html += '<span>' + esc(item.name) + '</span>';
+        html += '<input type="number" min="1" value="' + item.qty + '" onchange="setQty(' + index + ', this.value)">';
+        html += '<span>' + money(item) + ' ₽</span>';
+        html += '<button type="button" onclick="removeLine(' + index + ')">×</button>';
+        html += '</div>';
+    });
+    html += '<div class="sum">' + total + ' ₽</div>';
+    document.getElementById('lines').innerHTML = html;
+}
+function setQty(index, value) {
+    var qty = parseInt(value, 10);
+    if (isNaN(qty) || qty < 1) qty = 1;
+    lines[index].qty = qty;
+    renderLines();
+}
+function removeLine(index) {
+    lines.splice(index, 1);
+    renderLines();
+}
+function renderHits() {
+    var query = (document.getElementById('find').value || '').trim().toLowerCase();
+    var box = document.getElementById('hits');
+    if (query.length < 2) { box.innerHTML = ''; return; }
+    var found = choices.filter(function(item) {
+        return (item.article + ' ' + item.name).toLowerCase().indexOf(query) !== -1;
+    }).slice(0, 8);
+    box.innerHTML = found.map(function(item, index) {
+        return '<button type="button" class="hit" onclick="addHit(' + index + ')">' + esc(item.article) + ' · ' + esc(item.name) + '</button>';
+    }).join('');
+    window._hits = found;
+}
+function addHit(index) {
+    var item = (window._hits || [])[index];
+    if (!item) return;
+    var existing = lines.filter(function(line) { return line.article === item.article; })[0];
+    if (existing) existing.qty += 1;
+    else lines.push({article: item.article, name: item.name, qty: 1, price: item.price});
+    document.getElementById('find').value = '';
+    document.getElementById('hits').innerHTML = '';
+    renderLines();
+}
+function orderText() {
+    if (!lines.length) return '';
+    return 'Добрый день! Планируем заказ:\n\n' + lines.map(function(item) {
+        return item.article + ' - ' + item.qty + ' шт';
+    }).join('\n');
+}
+function copyOrder() {
+    var text = orderText();
+    if (!text) { alert('В заказе ничего нет'); return; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() { alert('Заказ скопирован'); });
+        return;
+    }
+    alert(text);
+}
+function saveOrder() {
+    fetch('/api/purchase_order/{{ order.id }}', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({status: document.getElementById('status').value, items: lines})
+    }).then(function(response) { return response.json(); }).then(function(data) {
+        if (!data.success) { alert(data.error || 'Не записалось'); return; }
+        alert(data.warning || 'Заказ обновлён');
+    }).catch(function() { alert('Нет сети'); });
+}
+renderLines();
+</script>
+</body>
+</html>
