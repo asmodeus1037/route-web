@@ -40,7 +40,12 @@
 <div class="page">
     <div class="brand"><img src="/static/img/vb.jpg" alt="VB"><a class="back" href="/admin">← К заявкам</a></div>
     <h1>История мастеров</h1>
-    <p class="lead">Последний месяц. Маршрут появляется, когда нажимаешь «Уведомить кураторов». {{ now }}</p>
+    <p class="lead">Последний месяц. Сразу видно, что назначено и что сделано. Маршрут пишется кнопкой «Уведомить кураторов». {{ now }}</p>
+    <form method="get" action="/admin/history">
+        {% if master %}<input type="hidden" name="master" value="{{ master }}">{% endif %}
+        <input name="q" value="{{ query }}" placeholder="Госномер, например РЕ621Р">
+        <button type="submit">Найти</button>
+    </form>
     <div class="chips">
         <a class="chip {% if not master %}on{% endif %}" href="/admin/history">Все</a>
         {% for name in masters %}
@@ -89,6 +94,16 @@
                 <div class="nums"><span>Назначено {{ route.assigned }}</span><span class="{% if route.done < route.assigned %}bad{% else %}ok{% endif %}">Сделано {{ route.done }}</span></div>
                 {% if route.report_late %}<div class="note">Отчёт не написан</div>{% endif %}
             </a>
+            <div class="card" style="grid-column:1/-1;">
+                {% for ticket in route.tickets %}
+                <div class="nums" style="justify-content:space-between;padding:6px 0;border-top:1px solid #eef2f6;">
+                    <span><b>{{ ticket.gos }}</b> · {{ ticket.desc or 'без текста' }}{% if ticket.darks %} · дарк {{ ticket.darks }}{% endif %}</span>
+                    <span class="{% if ticket.done %}ok{% else %}bad{% endif %}">{% if ticket.done %}Сделано{% else %}Не сделано{% endif %}{% if ticket.done and ticket.uid %} <button type="button" onclick="markDuplicate('{{ ticket.uid }}')">Дубль</button>{% endif %}</span>
+                </div>
+                {% else %}
+                <div class="note">В этом маршруте заявок нет.</div>
+                {% endfor %}
+            </div>
             {% if loop.last or routes[loop.index].date != route.date %}
             </div>
             {% endif %}
@@ -97,11 +112,8 @@
         <p class="lead">За месяц маршрутов ещё нет. Они появятся после кнопки «Уведомить кураторов».</p>
     {% endif %}
     {% endif %}
-    <form method="get" action="/admin/history">
-        <input name="q" value="{{ query }}" placeholder="Госномер, например РЕ621Р">
-        <button type="submit">Найти</button>
-    </form>
-    {% if items %}
+    {% if query and items %}
+    <h2>Отметки по номеру</h2>
     <table>
         <tr><th>Когда</th><th>Мастер</th><th>Госномер</th><th>Что сделал</th><th>Комментарий</th><th>Дарк</th></tr>
         {% for row in items %}
@@ -118,6 +130,18 @@
     {% endif %}
 </div>
 <script>
+function markDuplicate(uid) {
+    if (!confirm('Это дубль? Запчасти этой заявки вернутся мастеру в багажник.')) return;
+    fetch('/api/mark_duplicate', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: uid })
+    }).then(function(response) { return response.json(); }).then(function(data) {
+        alert(data.success ? (data.text || 'Вернул') : (data.error || 'Не вышло'));
+        if (data.success) location.reload();
+    }).catch(function() { alert('Нет сети'); });
+}
 function hideDispute(uid) {
     fetch('/admin/history/dispute/' + encodeURIComponent(uid) + '/hide', {method: 'POST', credentials: 'same-origin'})
         .then(function() { location.reload(); });

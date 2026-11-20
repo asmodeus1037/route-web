@@ -44,10 +44,12 @@
             {% endif %}
         </div>
         {% for item in items if item.kind == 'dispute' and not item.read %}
-        <div class="remind" id="dispute-{{ item.id }}">
-            <b>Спор · даркстор {{ item.darks }} · {{ item.date }}</b>
-            <p>IoT: {{ item.bikes_view or '—' }}. {{ item.text }}</p>
-            <button type="button" class="btn btn-ok" onclick="readDispute('{{ item.id }}')">Прочитано</button>
+        <div class="remind">
+            <b>Спор · {{ item.gos_view or '—' }} · даркстор {{ item.darks }} · {{ item.date }}</b>
+            <p>Заявка: {{ item.ticket_text }}</p>
+            <p>Закрыл: {{ item.closer }}. Запчасти: {{ item.parts_view }}</p>
+            <p>Куратор: {{ item.text }}</p>
+            <button type="button" class="btn btn-ok" data-read="{{ item.id }}">Прочитано</button>
         </div>
         {% else %}
         <p class="muted">Споров пока нет.</p>
@@ -59,7 +61,7 @@
         <div class="remind">
             <b>{{ item.date }}</b>
             <p>{{ item.text }}</p>
-            <button type="button" class="btn btn-ok" onclick="readDispute('{{ item.id }}')">Прочитано</button>
+            <button type="button" class="btn btn-ok" data-read="{{ item.id }}">Прочитано</button>
         </div>
         {% else %}
         <p class="muted">Минуса нет.</p>
@@ -113,7 +115,7 @@
             })
             .catch(function() { alert('Нет сети'); });
     }
-    function readDispute(uid) {
+    function readDispute(uid, button) {
         fetch('/admin/ops/' + encodeURIComponent(uid) + '/read', { method: 'POST', credentials: 'same-origin' })
             .then(function(response) { return response.json(); })
             .then(function(data) {
@@ -121,11 +123,16 @@
                     alert(data.error || 'Не отметилось');
                     return;
                 }
-                var box = document.getElementById('dispute-' + uid);
+                var box = button ? button.closest('.remind') : null;
                 if (box) box.remove();
             })
             .catch(function() { alert('Нет сети'); });
     }
+    document.addEventListener('click', function(event) {
+        var button = event.target && event.target.closest ? event.target.closest('[data-read]') : null;
+        if (!button) return;
+        readDispute(button.getAttribute('data-read') || '', button);
+    });
     function readDisputes() {
         fetch('/admin/ops/read_disputes', { method: 'POST', credentials: 'same-origin' })
             .then(function(response) { return response.json(); })

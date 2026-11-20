@@ -4,44 +4,88 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Склад Зеленоград</title>
-    <link rel="stylesheet" href="/static/css/admin.css?v=28">
+    <link rel="icon" href="/static/img/vb.jpg" type="image/jpeg">
     <style>
-        body { background: #f8fafc; padding: 16px; }
-        .box { max-width: 720px; margin: 0 auto; background: #fff; border-radius: 16px; padding: 16px; }
-        h1 { font-size: 22px; }
-        label { display: block; font-weight: 800; margin: 12px 0 6px; }
-        select, input { width: 100%; height: 44px; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0 10px; font: inherit; }
-        button { margin-top: 12px; height: 46px; border: 0; border-radius: 12px; background: #15803d; color: #fff; font-weight: 800; width: 100%; }
-        .row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
-        .err { background: #fee2e2; color: #991b1b; padding: 10px; border-radius: 10px; }
-        .ok { background: #dcfce7; color: #166534; padding: 10px; border-radius: 10px; }
-        a { color: #9f1239; font-weight: 800; text-decoration: none; }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #eef2f6; color: #0f172a; font: 16px/1.45 "Segoe UI", sans-serif; }
+        .page { max-width: 820px; margin: 0 auto; padding: 28px 20px 60px; }
+        .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+        .brand img { width: 46px; height: 46px; border-radius: 50%; }
+        a.back { color: #334155; font-weight: 700; text-decoration: none; }
+        h1 { margin: 8px 0 4px; font-size: 32px; }
+        .lead { color: #64748b; }
+        .card { background: #fff; border-radius: 18px; padding: 6px 16px 10px; }
+        .line { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px 8px; border-bottom: 1px solid #f1f5f9; border-radius: 10px; }
+        .line.low { background: #fef9c3; }
+        .line.empty { background: #fee2e2; }
+        .qty { display: flex; align-items: center; gap: 6px; }
+        .qty button { width: 36px; height: 36px; border: 0; border-radius: 10px; background: #0f172a; color: #fff; font-size: 20px; font-weight: 800; cursor: pointer; }
+        .qty input { width: 72px; height: 36px; text-align: center; border: 1px solid #cbd5e1; border-radius: 10px; font: inherit; font-weight: 800; }
+        .legend { display: flex; gap: 8px; margin: 12px 0; }
+        .legend span { border-radius: 999px; padding: 4px 10px; font-size: 13px; font-weight: 700; }
+        .legend .low { background: #fef9c3; }
+        .legend .empty { background: #fecaca; }
     </style>
 </head>
 <body>
-    <div class="box">
-        <a href="/admin">← В админку</a>
-        <h1>Склад Зеленоград</h1>
-        <p>Сюда запчасти кладёте только вы. Мастера забирают их себе в багажник.</p>
-        {% if error %}<div class="err">{{ error }}</div>{% endif %}
-        {% if notice %}<div class="ok">{{ notice }}</div>{% endif %}
-        <form method="post">
-            <label>Запчасть</label>
-            <select name="part" required>
-                {% for name, price in parts %}
-                <option value="{{ name }}">{{ name }}</option>
-                {% endfor %}
-            </select>
-            <label>Сколько положить</label>
-            <input name="qty" type="number" min="1" value="1" required>
-            <button type="submit">Положить на склад</button>
-        </form>
-        <h2>Сейчас на складе</h2>
-        {% for row in rows if row.qty > 0 %}
-        <div class="row"><span>{{ row.name }}</span><b>{{ row.qty }} шт</b></div>
-        {% else %}
-        <p>Пока пусто.</p>
+<div class="page">
+    <div class="brand"><img src="/static/img/vb.jpg" alt="VB"><a class="back" href="/admin">← В админку</a></div>
+    <h1>Склад Зеленоград</h1>
+    <p class="lead">Сюда запчасти кладёте только вы. Мастера забирают их себе в багажник. Жёлтым — 8 и меньше, красным — 4 и меньше.</p>
+    <div class="legend"><span class="low">8 и меньше</span><span class="empty">4 и меньше</span></div>
+    <section class="card">
+        {% for row in rows %}
+        <div class="line {% if row.qty <= 4 %}empty{% elif row.qty <= 8 %}low{% endif %}" data-part="{{ row.name }}">
+            <span>{{ row.name }}</span>
+            <div class="qty">
+                <button type="button" onclick="nudgeZel(this, -1)">−</button>
+                <input value="{{ row.qty }}" inputmode="numeric" onchange="typeZel(this)">
+                <button type="button" onclick="nudgeZel(this, 1)">+</button>
+            </div>
+        </div>
         {% endfor %}
-    </div>
+    </section>
+</div>
+<script>
+function paintZel(line, qty) {
+    line.classList.remove('low', 'empty');
+    if (qty <= 4) line.classList.add('empty');
+    else if (qty <= 8) line.classList.add('low');
+}
+function sendZel(line, qty) {
+    if (qty < 0) qty = 0;
+    var input = line.querySelector('input');
+    input.disabled = true;
+    fetch('/api/zelenograd_set', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ part: line.getAttribute('data-part'), qty: qty })
+    }).then(function(response) { return response.json(); }).then(function(data) {
+        input.disabled = false;
+        if (!data.success) {
+            alert(data.error || 'Не записалось');
+            return;
+        }
+        input.value = data.qty;
+        paintZel(line, data.qty);
+        if (data.warning) alert(data.warning);
+    }).catch(function() {
+        input.disabled = false;
+        alert('Нет сети');
+    });
+}
+function nudgeZel(button, delta) {
+    var line = button.parentNode.parentNode;
+    var current = parseInt(line.querySelector('input').value, 10);
+    if (isNaN(current)) current = 0;
+    sendZel(line, current + delta);
+}
+function typeZel(input) {
+    var qty = parseInt(input.value, 10);
+    if (isNaN(qty)) return;
+    sendZel(input.parentNode.parentNode, qty);
+}
+</script>
 </body>
 </html>

@@ -1300,8 +1300,18 @@ def flush_rating_sheet():
         stored['sheet'] = left[len(pending):] if len(left) >= len(pending) else []
         save_ratings(stored)
 
-def master_rating_value(name):
+def rating_on_day(item):
+    text = str((item or {}).get('day') or (item or {}).get('date_ru') or '')[:10]
+    for pattern in ('%Y-%m-%d', '%d.%m.%Y'):
+        try:
+            return datetime.strptime(text, pattern).date()
+        except ValueError:
+            continue
+    return None
+
+def master_rating_value(name, start=None, end=None):
     latest = {}
+    fallback = {}
     for item in load_ratings().get('items') or []:
         if not same_master(item.get('master'), name):
             continue
@@ -1310,10 +1320,16 @@ def master_rating_value(name):
         except (TypeError, ValueError):
             continue
         key = (item.get('day'), str(item.get('darks')), item.get('chat_id') or item.get('curator'))
-        latest[key] = score
-    if not latest:
+        fallback[key] = score
+        day = rating_on_day(item)
+        if start and end and day and not (start <= day <= end):
+            continue
+        if start and end and day:
+            latest[key] = score
+    chosen = latest or fallback
+    if not chosen:
         return None
-    return round(sum(latest.values()) / len(latest), 1)
+    return round(sum(chosen.values()) / len(chosen), 1)
 
 def rating_same_person(row, token, chat_id, day, darks, master):
     if (row.get('chat_id') or '') != chat_id:
@@ -2448,10 +2464,14 @@ def history_kind(item):
         return 'done'
     return 'other'
 
-def stats_bundle(only_name=None):
+def stats_bundle(only_name=None, start=None, end=None):
     now = get_msk_now().replace(tzinfo=None)
     week = now - timedelta(days=7)
     month = now - timedelta(days=30)
+    if end is None:
+        end = now.date()
+    if start is None:
+        start = end - timedelta(days=29)
     try:
         averages = db.close_hours(60)
     except Exception:
@@ -2460,22 +2480,36 @@ def stats_bundle(only_name=None):
     names = [only_name] if only_name else master_name_list()
     local_hours = {}
     for name in names:
-        week_count = month_count = evac_count = missing_count = replace_count = 0
+        week_count = month_count = evac_count = missing_count = replace_count = repairs = 0
         hours = []
+        period_hours = []
         for item in history_rows(name):
             stamp = history_stamp(item)
-            if not stamp or stamp < month:
+            if not stamp:
+                continue
+            kind = history_kind(item)
+            day = stamp.date()
+            if start <= day <= end:
+                if kind == 'done':
+                    repairs += 1
+                elif kind == 'evac':
+                    evac_count += 1
+                elif kind == 'missing':
+                    missing_count += 1
+                elif kind == 'replace':
+                    replace_count += 1
+                if item.get('hours') not in (None, ''):
+                    try:
+                        value = float(item.get('hours'))
+                    except (TypeError, ValueError):
+                        value = None
+                    if value is not None and 0 <= value <= 24 * 21:
+                        period_hours.append(value)
+            if stamp < month:
                 continue
             month_count += 1
             if stamp >= week:
                 week_count += 1
-            kind = history_kind(item)
-            if kind == 'evac':
-                evac_count += 1
-            elif kind == 'missing':
-                missing_count += 1
-            elif kind == 'replace':
-                replace_count += 1
             if item.get('hours') not in (None, ''):
                 try:
                     value = float(item.get('hours'))
@@ -2491,25 +2525,28 @@ def stats_bundle(only_name=None):
             open_count = sum(1 for ticket in tickets if is_active_status(ticket.get('status')))
         except Exception:
             open_count = 0
-        avg = averages.get(name)
-        if avg is None:
-            avg = local_hours.get(name)
+        avg = round(sum(period_hours) / len(period_hours), 1) if period_hours else None
+        if avg is None and start <= (now.date() - timedelta(days=29)):
+            avg = averages.get(name)
+            if avg is None:
+                avg = local_hours.get(name)
         people.append({
             'name': name,
             'open': open_count,
             'week': week_count,
             'month': month_count,
+            'repairs': repairs,
             'evac': evac_count,
             'missing': missing_count,
             'replace': replace_count,
             'avg_hours': avg,
-            'rating': master_rating_value(name),
+            'rating': master_rating_value(name, start, end),
         })
     known = [person['avg_hours'] for person in people if person.get('avg_hours') is not None]
     if not known:
         known = list(averages.values()) or list(local_hours.values())
     overall = round(sum(known) / len(known), 1) if known else None
-    return {'people': people, 'overall_hours': overall, 'reports': shift_report_items()}
+    return {'people': people, 'overall_hours': overall, 'reports': shift_report_items(), 'start': start, 'end': end}
 
 def append_shift_sheet(item):
     book = get_sheet_client()
@@ -2740,6 +2777,18 @@ def load_zelenograd():
 def save_zelenograd(data):
     _write_json(ZEL_FILE, data)
 
+def set_zelenograd_qty(name, qty):
+    parts_now()
+    if name not in PARTS_SET:
+        return False, 0
+    qty = max(0, int(qty))
+    with _trunk_lock:
+        data = load_zelenograd()
+        data[name] = qty
+        data['_loaded'] = 1
+        save_zelenograd(data)
+    return True, qty
+
 def change_zelenograd(name, delta):
     parts_now()
     if name not in PARTS_SET:
@@ -2820,7 +2869,7 @@ def change_trunk(master, name, delta):
         bag[name] = new_qty
         data[master] = bag
         save_trunks(data)
-    if new_qty < 0:
+    if int(delta) < 0 and new_qty < 0:
         notify_trunk_minus(master, name, new_qty)
     return True, new_qty
 
@@ -2921,6 +2970,50 @@ def spend_parts(master, items, uid='', gos='', darks=''):
             notify_trunk_minus(master, name, left)
         lines.append(f'{name} x{qty}')
     return True, ', '.join(lines)
+
+def duplicate_marks():
+    raw = read_cache('duplicates.json') or {}
+    items = raw.get('uids') if isinstance(raw, dict) else []
+    return set(items or [])
+
+def save_duplicate_marks(uids):
+    write_cache('duplicates.json', {'uids': list(uids)[-4000:]})
+
+def return_duplicate_parts(uid):
+    uid = str(uid or '').strip()
+    if not uid:
+        return False, 'Нет заявки'
+    marks = duplicate_marks()
+    if uid in marks:
+        return False, 'Этот дубль уже отмечен, запчасти уже вернули'
+    moves = [move for move in parts_log() if str(move.get('uid') or '') == uid and move.get('action') == 'Поставил']
+    if not moves:
+        return False, 'На этой заявке запчастей не было'
+    returned = []
+    for move in moves:
+        master = (move.get('master') or '').strip()
+        name = (move.get('name') or '').strip()
+        qty = int(move.get('qty') or 0)
+        if not master or not name or qty <= 0:
+            continue
+        change_trunk(master, name, qty)
+        queue_part_move(master, 'Возврат дубля', name, qty, uid, move.get('gos') or '', move.get('darks') or '')
+        returned.append(f'{name} x{qty}')
+    if not returned:
+        return False, 'Запчасти этой заявки не разобрал'
+    marks.add(uid)
+    save_duplicate_marks(marks)
+    ticket = find_cached_ticket(uid) or {}
+    previous = (ticket.get('note') or '').strip()
+    line = 'ДУБЛЬ: запчасти возвращены в багажник (' + ', '.join(returned) + ')'
+    note = f'{previous}\n{line}'.strip() if previous else line
+    if ticket:
+        update_ticket_in_admin_cache(uid, ticket.get('status') or 'done', note)
+    try:
+        write_trunk_sheet(get_sheet_client())
+    except Exception as exc:
+        logger.warning(f'Возврат дубля в таблицу не записался: {exc}')
+    return True, ', '.join(returned)
 
 REPORT_STATUS = {
     'done': '✅ Выполнено',
@@ -3701,11 +3794,11 @@ def api_bike_search():
     if session.get('role') != 'admin':
         return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
     query = (request.args.get('q') or '').strip()
-    if len(query) < 3:
-        return jsonify({'success': False, 'error': 'Введите хотя бы 3 символа'})
+    if len(query) < 2:
+        return jsonify({'success': False, 'error': 'Введите хотя бы 2 символа'})
     needle_gos = normalize_gos(query)
-    needle_iot = normalize_iot(query).lower()
-    needle_serial = re.sub(r'\s+', '', query).lower()
+    needle_digits = re.sub(r'\D', '', query)
+    needle_text = re.sub(r'\s+', '', query).lower()
     try:
         rows = load_bike_rows()
     except Exception:
@@ -3724,14 +3817,18 @@ def api_bike_search():
         gos = (row[1] if len(row) > 1 else '').strip()
         iot = (row[2] if len(row) > 2 else '').strip()
         darks = (row[4] if len(row) > 4 else '').strip()
-        if not serial and not gos and not iot:
-            continue
-        exact = (
-            (needle_gos and normalize_gos(gos) == needle_gos)
-            or (needle_iot and normalize_iot(iot).lower() == needle_iot)
-            or (needle_serial and re.sub(r'\s+', '', serial).lower() == needle_serial)
-        )
-        if not exact:
+        serial_key = re.sub(r'\s+', '', serial).lower()
+        gos_key = normalize_gos(gos)
+        iot_key = re.sub(r'\s+', '', normalize_iot(iot)).lower()
+        digit_blob = re.sub(r'\D', '', serial + iot + gos)
+        found = False
+        if needle_gos and needle_gos in gos_key:
+            found = True
+        if needle_text and (needle_text in serial_key or needle_text in iot_key or needle_text in gos_key):
+            found = True
+        if len(needle_digits) >= 2 and needle_digits in digit_blob:
+            found = True
+        if not found:
             continue
         kind = row[kind_i].strip() if len(row) > kind_i else ''
         company = row[company_i].strip() if len(row) > company_i else ''
@@ -3744,11 +3841,8 @@ def api_bike_search():
         online = False
         map_error = ''
         if not point and not _xdevice_points:
-            refresh_xdevice_points(force=True)
-            point = lookup_bike_point(iot) if normalize_iot(iot) else None
-            if not point and gos:
-                point = lookup_bike_point(gos)
-        if not normalize_iot(iot) and not point:
+            map_error = 'Точка подгрузится, когда модули будут на связи'
+        elif not normalize_iot(iot) and not point:
             map_error = 'В базе нет номера IoT, точку не к чему привязать'
         elif not point:
             map_error = _xdevice_error or 'Точки на карте сейчас нет'
@@ -4343,6 +4437,39 @@ def remember_dispute(ticket, darks, text):
         'text': text,
     })
 
+def dispute_details(item):
+    uid = dispute_uid_of(item)
+    ticket = find_cached_ticket(uid) if uid else None
+    gos = ((ticket or {}).get('gos') or '').strip()
+    desc = ((ticket or {}).get('display_desc') or (ticket or {}).get('desc') or '').strip()
+    master = ''
+    parts = ''
+    if uid:
+        for row in reversed(work_history_items()):
+            if str(row.get('uid') or '') != uid:
+                continue
+            master = row.get('master') or master
+            parts = row.get('detail') or parts
+            gos = gos or (row.get('gos') or '')
+            desc = desc or (row.get('desc') or '')
+            break
+        if not parts:
+            bits = []
+            for move in parts_log():
+                if str(move.get('uid') or '') != uid or move.get('action') != 'Поставил':
+                    continue
+                bits.append(f"{move.get('name')} x{move.get('qty')}")
+                master = master or (move.get('master') or '')
+            parts = ', '.join(bits)
+    if not gos:
+        gos = str((item or {}).get('bikes') or '')
+    return {
+        'gos_view': gos or '—',
+        'ticket_text': desc or 'Текст заявки не сохранился',
+        'closer': master or '—',
+        'parts_view': parts or 'запчасти не записаны',
+    }
+
 def remember_operation(item):
     with _ops_lock:
         items = load_ops()
@@ -4638,7 +4765,7 @@ def api_transit_bike():
 @app.route('/master/<name>/supply/<uid>', methods=['POST'])
 @login_required
 def master_supply_done(name, uid):
-    if session.get('master_name') != name or not is_transit_master(name):
+    if session.get('master_name') != name:
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
     ticket = find_cached_ticket(uid) or {}
     apply_transit_meta(ticket)
@@ -4656,7 +4783,6 @@ def master_supply_done(name, uid):
         append_operation_summary(date, 'Поставка', ticket.get('company') or '', ticket.get('darks') or '', qty, akb, '')
     except Exception as exc:
         logger.warning(f'Итог поставки не записался: {exc}')
-        return jsonify({'success': False, 'error': 'Не удалось записать итог в таблицу'})
     try:
         append_repair_operation(date, 'Поставка', ticket.get('company') or '', ticket.get('darks') or '', qty, akb, '', f'{qty} вело, {akb} акб')
     except Exception as exc:
@@ -4681,7 +4807,7 @@ def master_supply_done(name, uid):
 @app.route('/master/<name>/pickup/<uid>', methods=['POST'])
 @login_required
 def master_pickup_done(name, uid):
-    if session.get('master_name') != name or not is_transit_master(name):
+    if session.get('master_name') != name:
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
     ticket = find_cached_ticket(uid) or {}
     apply_transit_meta(ticket)
@@ -4726,7 +4852,6 @@ def master_pickup_done(name, uid):
         append_supply_log(log_rows)
     except Exception as exc:
         logger.warning(f'Вывоз в таблицу не записался: {exc}')
-        return jsonify({'success': False, 'error': 'Не удалось записать велосипеды в таблицу'})
     link = ''
     local_name = ''
     try:
@@ -4763,7 +4888,7 @@ def master_pickup_done(name, uid):
 @app.route('/master/<name>/gai/<uid>', methods=['POST'])
 @login_required
 def master_gai_done(name, uid):
-    if session.get('master_name') != name or not is_transit_master(name):
+    if session.get('master_name') != name:
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
     ticket = find_cached_ticket(uid) or {}
     apply_transit_meta(ticket)
@@ -4807,7 +4932,6 @@ def master_gai_done(name, uid):
         )
     except Exception as exc:
         logger.warning(f'Замена ГАИ в «Замены вело» не записалась: {exc}')
-        return jsonify({'success': False, 'error': 'Не удалось записать велосипед в лист «Замены вело»'})
     date = get_msk_now().strftime('%d.%m.%Y')
     company = ticket.get('company') or 'Vanta'
     with_akb = ticket.get('akb_mode') == 'с'
@@ -4878,6 +5002,8 @@ def admin_ops():
     for item in reversed(items):
         row = dict(item)
         row['bikes_view'] = show_iot(row.get('bikes'))
+        if row.get('kind') == 'dispute':
+            row.update(dispute_details(row))
         shown.append(row)
     return render_template('admin_ops.html', items=shown)
 
@@ -5856,7 +5982,7 @@ def admin_history():
             who = str(row.get('master') or '').lower()
             if (needle and needle in gos) or folded in who:
                 items.append(row)
-    routes = month_routes(master)
+    routes = month_routes(master, query)
     detail = master_route_detail(master, day) if master and day else None
     return render_template(
         'admin_history.html',
@@ -5875,9 +6001,10 @@ def route_snapshots():
     items = raw.get('items') if isinstance(raw, dict) else []
     return items if isinstance(items, list) else []
 
-def month_routes(master=''):
+def month_routes(master='', query=''):
     start = (get_msk_now().date() - timedelta(days=30)).isoformat()
     history = work_history_items()
+    needle = normalize_gos(query)
     rows = []
     for snap in route_snapshots():
         day = snap.get('date') or ''
@@ -5891,7 +6018,24 @@ def month_routes(master=''):
                 continue
             if row.get('uid'):
                 done_ids.add(str(row.get('uid')))
-        done = sum(1 for ticket in tickets if str(ticket.get('uid') or '') and str(ticket.get('uid')) in done_ids)
+        shown = []
+        done = 0
+        for ticket in tickets:
+            uid = str(ticket.get('uid') or '')
+            closed = bool(uid and uid in done_ids)
+            if closed:
+                done += 1
+            if needle and needle not in normalize_gos(ticket.get('gos')):
+                continue
+            shown.append({
+                'uid': uid,
+                'gos': ticket.get('gos') or ticket.get('type') or '—',
+                'desc': ticket.get('desc') or '',
+                'darks': ticket.get('darks') or '',
+                'done': closed,
+            })
+        if needle and not shown:
+            continue
         try:
             title = datetime.strptime(day, '%Y-%m-%d').strftime('%d.%m.%Y')
         except ValueError:
@@ -5903,6 +6047,7 @@ def month_routes(master=''):
             'master': who,
             'assigned': len(tickets),
             'done': done,
+            'tickets': shown,
             'report': reported,
             'report_late': (not reported) and day < get_msk_now().date().isoformat(),
         })
@@ -6068,7 +6213,7 @@ def report_event_time(value):
     return None
 
 def suspicious_events():
-    cached = read_cache('suspicious_cache_v2.json') or {}
+    cached = read_cache('suspicious_cache_v3.json') or {}
     if isinstance(cached, dict) and cached.get('ts') and time.time() - float(cached.get('ts') or 0) < 600 and cached.get('rows'):
         return cached.get('rows') or []
     rows = []
@@ -6080,6 +6225,7 @@ def suspicious_events():
             rows.append({
                 'time': row[0],
                 'master': row[1] if len(row) > 1 else '',
+                'uid': row[2] if len(row) > 2 else '',
                 'gos': row[3] if len(row) > 3 else '',
                 'desc': row[4] if len(row) > 4 else '',
                 'status': row[7] if len(row) > 7 else '',
@@ -6092,13 +6238,14 @@ def suspicious_events():
             rows.append({
                 'time': row.get('timestamp') or '',
                 'master': row.get('master') or '',
+                'uid': row.get('uid') or '',
                 'gos': row.get('gos') or '',
                 'desc': row.get('desc') or '',
                 'status': row.get('label') or '',
                 'parts': row.get('detail') or '',
                 'comment': row.get('detail') or '',
             })
-    write_cache('suspicious_cache_v2.json', {'ts': time.time(), 'rows': rows[-8000:]})
+    write_cache('suspicious_cache_v3.json', {'ts': time.time(), 'rows': rows[-8000:]})
     return rows[-8000:]
 
 def catalog_part_name(text):
@@ -6158,13 +6305,15 @@ def suspicious_flags():
                 'time': stamp,
                 'master': row.get('master') or '',
                 'gos': row.get('gos') or gos_key,
+                'uid': row.get('uid') or '',
+                'desc': row.get('desc') or '',
             })
     repeats = []
     for (gos_key, part), events in part_events.items():
         events.sort(key=lambda item: item['time'])
         unique = []
         for event in events:
-            if unique and unique[-1]['time'] == event['time'] and unique[-1]['master'] == event['master']:
+            if unique and unique[-1]['time'] == event['time'] and unique[-1]['master'] == event['master'] and unique[-1].get('uid') == event.get('uid'):
                 continue
             unique.append(event)
         chain = []
@@ -6200,12 +6349,22 @@ def suspicious_flags():
     return {'repeats': repeats[:40], 'evacuations': evacuations[:40]}
 
 def part_repeat_card(part, chain):
-    bits = [f"{item['time'].strftime('%d.%m')} {item['master'] or 'мастер не указан'}" for item in chain]
+    bits = []
+    visits = []
+    for item in chain:
+        bits.append(f"{item['time'].strftime('%d.%m')} {item['master'] or 'мастер не указан'}")
+        visits.append({
+            'when': item['time'].strftime('%d.%m'),
+            'master': item['master'] or 'мастер не указан',
+            'uid': item.get('uid') or '',
+            'desc': item.get('desc') or '',
+        })
     times = 'раза' if 2 <= len(chain) <= 4 else 'раз'
     return {
         'gos': chain[0]['gos'],
         'part': part,
         'count': len(chain),
+        'visits': visits,
         'when': bits[0].split()[0] + ' – ' + bits[-1].split()[0],
         'text': f'{chain[0]["gos"]}: {part} ставили {len(chain)} {times}, ' + ' и '.join(bits),
         'sort': chain[-1]['time'].strftime('%Y-%m-%d %H:%M:%S'),
@@ -6240,7 +6399,17 @@ def admin_suspicious():
 def admin_stats():
     if session.get('role') != 'admin':
         return redirect(url_for('login_page'))
-    bundle = stats_bundle()
+    today = get_msk_now().date()
+    def period_day(value, fallback):
+        try:
+            return datetime.strptime(value or '', '%Y-%m-%d').date()
+        except ValueError:
+            return fallback
+    start = period_day(request.args.get('start'), today - timedelta(days=29))
+    end = period_day(request.args.get('end'), today)
+    if end < start:
+        start, end = end, start
+    bundle = stats_bundle(start=start, end=end)
     reports = sorted(bundle['reports'], key=lambda row: (row.get('date') or '', row.get('master') or ''), reverse=True)
     expenses = [row for row in reports if (row.get('expenses') or '').strip()]
     return render_template(
@@ -6251,6 +6420,8 @@ def admin_stats():
         expenses=expenses[:80],
         ratings=list(reversed(load_ratings().get('items') or []))[:40],
         now=get_msk_now().strftime('%d.%m.%Y %H:%M'),
+        start=start.isoformat(),
+        end=end.isoformat(),
     )
 
 @app.route('/master/<name>/stats')
@@ -6707,6 +6878,57 @@ def master_trunk(name):
         notice=notice,
         now=get_msk_now().strftime('%H:%M:%S'),
     )
+
+@app.route('/api/trunk_set', methods=['POST'])
+@login_required
+def api_trunk_set():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    data = request.json or {}
+    master = (data.get('master') or '').strip()
+    part_name = (data.get('part') or '').strip()
+    try:
+        qty = int(data.get('qty'))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Нужно число'})
+    if master not in MASTERS or part_name not in PARTS_SET:
+        return jsonify({'success': False, 'error': 'Нет такой запчасти'})
+    sheet_error = set_trunk_qty(master, part_name, qty)
+    return jsonify({'success': True, 'qty': qty, 'warning': sheet_error})
+
+@app.route('/api/zelenograd_set', methods=['POST'])
+@login_required
+def api_zelenograd_set():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    parts_now()
+    data = request.json or {}
+    part_name = (data.get('part') or '').strip()
+    try:
+        qty = int(data.get('qty'))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Нужно число'})
+    ok, left = set_zelenograd_qty(part_name, qty)
+    if not ok:
+        return jsonify({'success': False, 'error': 'Нет такой запчасти'})
+    warning = ''
+    try:
+        write_zelenograd_sheet()
+    except Exception as exc:
+        logger.warning(f'Склад Зеленоград в таблицу не записался: {exc}')
+        warning = 'На сайте изменено. В таблицу сейчас не записалось.'
+    return jsonify({'success': True, 'qty': left, 'warning': warning})
+
+@app.route('/api/mark_duplicate', methods=['POST'])
+@login_required
+def api_mark_duplicate():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    uid = str((request.json or {}).get('uid') or '').strip()
+    ok, text = return_duplicate_parts(uid)
+    if not ok:
+        return jsonify({'success': False, 'error': text})
+    return jsonify({'success': True, 'text': 'Вернул в багажник: ' + text})
 
 @app.route('/admin/trunks', methods=['GET', 'POST'])
 @login_required

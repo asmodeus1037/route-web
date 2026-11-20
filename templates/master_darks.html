@@ -180,7 +180,7 @@
         {% set is_evacuation = (not is_battery) and t.status == 'evacuation' %}
         {% set is_transit = (name == 'Транзит' or name == 'Сергей Транзит') and not is_battery %}
 
-        {% if is_transit and t.status == 'supply' %}
+        {% if t.status == 'supply' %}
         <div class="ticket evacuation-form" id="ticket-{{ t.uid }}" data-uid="{{ t.uid }}">
             <div class="ticket-header">
                 <span class="ticket-id">ПОСТАВКА</span>
@@ -197,7 +197,7 @@
             <button type="button" class="submit-btn" onclick="submitSupply('{{ name }}', '{{ t.uid }}')">Готово</button>
         </div>
 
-        {% elif is_transit and t.status == 'pickup' %}
+        {% elif t.status == 'pickup' %}
         <div class="ticket evacuation-form" id="ticket-{{ t.uid }}" data-uid="{{ t.uid }}" data-darks="{{ darks_number }}">
             <div class="ticket-header">
                 <span class="ticket-id">ВЫВОЗ</span>
@@ -224,7 +224,7 @@
             </div>
         </div>
 
-        {% elif is_transit and t.status == 'gai' %}
+        {% elif t.status == 'gai' %}
         <div class="ticket evacuation-form" id="ticket-{{ t.uid }}" data-uid="{{ t.uid }}">
             <div class="ticket-header">
                 <span class="ticket-id">ЗАМЕНА ГАИ</span>

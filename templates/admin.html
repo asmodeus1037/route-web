@@ -352,7 +352,7 @@
             </div>
             <div id="createQtyWrap" style="display:none;">
                 <label id="createQtyLabel">Количество</label>
-                <input id="createQty" inputmode="numeric" placeholder="Сколько велосипедов">
+                <input id="createQty" inputmode="numeric" placeholder="Количество">
                 <p id="createQtyHint" style="display:none;color:#64748b;font-size:13px;margin:8px 0 0;">В задаче будет написано, например: «Поставка 5 вело, 10 акб, 5 з.у.» АКБ по 2 на велосипед, зарядка по 1.</p>
             </div>
         </div>
@@ -370,7 +370,7 @@
         <h3>Поиск велосипеда</h3>
         <p style="color:#64748b;margin:0 0 12px;">Госномер, номер IoT или серийный номер.</p>
         <div style="display:flex;gap:8px;">
-            <input id="bikeQuery" placeholder="РЕ111Р или 25-9194" onkeydown="if (event.key==='Enter') searchBike()">
+            <input id="bikeQuery" placeholder="РЕ12 или 370221" oninput="queueBikeSearch()" onkeydown="if (event.key==='Enter') searchBike()">
             <button class="btn btn-view" type="button" onclick="searchBike()">Найти</button>
         </div>
         <div id="bikeSearchResult"></div>

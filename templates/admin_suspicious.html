@@ -21,7 +21,8 @@
         .gos { font-size: 20px; font-weight: 800; }
         .count { color: #9a3412; font-weight: 800; }
         .plain { margin: 8px 0 0; }
-        .step { margin-top: 10px; padding-top: 10px; border-top: 1px solid #fed7aa; }
+        .step { margin-top: 10px; padding-top: 10px; border-top: 1px solid #e2e8f0; }
+        .step button { margin-left: 8px; border: 0; background: #0f172a; color: #fff; border-radius: 8px; padding: 4px 8px; font-weight: 700; cursor: pointer; }
         .step b { display: block; }
         .empty { color: #64748b; }
     </style>
@@ -50,11 +51,32 @@
         <article class="card">
             <div class="top"><span class="gos">{{ row.gos }}</span><span>{{ row.when }}</span></div>
             <p class="plain">{{ row.text }}</p>
+            {% for visit in row.visits %}
+            <div class="step">{{ visit.when }}, {{ visit.master }}{% if visit.desc %}: {{ visit.desc }}{% endif %}
+                {% if visit.uid and not loop.first %}
+                <button type="button" onclick="markDuplicate('{{ visit.uid }}')">Это дубль</button>
+                {% endif %}
+            </div>
+            {% endfor %}
         </article>
         {% endfor %}
     {% else %}
         <p class="empty">Повторов одной детали за месяц нет.</p>
     {% endif %}
 </div>
+<script>
+function markDuplicate(uid) {
+    if (!confirm('Это дубль? Запчасти этой заявки вернутся мастеру в багажник.')) return;
+    fetch('/api/mark_duplicate', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: uid })
+    }).then(function(response) { return response.json(); }).then(function(data) {
+        alert(data.success ? (data.text || 'Вернул') : (data.error || 'Не вышло'));
+        if (data.success) location.reload();
+    }).catch(function() { alert('Нет сети'); });
+}
+</script>
 </body>
 </html>

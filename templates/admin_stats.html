@@ -23,24 +23,27 @@
     <div class="wrap">
         <a class="back" href="/admin">← К заявкам</a>
         <h1>Статистика</h1>
-        <p class="muted">Общее среднее: {% if overall is not none %}{{ overall }} ч{% else %}пока нет{% endif %}. Это часы от создания заявки до «Выполнено», по базе за 60 дней. Статус «Эвакуация», «вело не было» и заменённые велосипеды — за 30 дней. Оценка — среднее от кураторов. Учётная запись IOT в эту таблицу не входит. {{ now }}</p>
+        <p class="muted">Период задаёте сами. «Выполнено ремонтов» — закрытия со статусом выполнено. Среднее — часы от создания заявки до закрытия за этот период. Оценка — среднее от кураторов. {{ now }}</p>
+        <form method="get" style="display:flex;gap:8px;align-items:end;margin-bottom:14px;flex-wrap:wrap;">
+            <label>С <input type="date" name="start" value="{{ start }}"></label>
+            <label>По <input type="date" name="end" value="{{ end }}"></label>
+            <button type="submit" style="height:36px;border:0;border-radius:10px;background:#0f172a;color:#fff;font-weight:800;padding:0 14px;">Показать</button>
+        </form>
         <div class="switch">
             <button type="button" class="on" onclick="showStats('masters', this)">Мастера</button>
             <button type="button" onclick="showStats('expenses', this)">Доп. расходы</button>
         </div>
         <div id="masters">
             <table>
-                <tr><th>Мастер</th><th>В работе</th><th>7 дней</th><th>30 дней</th><th>Среднее</th><th>Поставлен статус «Эвакуация»</th><th>Вело не было</th><th>Заменено велосипедов</th><th>Оценка</th></tr>
+                <tr><th>Мастер</th><th>Выполнено ремонтов</th><th>Поставлен статус «Эвакуация»</th><th>Вело отсутствовал</th><th>Заменено велосипедов</th><th>Среднее</th><th>Оценка</th></tr>
                 {% for person in people %}
                 <tr>
                     <td>{{ person.name }}</td>
-                    <td>{{ person.open }}</td>
-                    <td>{{ person.week }}</td>
-                    <td>{{ person.month }}</td>
-                    <td>{% if person.avg_hours is not none %}{{ person.avg_hours }} ч{% else %}—{% endif %}</td>
+                    <td>{{ person.repairs }}</td>
                     <td>{{ person.evac }}</td>
                     <td>{{ person.missing }}</td>
                     <td>{{ person.replace }}</td>
+                    <td>{% if person.avg_hours is not none %}{{ person.avg_hours }} ч{% else %}—{% endif %}</td>
                     <td>{% if person.rating is not none %}{{ person.rating }}{% else %}нет оценок{% endif %}</td>
                 </tr>
                 {% endfor %}

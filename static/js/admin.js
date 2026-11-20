@@ -995,12 +995,33 @@ function copyText(text, button) {
     done();
 }
 
+var bikeSearchTimer = null;
+function queueBikeSearch() {
+    clearTimeout(bikeSearchTimer);
+    bikeSearchTimer = setTimeout(searchBike, 250);
+}
+function markDuplicate(uid) {
+    if (!confirm('Отметить заявку как дубль? Запчасти этой заявки вернутся мастеру в багажник.')) return;
+    fetch('/api/mark_duplicate', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: uid })
+    }).then(function(response) { return response.json(); }).then(function(data) {
+        if (!data.success) {
+            alert(data.error || 'Не отметилось');
+            return;
+        }
+        alert(data.text || 'Запчасти возвращены');
+        location.reload();
+    }).catch(function() { alert('Нет сети'); });
+}
 function searchBike() {
     var input = document.getElementById('bikeQuery');
     var box = document.getElementById('bikeSearchResult');
     var query = (input.value || '').trim();
-    if (query.length < 3) {
-        box.innerHTML = '<p style="color:#b45309;">Введите хотя бы 3 символа.</p>';
+    if (query.length < 2) {
+        box.innerHTML = '';
         return;
     }
     box.innerHTML = '<p>Ищу...</p>';
@@ -1048,6 +1069,7 @@ function closeBikeSearch() {
 function openDocs() {
     var modal = document.getElementById('docsModal');
     modal.classList.add('active');
+    ensureDarksOptions();
     var date = document.getElementById('docDate');
     if (!date.value) {
         var now = new Date();
@@ -1272,8 +1294,8 @@ function closeCreateTicket() {
 
 var darksOptions = null;
 
-function ensureDarksOptions() {
-    if (darksOptions) return;
+function ensureDarksOptions(force) {
+    if (darksOptions && darksOptions.length && !force) return;
     fetch('/api/darks_options', { credentials: 'same-origin' })
         .then(readApi)
         .then(function(data) {
@@ -1286,7 +1308,11 @@ function ensureDarksOptions() {
 
 function escAttr(value) {
     return String(value || '').replace(/[&<>"']/g, function(ch) {
-        return { '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[ch];
+        if (ch === '&') return '&';
+        if (ch === '<') return '<';
+        if (ch === '>') return '>';
+        if (ch === '"') return '"';
+        return '&#39;';
     });
 }
 
@@ -1295,8 +1321,9 @@ function filterDarksAddress() {
     var box = document.getElementById('createAddressList');
     if (!input || !box) return;
     var query = (input.value || '').trim().toLowerCase();
-    if (query.length < 2 || !darksOptions) {
+    if (query.length < 2 || !darksOptions || !darksOptions.length) {
         box.innerHTML = '';
+        if (query.length >= 2) ensureDarksOptions(true);
         return;
     }
     var hits = [];
@@ -1324,6 +1351,47 @@ function pickDarksAddress(number, address) {
     if (box) box.innerHTML = '';
     maybeLoadGaiPlates();
 }
+
+function filterDocAddress() {
+    var input = document.getElementById('docAddress');
+    var box = document.getElementById('docAddressList');
+    if (!input || !box) return;
+    var query = (input.value || '').trim().toLowerCase();
+    if (query.length < 2 || !darksOptions || !darksOptions.length) {
+        box.innerHTML = '';
+        if (query.length >= 2) ensureDarksOptions(true);
+        return;
+    }
+    var hits = [];
+    for (var i = 0; i < darksOptions.length && hits.length < 8; i++) {
+        var item = darksOptions[i];
+        var address = String(item.address || '').toLowerCase();
+        var number = String(item.number || '');
+        if (address.indexOf(query) !== -1 || number.indexOf(query) === 0) hits.push(item);
+    }
+    var html = '';
+    hits.forEach(function(item) {
+        html += '<button type="button" data-doc-number="' + escAttr(item.number) + '" data-doc-address="' + escAttr(item.address) + '">';
+        html += escAttr(item.address || 'Без адреса');
+        html += '<small>даркстор ' + escAttr(item.number) + '</small></button>';
+    });
+    box.innerHTML = html;
+}
+
+function pickDocAddress(number, address) {
+    var darks = document.getElementById('docDarks');
+    var input = document.getElementById('docAddress');
+    var box = document.getElementById('docAddressList');
+    if (darks) darks.value = number || '';
+    if (input) input.value = address || '';
+    if (box) box.innerHTML = '';
+}
+
+document.addEventListener('click', function(event) {
+    var button = event.target && event.target.closest ? event.target.closest('#docAddressList button') : null;
+    if (!button) return;
+    pickDocAddress(button.getAttribute('data-doc-number') || '', button.getAttribute('data-doc-address') || '');
+});
 
 document.addEventListener('click', function(event) {
     var button = event.target && event.target.closest ? event.target.closest('#createAddressList button') : null;
@@ -1356,6 +1424,8 @@ function toggleCustomType() {
     document.getElementById('createQtyWrap').style.display = (supply || transitQty) ? 'block' : 'none';
     var qtyLabel = document.getElementById('createQtyLabel');
     if (qtyLabel) qtyLabel.textContent = transitQty ? 'Сколько велосипедов' : 'Количество';
+    var qtyInput = document.getElementById('createQty');
+    if (qtyInput) qtyInput.placeholder = transitQty ? 'Сколько велосипедов' : 'Количество';
     var hint = document.getElementById('createQtyHint');
     if (hint) hint.style.display = transitQty ? 'block' : 'none';
     var company = document.getElementById('createCompanyWrap');
@@ -1675,6 +1745,11 @@ function renderTicketsGrouped(tickets, containerId) {
                 html += '<span class="who" style="display:block;color:#b45309;">' + disputeText.replace(/[&<>]/g, '') + '</span>';
             }
             html += '</span>';
+            if (String(t.note || '').indexOf('ДУБЛЬ:') !== -1) {
+                html += '<span class="who" style="display:block;color:#9a3412;">Дубль, запчасти возвращены</span>';
+            } else if (t.status === 'done' || t.status === 'processed') {
+                html += '<button type="button" class="btn btn-outline" style="margin-top:6px;" onclick="markDuplicate(\'' + String(t.uid).replace(/'/g, '') + '\')">Дубль</button>';
+            }
             html += '<span class="type-badge">' + typeDisplay + '</span>';
             html += '<span class="field"><span class="field-label">Мастер</span><select class="master-select" data-uid="' + t.uid + '" data-source="' + t.source + '" onchange="onMasterChange(this)"><option value="">—</option>';
             for (var mi = 0; mi < masters.length; mi++) {
@@ -1685,7 +1760,10 @@ function renderTicketsGrouped(tickets, containerId) {
             
             html += '<span class="field"><span class="field-label">Статус</span>';
             if (t.status === 'supply' || t.status === 'pickup' || t.status === 'gai') {
-                html += '<span class="type-badge">' + statusDisplay + '</span>';
+                html += '<select class="status-select" data-uid="' + t.uid + '" data-old-status="🟡 В работе" onchange="updateStatus(this)" style="padding:2px 6px;border-radius:4px;border:1px solid #d1d5db;font-size:10px;background:white;width:100%;max-width:110px;cursor:pointer;">';
+                html += '<option value="🟡 В работе" selected>В работе</option>';
+                html += '<option value="✅ Выполнено">Выполнено</option>';
+                html += '</select>';
             } else {
                 html += '<select class="status-select" data-uid="' + t.uid + '" data-old-status="' + statusDisplay + '" onchange="updateStatus(this)" style="padding:2px 6px;border-radius:4px;border:1px solid #d1d5db;font-size:10px;background:white;width:100%;max-width:100px;cursor:pointer;">';
                 html += '<option value="🟡 В работе"' + (statusDisplay === '🟡 В работе' ? ' selected' : '') + '>🟡 В работе</option>';

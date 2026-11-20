@@ -34,7 +34,7 @@
 <div class="page">
     <div class="brand"><img src="/static/img/vb.jpg" alt="VB"><a class="back" href="/admin">← В админку</a></div>
     <h1>Багажники мастеров</h1>
-    <p class="lead">Минус и плюс меняют количество на одну штуку. Число можно вписать и нажать «Ок». Запись уходит в листы «Багажник» и «Движение запчастей 2».</p>
+    <p class="lead">Минус и плюс сразу меняют число. Страница не перезагружается. Запись уходит в листы «Багажник» и «Движение запчастей 2».</p>
     {% if notice %}<p class="banner">{{ notice }}</p>{% endif %}
     {% if error %}<p class="banner">{{ error }}</p>{% endif %}
     <form class="add" method="post">
@@ -57,14 +57,11 @@
         {% for row in master.rows %}
         <div class="line">
             <span>{{ row.name }}</span>
-            <form class="qty" method="post">
-                <input type="hidden" name="master" value="{{ master.name }}">
-                <input type="hidden" name="part" value="{{ row.name }}">
-                <button type="submit" name="qty" value="{{ row.qty - 1 }}" aria-label="Меньше">−</button>
-                <input name="qty_typed" value="{{ row.qty }}" inputmode="numeric" class="{% if row.qty < 0 %}minus{% endif %}">
-                <button type="submit" name="qty" value="{{ row.qty + 1 }}" aria-label="Больше">+</button>
-                <button type="submit" name="save" value="1">Ок</button>
-            </form>
+            <div class="qty" data-master="{{ master.name }}" data-part="{{ row.name }}">
+                <button type="button" onclick="nudgeTrunk(this, -1)" aria-label="Меньше">−</button>
+                <input value="{{ row.qty }}" inputmode="numeric" class="{% if row.qty < 0 %}minus{% endif %}" onchange="typeTrunk(this)">
+                <button type="button" onclick="nudgeTrunk(this, 1)" aria-label="Больше">+</button>
+            </div>
         </div>
         {% else %}
         <p class="lead">Пусто</p>
@@ -97,5 +94,45 @@
     </section>
     {% endfor %}
 </div>
+<script>
+function trunkBox(button) { return button.parentNode; }
+function paintTrunk(input, qty) {
+    input.value = qty;
+    input.className = qty < 0 ? 'minus' : '';
+}
+function sendTrunk(box, qty) {
+    var input = box.querySelector('input');
+    input.disabled = true;
+    fetch('/api/trunk_set', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ master: box.getAttribute('data-master'), part: box.getAttribute('data-part'), qty: qty })
+    }).then(function(response) { return response.json(); }).then(function(data) {
+        input.disabled = false;
+        if (!data.success) {
+            alert(data.error || 'Не записалось');
+            return;
+        }
+        paintTrunk(input, data.qty);
+        if (data.warning) alert(data.warning);
+    }).catch(function() {
+        input.disabled = false;
+        alert('Нет сети');
+    });
+}
+function nudgeTrunk(button, delta) {
+    var box = trunkBox(button);
+    var input = box.querySelector('input');
+    var current = parseInt(input.value, 10);
+    if (isNaN(current)) current = 0;
+    sendTrunk(box, current + delta);
+}
+function typeTrunk(input) {
+    var qty = parseInt(input.value, 10);
+    if (isNaN(qty)) return;
+    sendTrunk(input.parentNode, qty);
+}
+</script>
 </body>
 </html>
