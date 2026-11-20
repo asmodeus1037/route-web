@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Закупка</title>
+    <link rel="icon" href="/static/img/vb.jpg" type="image/jpeg">
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #eef2f6; color: #0f172a; font: 15px/1.4 "Segoe UI", sans-serif; }
+        .page { max-width: 1280px; margin: 0 auto; padding: 22px 18px 40px; }
+        .brand { display: flex; align-items: center; gap: 12px; }
+        .brand img { width: 42px; height: 42px; border-radius: 50%; }
+        a.back { color: #334155; font-weight: 700; text-decoration: none; }
+        h1 { margin: 8px 0 4px; font-size: 30px; }
+        .lead { color: #64748b; margin: 0 0 14px; }
+        .banner { border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; }
+        .banner.ok { background: #dcfce7; color: #166534; }
+        .banner.err { background: #fee2e2; color: #991b1b; }
+        .tabs { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+        .tabs button, .refresh { border: 0; border-radius: 999px; padding: 8px 14px; font-weight: 800; cursor: pointer; background: #fff; }
+        .tabs button.on { background: #0f172a; color: #fff; }
+        .layout { display: grid; grid-template-columns: 220px 1fr 320px; gap: 14px; align-items: start; }
+        .side, .cart, .board { background: #fff; border-radius: 16px; }
+        .side, .cart { padding: 12px; position: sticky; top: 12px; }
+        .side button { display: block; width: 100%; text-align: left; border: 0; background: transparent; border-radius: 10px; padding: 8px 10px; cursor: pointer; font: inherit; }
+        .side button.on { background: #0f172a; color: #fff; }
+        .side .count { color: #94a3b8; font-size: 12px; }
+        .side button.on .count { color: #cbd5e1; }
+        .tools { display: flex; gap: 8px; margin-bottom: 12px; }
+        .tools input { flex: 1; height: 42px; border: 1px solid #e2e8f0; border-radius: 12px; padding: 0 12px; font: inherit; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+        .card { background: #fff; border-radius: 16px; overflow: hidden; border: 1px solid transparent; }
+        .card.in { border-color: #0f172a; }
+        .card img, .no-photo { width: 100%; height: 160px; object-fit: contain; background: #f8fafc; }
+        .no-photo { display: flex; align-items: center; justify-content: center; color: #94a3b8; }
+        .body { padding: 10px 12px 12px; }
+        .article { font-weight: 800; }
+        .name { min-height: 40px; margin: 4px 0 8px; }
+        .meta { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-size: 13px; }
+        .price { font-weight: 800; }
+        .badge { border-radius: 999px; padding: 2px 8px; font-weight: 700; font-size: 12px; }
+        .ok { background: #dcfce7; color: #166534; }
+        .wait { background: #fef9c3; color: #854d0e; }
+        .out { background: #fee2e2; color: #991b1b; }
+        .qty { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+        .qty button, .cart button { border: 0; background: #0f172a; color: #fff; border-radius: 10px; height: 34px; min-width: 34px; font-weight: 800; cursor: pointer; }
+        .qty input { width: 64px; height: 34px; text-align: center; border: 1px solid #cbd5e1; border-radius: 10px; font: inherit; font-weight: 800; }
+        .cart h2 { margin: 0 0 8px; font-size: 18px; }
+        .line { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+        .line b { font-size: 13px; }
+        .sum { margin: 10px 0; font-size: 18px; font-weight: 800; }
+        .cart .copy, .cart .clear { width: 100%; margin-top: 8px; }
+        .cart .clear { background: #e2e8f0; color: #0f172a; }
+        .muted { color: #64748b; font-size: 13px; }
+        .empty { padding: 24px; color: #64748b; }
+        @media (max-width: 980px) {
+            .layout { grid-template-columns: 1fr; }
+            .side, .cart { position: static; }
+        }
+    </style>
+</head>
+<body>
+<div class="page">
+    <div class="brand"><img src="/static/img/vb.jpg" alt="VB"><a class="back" href="/admin">← В админку</a></div>
+    <h1>Закупка</h1>
+    <p class="lead">Два каталога отдельно. Корзина копирует текст, который ты отправляешь поставщику. В его таблицу ничего не пишется.</p>
+    {% if notice %}<div class="banner ok">{{ notice }}</div>{% endif %}
+    {% if error %}<div class="banner err">{{ error }}</div>{% endif %}
+    <div class="tabs" id="tabs"></div>
+    <form method="post" action="/admin/purchase/refresh" style="margin:-4px 0 12px;">
+        <button class="refresh" type="submit">Обновить цены и наличие</button>
+    </form>
+    <div class="layout">
+        <aside class="side" id="sections"></aside>
+        <section>
+            <div class="tools">
+                <input id="q" placeholder="Название или артикул" oninput="renderBoard()">
+            </div>
+            <div class="grid" id="board"></div>
+        </section>
+        <aside class="cart" id="cart"></aside>
+    </div>
+</div>
+<script>
+var catalogs = {{ catalogs|tojson }};
+var cart = {{ cart|tojson }};
+var active = (catalogs[0] && catalogs[0].id) || '';
+var section = 'Все';
+
+function esc(value) {
+    return String(value || '').replace(/[&<>"']/g, function(ch) {
+        return {'&':'&','<':'<','>':'>','"':'"',"'":'&#39;'}[ch];
+    });
+}
+function current() {
+    for (var i = 0; i < catalogs.length; i++) if (catalogs[i].id === active) return catalogs[i];
+    return catalogs[0] || {items: [], sections: []};
+}
+function bag() {
+    return cart[active] || {};
+}
+function kindOf(item) {
+    var text = (item.stock || '').toLowerCase();
+    if (text.indexOf('нет') !== -1) return 'out';
+    if (text.indexOf('заканч') !== -1 || text.indexOf('ожид') !== -1 || text.indexOf('запрос') !== -1) return 'wait';
+    if (text.indexOf('налич') !== -1) return 'ok';
+    return '';
+}
+function renderTabs() {
+    var html = '';
+    catalogs.forEach(function(item) {
+        html += '<button type="button" class="' + (item.id === active ? 'on' : '') + '" onclick="pickCatalog(\'' + item.id + '\')">' + esc(item.title) + '</button>';
+    });
+    document.getElementById('tabs').innerHTML = html;
+}
+function pickCatalog(id) {
+    active = id;
+    section = 'Все';
+    document.getElementById('q').value = '';
+    renderAll();
+}
+function pickSection(name) {
+    section = name;
+    renderAll();
+}
+function renderSections() {
+    var book = current();
+    var counts = {'Все': book.items.length};
+    book.items.forEach(function(item) {
+        counts[item.section] = (counts[item.section] || 0) + 1;
+    });
+    var names = ['Все'].concat(book.sections || []);
+    var html = '';
+    names.forEach(function(name) {
+        html += '<button type="button" class="' + (name === section ? 'on' : '') + '" onclick="pickSection(this.getAttribute(\'data-name\'))" data-name="' + esc(name) + '">' + esc(name) + ' <span class="count">' + (counts[name] || 0) + '</span></button>';
+    });
+    document.getElementById('sections').innerHTML = html;
+    var note = document.createElement('p');
+    note.className = 'muted';
+    note.textContent = book.note || '';
+    document.getElementById('sections').appendChild(note);
+}
+function visibleItems() {
+    var query = (document.getElementById('q').value || '').trim().toLowerCase();
+    return current().items.filter(function(item) {
+        if (section !== 'Все' && item.section !== section) return false;
+        if (!query) return true;
+        return (item.name + ' ' + item.article).toLowerCase().indexOf(query) !== -1;
+    });
+}
+function renderBoard() {
+    var items = visibleItems();
+    if (!items.length) {
+        document.getElementById('board').innerHTML = '<div class="empty">Ничего не нашлось.</div>';
+        return;
+    }
+    var mine = bag();
+    var html = '';
+    items.forEach(function(item) {
+        var qty = mine[item.article] || 0;
+        var kind = kindOf(item);
+        html += '<article class="card' + (qty ? ' in' : '') + '" data-article="' + esc(item.article) + '">';
+        if (item.photo) html += '<img src="' + esc(item.photo) + '" alt="">';
+        else html += '<div class="no-photo">Нет фото</div>';
+        html += '<div class="body"><div class="article">' + esc(item.article) + '</div>';
+        html += '<div class="name">' + esc(item.name) + '</div>';
+        html += '<div class="meta"><span class="price">' + esc(item.price_text) + (item.cash ? ' безнал' : '') + '</span>';
+        html += '<span class="badge ' + kind + '">' + esc(item.stock) + '</span></div>';
+        html += '<div class="qty">';
+        html += '<button type="button" onclick="nudge(this,-1)">−</button>';
+        html += '<input value="' + qty + '" inputmode="numeric" onchange="nudge(this,0)">';
+        html += '<button type="button" onclick="nudge(this,1)">+</button>';
+        html += '</div></div></article>';
+    });
+    document.getElementById('board').innerHTML = html;
+}
+function money(item, qty) {
+    if (!item || item.price == null) return 0;
+    return item.price * qty;
+}
+function renderCart() {
+    var book = current();
+    var mine = bag();
+    var byArticle = {};
+    book.items.forEach(function(item) { byArticle[item.article] = item; });
+    var lines = Object.keys(mine).filter(function(article) { return mine[article] > 0; });
+    var total = 0;
+    var html = '<h2>Корзина</h2>';
+    if (!lines.length) html += '<p class="muted">Пока пусто. Нажми плюс у позиции.</p>';
+    lines.forEach(function(article) {
+        var item = byArticle[article] || {name: article, price: null, price_text: ''};
+        var qty = mine[article];
+        total += money(item, qty);
+        html += '<div class="line"><b>' + esc(article) + '</b><span>' + qty + ' шт</span><span class="muted">' + esc(item.name) + '</span><span>' + (item.price == null ? '' : Math.round(money(item, qty)) + ' ₽') + '</span></div>';
+    });
+    html += '<div class="sum">' + (total ? Math.round(total) + ' ₽' : '0 ₽') + '</div>';
+    html += '<button type="button" class="copy" onclick="copyOrder()">Скопировать заказ</button>';
+    html += '<button type="button" class="clear" onclick="clearCart()">Очистить</button>';
+    document.getElementById('cart').innerHTML = html;
+}
+function orderText() {
+    var mine = bag();
+    var lines = Object.keys(mine).filter(function(article) { return mine[article] > 0; });
+    if (!lines.length) return '';
+    return 'Добрый день! Планируем заказ:\n\n' + lines.map(function(article) {
+        return article + ' - ' + mine[article] + ' шт';
+    }).join('\n');
+}
+function copyOrder() {
+    var text = orderText();
+    if (!text) { alert('Корзина пустая'); return; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() { alert('Заказ скопирован'); }, function() { fallbackCopy(text); });
+        return;
+    }
+    fallbackCopy(text);
+}
+function fallbackCopy(text) {
+    var area = document.createElement('textarea');
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+    alert('Заказ скопирован');
+}
+function nudge(node, delta) {
+    var card = node.closest('[data-article]');
+    var article = card.getAttribute('data-article');
+    var input = card.querySelector('input');
+    var qty = parseInt(input.value, 10);
+    if (isNaN(qty)) qty = 0;
+    if (delta === 0) qty = parseInt(node.value, 10);
+    else qty += delta;
+    if (isNaN(qty) || qty < 0) qty = 0;
+    input.value = qty;
+    card.classList.toggle('in', qty > 0);
+    setQty(article, qty);
+}
+function setQty(article, qty) {
+    fetch('/api/purchase_cart', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({catalog: active, article: article, qty: qty})
+    }).then(function(response) { return response.json(); }).then(function(data) {
+        if (!data.success) { alert(data.error || 'Не записалось'); return; }
+        cart = data.cart || {};
+        renderCart();
+    }).catch(function() { alert('Нет сети'); });
+}
+function clearCart() {
+    var mine = bag();
+    var articles = Object.keys(mine);
+    if (!articles.length) return;
+    var next = articles.slice();
+    function step() {
+        var article = next.shift();
+        if (!article) { renderBoard(); renderCart(); return; }
+        fetch('/api/purchase_cart', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({catalog: active, article: article, qty: 0})
+        }).then(function(response) { return response.json(); }).then(function(data) {
+            if (data.success) cart = data.cart || {};
+            step();
+        });
+    }
+    step();
+}
+function renderAll() {
+    renderTabs();
+    renderSections();
+    renderBoard();
+    renderCart();
+}
+renderAll();
+</script>
+</body>
+</html>

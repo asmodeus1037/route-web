@@ -7078,6 +7078,180 @@ def admin_zelenograd():
     rows = [{'name': name, 'qty': int(stock.get(name) or 0), 'price': price} for name, price in PARTS]
     return render_template('admin_zelenograd.html', rows=rows, parts=PARTS, notice=notice, error=error)
 
+PURCHASE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'purchase', 'catalog.json')
+PURCHASE_CART = os.path.join(CACHE_DIR, 'purchase_cart.json')
+PURCHASE_SOURCES = {
+    'yuanhao': {
+        'url': 'https://docs.google.com/spreadsheets/d/1gEAZNNPVQz2-ulr3dXNdGwNr7KbgQmzaZ4XU0lNBfBk/export?format=csv&gid=95439607',
+        'header_at': 2,
+        'price_cols': (7, 5, 3),
+        'cash_col': 10,
+        'stock_col': 8,
+        'extra_col': 9,
+    },
+    'courier': {
+        'url': 'https://docs.google.com/spreadsheets/d/1B2MemXla8OYcS_edoBPZ1jZHgRfE1TpWhNEPLS_UFZ0/export?format=csv&gid=2067705846',
+        'header_at': 0,
+        'price_cols': (6, 5, 4),
+        'cash_col': 8,
+        'stock_col': 7,
+        'extra_col': None,
+    },
+}
+
+def purchase_money(text):
+    raw = str(text or '').replace('\xa0', '').replace(' ', '').replace('₽', '').replace('р.', '')
+    raw = raw.replace(',', '.')
+    match = re.search(r'\d+(?:\.\d+)?', raw)
+    if not match:
+        return None
+    value = float(match.group())
+    return value if value > 0 else None
+
+def purchase_price_text(value):
+    if value is None:
+        return ''
+    if abs(value - round(value)) < 0.05:
+        return f'{int(round(value))} ₽'
+    return f'{value:.2f}'.replace('.', ',') + ' ₽'
+
+def purchase_stock_kind(text):
+    low = str(text or '').lower()
+    if 'нет' in low:
+        return 'out'
+    if 'заканч' in low or 'ожид' in low or 'запрос' in low:
+        return 'wait'
+    if 'налич' in low:
+        return 'ok'
+    return ''
+
+def load_purchase_catalog():
+    data = _read_json(PURCHASE_FILE, {})
+    catalogs = data.get('catalogs') if isinstance(data, dict) else []
+    return catalogs if isinstance(catalogs, list) else []
+
+def save_purchase_catalog(catalogs):
+    os.makedirs(os.path.dirname(PURCHASE_FILE), exist_ok=True)
+    _write_json(PURCHASE_FILE, {'catalogs': catalogs})
+
+def load_purchase_cart():
+    data = _read_json(PURCHASE_CART, {})
+    return data if isinstance(data, dict) else {}
+
+def save_purchase_cart(data):
+    _write_json(PURCHASE_CART, data)
+
+def purchase_rows_from_csv(text, source):
+    import csv
+    import io
+    rows = list(csv.reader(io.StringIO(text)))
+    items = []
+    section = 'Без раздела'
+    for index, row in enumerate(rows):
+        if index <= source['header_at']:
+            continue
+        name = re.sub(r'\s+', ' ', (row[0] if row else '').replace('\n', ' ')).strip()
+        article = (row[1] if len(row) > 1 else '').strip()
+        priced = any(purchase_money(row[i]) for i in source['price_cols'] if i < len(row))
+        cash = purchase_money(row[source['cash_col']]) if source['cash_col'] < len(row) else None
+        if name and not article and not priced and cash is None:
+            section = name
+            continue
+        if not article:
+            continue
+        prices = [purchase_money(row[i]) for i in source['price_cols'] if i < len(row)]
+        prices = [price for price in prices if price]
+        price = cash if cash is not None else (prices[-1] if prices else None)
+        stock = (row[source['stock_col']] if source['stock_col'] < len(row) else '').strip()
+        extra_col = source.get('extra_col')
+        extra = (row[extra_col] if extra_col is not None and extra_col < len(row) else '').strip()
+        if extra and extra.lower() not in stock.lower():
+            stock = (stock + ', ' + extra).strip(', ')
+        items.append({
+            'article': article,
+            'name': name or article,
+            'section': section,
+            'price': price,
+            'price_text': purchase_price_text(price) or 'цена не указана',
+            'cash': cash is not None,
+            'stock': stock or 'не указано',
+            'stock_kind': purchase_stock_kind(stock or extra),
+        })
+    return items
+
+def refresh_purchase_catalog():
+    catalogs = load_purchase_catalog()
+    by_id = {item.get('id'): item for item in catalogs}
+    updated = []
+    for code, source in PURCHASE_SOURCES.items():
+        response = requests.get(source['url'], timeout=40)
+        response.raise_for_status()
+        response.encoding = 'utf-8'
+        fresh = purchase_rows_from_csv(response.text, source)
+        old = {row.get('article'): row for row in (by_id.get(code) or {}).get('items') or []}
+        for row in fresh:
+            previous = old.get(row['article']) or {}
+            row['photo'] = previous.get('photo') or ''
+        sections = []
+        for row in fresh:
+            if row['section'] not in sections:
+                sections.append(row['section'])
+        current = by_id.get(code) or {'id': code, 'title': code, 'note': ''}
+        current['sections'] = sections
+        current['items'] = fresh
+        updated.append(current)
+    save_purchase_catalog(updated)
+    return updated
+
+@app.route('/admin/purchase')
+@login_required
+def admin_purchase():
+    if session.get('role') != 'admin':
+        return redirect(url_for('login_page'))
+    return render_template(
+        'admin_purchase.html',
+        catalogs=load_purchase_catalog(),
+        cart=load_purchase_cart(),
+        notice=request.args.get('notice') or '',
+        error=request.args.get('error') or '',
+    )
+
+@app.route('/admin/purchase/refresh', methods=['POST'])
+@login_required
+def admin_purchase_refresh():
+    if session.get('role') != 'admin':
+        return redirect(url_for('login_page'))
+    try:
+        refresh_purchase_catalog()
+    except Exception as exc:
+        logger.warning(f'Каталог закупки не обновился: {exc}')
+        return redirect(url_for('admin_purchase', error='Таблица сейчас не открылась. Каталог остался прежним.'))
+    return redirect(url_for('admin_purchase', notice='Цены и наличие обновлены. Фото остаются с прошлого каталога.'))
+
+@app.route('/api/purchase_cart', methods=['POST'])
+@login_required
+def api_purchase_cart():
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Только для руководителя'}), 403
+    data = request.json or {}
+    code = str(data.get('catalog') or '').strip()
+    article = str(data.get('article') or '').strip()
+    try:
+        qty = int(data.get('qty') or 0)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Нужно число'})
+    if code not in PURCHASE_SOURCES or not article:
+        return jsonify({'success': False, 'error': 'Нет такой позиции'})
+    cart = load_purchase_cart()
+    bag = cart.get(code) if isinstance(cart.get(code), dict) else {}
+    if qty <= 0:
+        bag.pop(article, None)
+    else:
+        bag[article] = qty
+    cart[code] = bag
+    save_purchase_cart(cart)
+    return jsonify({'success': True, 'cart': cart})
+
 @app.route('/master/<name>/darks/<darks_number>/done/<uid>', methods=['POST'])
 @login_required
 def master_done(name, darks_number, uid):
