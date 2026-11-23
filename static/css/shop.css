@@ -94,5 +94,5 @@ textarea {
 .row { display: flex; gap: 8px; }
 .row form, .row button { flex: 1; }
 .wide, .ghost { width: 100%; }
-.note { margin: 8px 0 0; font-size: 14px; }
+.note { margin: 8px 0 0; font-size: 14px; word-break: break-word; }
 .past { margin-top: 8px; color: #475569; font-size: 13px; }

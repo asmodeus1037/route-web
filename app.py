@@ -5294,7 +5294,12 @@ def auto_login(login):
 @app.route('/logout')
 def logout():
     session.clear()
-    return redirect(url_for('login_page'))
+    return (
+        '<!DOCTYPE html><meta charset="utf-8"><title>Выход</title><script>'
+        'try{localStorage.removeItem("master_login");localStorage.removeItem("master_name");}catch(e){}'
+        'location.replace("/login?out=1");'
+        '</script>'
+    )
 
 @app.after_request
 def no_store_master_pages(response):

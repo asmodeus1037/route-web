@@ -14,6 +14,15 @@
         </div>
         <a href="/logout">Выйти</a>
     </div>
+    {% if role == 'shop_admin' and sheet_error %}
+    <article class="card">
+        <div class="badge back">Таблица не записалась</div>
+        <p class="note">{{ sheet_error }}</p>
+        {% if service_email %}
+        <p class="note">В доступ к файлу добавь редактором этот адрес, не свой: {{ service_email }}</p>
+        {% endif %}
+    </article>
+    {% endif %}
     <form class="search" method="get" action="/shop">
         <input name="q" value="{{ query }}" placeholder="Рама, госномер или IoT">
         <button type="submit">Найти</button>

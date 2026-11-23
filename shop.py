@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import threading
 from datetime import datetime, timedelta, timezone
@@ -66,6 +67,26 @@ def load_state():
         return state
     with open(path, encoding='utf-8') as handle:
         return json.load(handle)
+
+
+def service_email():
+    path = '/data/credentials.json'
+    if not os.path.exists(path):
+        return ''
+    try:
+        with open(path, encoding='utf-8') as handle:
+            return (json.load(handle).get('client_email') or '').strip()
+    except Exception:
+        return ''
+
+
+def push_sheet(state):
+    try:
+        mirror_to_sheet(state)
+        return ''
+    except Exception as exc:
+        logging.getLogger(__name__).warning('Цех не записал таблицу: %s', exc)
+        return str(exc)
 
 
 def save_state(state, sync=True):
@@ -139,7 +160,7 @@ def mirror_to_sheet(state):
                     item.get('part') or '', item.get('qty') or '1',
                 ])
         sheet.clear()
-        sheet.update(rows, value_input_option='USER_ENTERED')
+        sheet.update(values=rows, range_name='A1', value_input_option='USER_ENTERED')
 
 
 def guard():
@@ -185,6 +206,7 @@ def home():
     history = {}
     for item in state.get('history') or []:
         history.setdefault(item.get('sn') or '', []).append(item)
+    sheet_error = push_sheet(state)
     return render_template(
         'shop.html',
         bikes=bikes,
@@ -195,6 +217,8 @@ def home():
         name=name,
         query=request.args.get('q') or '',
         book_id=SHOP_BOOK_ID,
+        sheet_error=sheet_error,
+        service_email=service_email(),
     )
 
 

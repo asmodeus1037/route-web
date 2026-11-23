@@ -1,5 +1,10 @@
+var params = new URLSearchParams(window.location.search);
+if (params.get('out') === '1') {
+    localStorage.removeItem('master_login');
+    localStorage.removeItem('master_name');
+}
 var savedLogin = localStorage.getItem('master_login');
-if (savedLogin) {
+if (savedLogin && params.get('out') !== '1') {
     window.location.href = '/auto_login/' + savedLogin;
 }
 
