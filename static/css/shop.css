@@ -1,0 +1,98 @@
+body {
+    margin: 0;
+    background: #f4f6f8;
+    color: #1f2933;
+    font-family: Arial, sans-serif;
+}
+.top {
+    position: sticky;
+    top: 0;
+    background: #fff;
+    padding: 12px 16px;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+.top b { font-size: 18px; }
+.top a { color: #64748b; font-size: 14px; }
+.search {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px 0;
+}
+.search input {
+    flex: 1;
+    padding: 12px;
+    border: 1px solid #d6dde6;
+    border-radius: 10px;
+    font-size: 16px;
+}
+.search button, .wide, .ghost {
+    border: 0;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 15px;
+    font-weight: 700;
+}
+.search button, .wide { background: #0f6bff; color: #fff; }
+.ghost { background: #fff; color: #9a3412; border: 1px solid #fdba74; }
+.counts {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 12px 16px;
+}
+.counts span {
+    background: #fff;
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.card {
+    background: #fff;
+    margin: 0 16px 12px;
+    border-radius: 14px;
+    padding: 14px;
+}
+.card h2 { margin: 0 0 6px; font-size: 18px; }
+.meta { color: #64748b; font-size: 14px; line-height: 1.4; }
+.badge {
+    display: inline-block;
+    margin-bottom: 8px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+}
+.wait { background: #fef3c7; color: #92400e; }
+.work { background: #fee2e2; color: #991b1b; }
+.review { background: #ede9fe; color: #5b21b6; }
+.back { background: #ffedd5; color: #9a3412; }
+.parts { background: #e0f2fe; color: #075985; }
+.free { background: #dcfce7; color: #166534; }
+textarea {
+    width: 100%;
+    min-height: 70px;
+    box-sizing: border-box;
+    margin: 8px 0;
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid #d6dde6;
+    font-size: 16px;
+}
+.choices { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.choices label {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: 13px;
+}
+.row { display: flex; gap: 8px; }
+.row form, .row button { flex: 1; }
+.wide, .ghost { width: 100%; }
+.note { margin: 8px 0 0; font-size: 14px; }
+.past { margin-top: 8px; color: #475569; font-size: 13px; }

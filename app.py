@@ -18,6 +18,8 @@ from functools import wraps
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeout
 
 app = Flask(__name__)
+from shop import shop_bp
+app.register_blueprint(shop_bp)
 app.secret_key = secrets.token_hex(16)
 
 # ============================================================
@@ -96,7 +98,9 @@ MASTER_CREDENTIALS = {
     'sergey': {'password': 'sergey1992', 'name': 'Сергей', 'role': 'master'},
     'transit': {'password': 'transit2024', 'name': 'Транзит', 'role': 'master'},
     'ivan': {'password': 'ivan1994', 'name': 'Иван', 'role': 'master'},
-    'iot': {'password': 'iot2026', 'name': 'IOT-Мастер', 'role': 'iot'}
+    'iot': {'password': 'iot2026', 'name': 'IOT-Мастер', 'role': 'iot'},
+    'andrey': {'password': 'adnrey123', 'name': 'Андрей', 'role': 'shop_admin'},
+    'seva': {'password': 'seva123', 'name': 'Сева', 'role': 'shop'},
 }
 
 # ============================================================
@@ -5281,6 +5285,8 @@ def auto_login(login):
             return redirect(url_for('admin_panel'))
         elif role == 'iot':
             return redirect(url_for('iot_main'))
+        elif role in ('shop', 'shop_admin'):
+            return redirect(url_for('shop.home'))
         else:
             return redirect(url_for('master_overview', name=master_name))
     return redirect(url_for('login_page'))
@@ -8969,6 +8975,11 @@ if __name__ == "__main__":
         traceback.print_exc()
     
     port = int(os.environ.get("PORT", 5000))
+    try:
+        import bridge_client
+        bridge_client.ensure_started()
+    except Exception as bridge_error:
+        logger.error(f"Мост не запустился: {bridge_error}")
     
     ssl_context = None
     try:

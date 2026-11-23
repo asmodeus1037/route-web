@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <title>Цех</title>
+    <link rel="stylesheet" href="/static/css/shop.css?v=1">
+</head>
+<body>
+    <div class="top">
+        <div>
+            <b>Цех</b>
+            <div class="meta">{{ name }}{% if role == 'shop_admin' %} · приёмка{% else %} · ремонт{% endif %}</div>
+        </div>
+        <a href="/logout">Выйти</a>
+    </div>
+    <form class="search" method="get" action="/shop">
+        <input name="q" value="{{ query }}" placeholder="Рама, госномер или IoT">
+        <button type="submit">Найти</button>
+    </form>
+    <div class="counts">
+        <span>Ждёт {{ counts.get('ОЖИДАЕТ РЕМОНТА', 0) }}</span>
+        <span>В ремонте {{ counts.get('РЕМОНТ', 0) }}</span>
+        <span>Запчасти {{ counts.get('ОЖИДАЕТ ЗАПЧАСТИ', 0) }}</span>
+        <span>Проверка {{ counts.get('НА ПРОВЕРКУ', 0) }}</span>
+        <span>Доработка {{ counts.get('НА ДОРАБОТКУ', 0) }}</span>
+    </div>
+    {% for bike in bikes %}
+    <article class="card">
+        {% set status = bike.status %}
+        <div class="badge {% if status == 'ОЖИДАЕТ РЕМОНТА' %}wait{% elif status == 'РЕМОНТ' %}work{% elif status == 'НА ПРОВЕРКУ' %}review{% elif status == 'НА ДОРАБОТКУ' %}back{% elif status == 'ОЖИДАЕТ ЗАПЧАСТИ' %}parts{% else %}free{% endif %}">{{ status }}</div>
+        <h2>{{ bike.gos or 'без номера' }}</h2>
+        <div class="meta">
+            {{ bike.kind }}<br>
+            Рама {{ bike.sn }}{% if bike.iot %} · IoT {{ bike.iot }}{% endif %}<br>
+            {% if bike.master %}Мастер {{ bike.master }}{% endif %}
+        </div>
+        {% if bike.reason %}<p class="note">Вывоз: {{ bike.reason }}</p>{% endif %}
+        {% if bike.info %}<p class="note">{{ bike.info }}</p>{% endif %}
+        {% if role == 'shop' and status in ['ОЖИДАЕТ РЕМОНТА', 'НА ДОРАБОТКУ', 'ОЖИДАЕТ ЗАПЧАСТИ'] and bike.master != name %}
+        <form method="post" action="/shop/take">
+            <input type="hidden" name="sn" value="{{ bike.sn }}">
+            <button class="wide" type="submit">Взять в ремонт</button>
+        </form>
+        {% endif %}
+        {% if role == 'shop' and bike.master == name and status in ['РЕМОНТ', 'ОЖИДАЕТ ЗАПЧАСТИ', 'НА ДОРАБОТКУ'] %}
+        <form method="post" action="/shop/finish">
+            <input type="hidden" name="sn" value="{{ bike.sn }}">
+            <textarea name="comment" placeholder="Что сделано" required></textarea>
+            <div class="choices">
+                {% for part in parts %}
+                <label><input type="checkbox" name="part_{{ part }}" value="1"> {{ part }}</label>
+                {% endfor %}
+            </div>
+            <button class="wide" type="submit">Сдать на проверку</button>
+        </form>
+        {% if status == 'РЕМОНТ' %}
+        <form method="post" action="/shop/wait-parts">
+            <input type="hidden" name="sn" value="{{ bike.sn }}">
+            <input type="hidden" name="comment" value="Нет запчасти">
+            <button class="ghost" type="submit">Нет запчасти</button>
+        </form>
+        {% endif %}
+        {% endif %}
+        {% if role == 'shop_admin' and status == 'НА ПРОВЕРКУ' %}
+        <div class="row">
+            <form method="post" action="/shop/approve">
+                <input type="hidden" name="sn" value="{{ bike.sn }}">
+                <button class="wide" type="submit">Принять</button>
+            </form>
+        </div>
+        <form method="post" action="/shop/rework">
+            <input type="hidden" name="sn" value="{{ bike.sn }}">
+            <textarea name="comment" placeholder="Что исправить" required></textarea>
+            <button class="ghost" type="submit">На доработку</button>
+        </form>
+        {% endif %}
+        {% for item in (history.get(bike.sn) or [])[-3:] %}
+        <div class="past">{{ item.time }} · {{ item.who }} · {{ item.old }} → {{ item.new }}{% if item.comment %} · {{ item.comment }}{% endif %}</div>
+        {% endfor %}
+    </article>
+    {% else %}
+    <article class="card"><div class="meta">В этом списке пусто.</div></article>
+    {% endfor %}
+</body>
+</html>
