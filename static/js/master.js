@@ -206,7 +206,7 @@ function refreshNewBike(uid) {
     var note = group.querySelector('.lock-note');
     if (note) note.hidden = ready;
     var button = document.getElementById('swapSend_' + uid);
-    if (button) button.disabled = !ready;
+    if (button) button.disabled = !ready || Boolean(window.swapLock && window.swapLock[uid]);
 }
 
 function refuseEvacuation(name, darks, uid) {
@@ -284,15 +284,23 @@ function submitEvacuation(name, darksNumber, uid, gos) {
         }
     };
     
-    sendOrQueue({
-        url: '/master/evacuation/replace',
-        method: 'POST',
-        body: JSON.stringify(data),
-        contentType: 'application/json',
-        uid: uid,
-        okText: 'Замена ушла',
-        hideNow: true
-    });
+    try {
+        queueAction({
+            url: '/master/evacuation/replace',
+            method: 'POST',
+            body: JSON.stringify(data),
+            contentType: 'application/json',
+            uid: uid,
+            okText: 'Замена ушла'
+        });
+    } catch (error) {
+        delete window.swapLock[uid];
+        refreshNewBike(uid);
+        showToast('Не удалось сохранить замену на телефоне. Данные остались в форме.', true);
+        return false;
+    }
+    showToast('Замена сохранена на телефоне и ждёт подтверждения сервера.');
+    flushOutbox();
     
     return false;
 }
@@ -302,6 +310,7 @@ function submitEvacuation(name, darksNumber, uid, gos) {
 // ============================================================
 var OUTBOX_KEY = 'master_outbox_v1';
 var outboxFlushing = false;
+var lastOutboxAttempt = null;
 
 function readOutbox() {
     try {
@@ -369,7 +378,9 @@ function flushOutbox() {
     var items = readOutbox();
     if (!items.length) return;
     outboxFlushing = true;
-    var item = items[0];
+    var lastIndex = items.findIndex(function(item) { return item.id === lastOutboxAttempt; });
+    var item = items[(lastIndex + 1) % items.length];
+    lastOutboxAttempt = item.id;
     var opts = { method: item.method || 'POST', credentials: 'same-origin' };
     if (item.body) {
         opts.body = item.body;
@@ -381,6 +392,8 @@ function flushOutbox() {
             outboxFlushing = false;
             if (data && data.success) {
                 writeOutbox(readOutbox().filter(function(x) { return x.id !== item.id; }));
+                lastOutboxAttempt = null;
+                if (item.okText) showToast(item.okText);
                 flushOutbox();
             }
         })

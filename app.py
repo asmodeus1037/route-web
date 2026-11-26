@@ -4,6 +4,8 @@ import json
 import random
 import time
 import threading
+import fcntl
+from contextlib import contextmanager
 import requests
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session, send_from_directory, send_file
 from datetime import datetime, timedelta
@@ -109,7 +111,6 @@ MASTER_CREDENTIALS = {
 uid_index = {}
 darks_ref = {}
 _darks_loaded_at = 0
-queue_lock = threading.Lock()
 flush_lock = threading.Lock()
 
 # Кэш в памяти для IOT (мгновенный доступ)
@@ -2033,15 +2034,27 @@ def find_uid_in_sheets(uid):
 # ============================================================
 # ОЧЕРЕДЬ ЗАДАЧ
 # ============================================================
+@contextmanager
+def data_file_lock(name, blocking=True):
+    with open(get_cache_path(name + '.lock'), 'a', encoding='utf-8') as lock:
+        operation = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+        try:
+            fcntl.flock(lock, operation)
+        except BlockingIOError:
+            yield False
+        else:
+            yield True
+
+
 def get_queue_path():
     return os.path.join(CACHE_DIR, "queue.json")
 
 def read_queue():
-    with queue_lock:
+    with data_file_lock('queue'):
         return _load_queue()
 
 def write_queue(queue_data):
-    with queue_lock:
+    with data_file_lock('queue'):
         try:
             _save_queue(queue_data)
             return True
@@ -2062,11 +2075,16 @@ def _load_queue():
 
 def _save_queue(queue_data):
     path = get_queue_path()
-    with open(path, 'w', encoding='utf-8') as f:
+    temporary = path + '.tmp'
+    with open(temporary, 'w', encoding='utf-8') as f:
         json.dump(queue_data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(temporary, path)
+
 
 def add_to_queue(task):
-    with queue_lock:
+    with data_file_lock('queue'):
         if task.get('uid') and not task.get('row_index'):
             found = find_uid_in_sheets(task.get('uid'))
             if found:
@@ -3061,7 +3079,7 @@ def sheet_report_keys():
     return keys
 
 def set_queue_note(error):
-    with queue_lock:
+    with data_file_lock('queue'):
         data = _load_queue()
         data['last_error'] = str(error or '')
         data['last_error_at'] = get_msk_now().strftime('%d.%m.%Y %H:%M') if error else ''
@@ -3077,11 +3095,18 @@ def report_tasks_of(tasks):
     return rows
 
 def flush_queue():
+    with data_file_lock('queue-flush', blocking=False) as acquired:
+        if not acquired:
+            return 0
+        return flush_queue_locked()
+
+
+def flush_queue_locked():
     if not flush_lock.acquire(blocking=False):
         return 0
     try:
         try:
-            with queue_lock:
+            with data_file_lock('queue'):
                 queue_data = _load_queue()
                 tasks = list(queue_data.get('tasks') or [])
                 if not tasks:
@@ -3116,7 +3141,7 @@ def flush_queue():
                     append_master_history(data.get('master'), task.get('type'), data)
             if report_tasks or fresh:
                 save_report_ledger(ledger)
-            with queue_lock:
+            with data_file_lock('queue'):
                 queue_data = _load_queue()
                 queue_data['tasks'] = [task for task in (queue_data.get('tasks') or []) if task.get('qid') not in taken_ids or task.get('qid') in skipped]
                 queue_data['last_sync'] = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
@@ -4925,15 +4950,16 @@ def master_gai_done(name, uid):
         except Exception as exc:
             logger.warning(f'Старый велосипед ГАИ в базе не нашёлся: {exc}')
     try:
-        append_bike_swap(
-            ticket.get('address') or '',
-            ticket.get('darks') or '',
-            old_data,
-            {'serial': new_data['serial'], 'gos': new_data['gos'], 'iot': new_data['iot']},
-            name,
-            uid,
-            'ГАИ',
-        )
+        with data_file_lock('replacement'):
+            append_bike_swap(
+                ticket.get('address') or '',
+                ticket.get('darks') or '',
+                old_data,
+                {'serial': new_data['serial'], 'gos': new_data['gos'], 'iot': new_data['iot']},
+                name,
+                uid,
+                'ГАИ',
+            )
     except Exception as exc:
         logger.warning(f'Замена ГАИ в «Замены вело» не записалась: {exc}')
     date = get_msk_now().strftime('%d.%m.%Y')
@@ -6664,6 +6690,8 @@ def master_darks(name, darks_number):
         filtered = [t for t in tickets if same_master(t.get('master'), name) and str(t.get('darks')) == str(darks_number) and is_active_status(t.get('status'))]
         enrich_tickets(filtered)
         save_master_cache(name, filtered, '')
+    completed_swaps = set((read_cache(SWAP_DONE_FILE) or {}).get('uids') or [])
+    filtered = [t for t in filtered if str(t.get('uid')) not in completed_swaps]
     enrich_tickets(filtered)
     
     for t in filtered:
@@ -7508,6 +7536,18 @@ def master_done(name, darks_number, uid):
     if session.get('master_name') != name:
         logger.warning(f"❌ Сессия не совпадает: {session.get('master_name')} != {name}")
         return jsonify({'success': False, 'error': 'Доступ запрещён'})
+    with data_file_lock('repair-close'):
+        ticket = find_cached_ticket(uid) or {}
+        if ticket.get('status') == 'done' or any(
+            task.get('uid') == uid and task.get('type') == 'done'
+            for task in read_queue().get('tasks', [])
+        ):
+            remove_ticket_from_master_cache(name, uid)
+            return jsonify({'success': True})
+        return finish_master_repair(name, darks_number, uid, ticket)
+
+
+def finish_master_repair(name, darks_number, uid, ticket):
     parts_raw = request.form.get('parts_json', '').strip()
     comment = request.form.get('comment', '').strip()
     legacy = request.form.get('parts', '').strip()
@@ -7519,7 +7559,6 @@ def master_done(name, darks_number, uid):
             return jsonify({'success': False, 'error': 'Не понял список запчастей'})
         if not isinstance(selected, list):
             selected = []
-    ticket = find_cached_ticket(uid) or {}
     raw = (legacy or comment or '').strip()
     if raw.lower() == 'нет' and not selected:
         parts = 'нет'
@@ -7539,15 +7578,14 @@ def master_done(name, darks_number, uid):
             return jsonify({'success': False, 'error': 'Выберите запчасть или напишите «нет»'})
         parts = parts_text
     event = parts
-    update_ticket_in_admin_cache(uid, 'done', event)
-    refresh_master_caches_from_admin()
-    
     add_to_queue({
         'uid': uid,
         'source': source_of(uid),
         'type': 'done',
         'data': {'parts': event, 'detail': event, 'note': event, 'master': name, 'darks_number': darks_number, 'gos': ticket.get('gos', '')}
     })
+    update_ticket_in_admin_cache(uid, 'done', event)
+    refresh_master_caches_from_admin()
     label = ticket_label(ticket)
     if parts == 'Отказ от эвакуации':
         notify_dark_event(darks_number, f'{label} отказ от эвакуации', uid, 'refuse')
@@ -7708,37 +7746,37 @@ def master_replace_no(name, darks_number, uid):
 REPLACEMENT_BOOK_ID = "1s_hXPSWueMAo3W1pgLCG0eHhYKoW0uoIZ6CGWFf55VU"
 REPLACEMENT_GID = 1296698244
 SWAP_DONE_FILE = 'swap_done.json'
-_swap_lock = threading.Lock()
-_swap_inflight = set()
-
 def swap_already_done(uid):
     data = read_cache(SWAP_DONE_FILE) or {}
-    done = data.get('uids') if isinstance(data, dict) else []
-    return str(uid) in {str(item) for item in (done or [])}
+    return str(uid) in (data.get('uids') or [])
+
 
 def mark_swap_done(uid):
     data = read_cache(SWAP_DONE_FILE) or {}
-    done = list(data.get('uids') or []) if isinstance(data, dict) else []
-    if str(uid) not in {str(item) for item in done}:
-        done.append(str(uid))
-    write_cache(SWAP_DONE_FILE, {'uids': done[-2000:]})
+    done = list(data.get('uids') or [])
+    key = str(uid)
+    if key not in done:
+        done.append(key)
+    temporary = SWAP_DONE_FILE + '.tmp'
+    if not write_cache(temporary, {'uids': done[-2000:]}):
+        raise OSError('Не удалось сохранить подтверждение замены')
+    os.replace(get_cache_path(temporary), get_cache_path(SWAP_DONE_FILE))
 
-def begin_swap(uid):
-    key = str(uid or '').strip()
-    if not key:
-        return False
-    with _swap_lock:
-        if key in _swap_inflight or swap_already_done(key):
-            return False
-        _swap_inflight.add(key)
-        return True
 
-def finish_swap(uid, ok):
-    key = str(uid or '').strip()
-    with _swap_lock:
-        _swap_inflight.discard(key)
-        if ok and key:
-            mark_swap_done(key)
+def existing_swap_row(sheet, uid, column):
+    if not uid:
+        return None
+    for index, value in enumerate(sheet.col_values(column), start=1):
+        if str(value).strip() == str(uid):
+            return index
+    return None
+
+
+def last_swap_row(sheet, columns):
+    rows = sheet.get(columns)
+    return max((index for index, row in enumerate(rows, start=1)
+                if any(str(cell).strip() for cell in row)), default=1)
+
 
 def append_bike_swap(address, darks_number, old_data, new_data, master='', uid='', kind='Эвакуация'):
     try:
@@ -7761,40 +7799,29 @@ def append_bike_swap(address, darks_number, old_data, new_data, master='', uid='
     if sheet is None:
         names = ', '.join(item.title for item in book.worksheets())
         raise RuntimeError(f'Лист «Замены вело» не найден. В файле есть: {names}')
-    filled = sheet.get('A:I')
-    existing = None
-    if uid:
-        try:
-            marks = sheet.col_values(20)
-        except Exception:
-            marks = []
-        for index, value in enumerate(marks, start=1):
-            if str(value).strip() == str(uid):
-                existing = index
-                break
-    if existing:
-        target = existing
-    else:
-        last = 1
-        for index, row in enumerate(filled, start=1):
-            if any(str(cell).strip() for cell in row):
-                last = index
-        target = last + 1
-    sheet.update(
-        f'A{target}:I{target}',
-        [[
-            get_msk_now().strftime('%d.%m.%Y %H:%M:%S'),
-            address or '',
-            str(darks_number or ''),
-            (old_data or {}).get('serial', ''),
-            (old_data or {}).get('gos', ''),
-            (old_data or {}).get('iot', ''),
-            (new_data or {}).get('serial', ''),
-            (new_data or {}).get('gos', ''),
-            (new_data or {}).get('iot', ''),
-        ]],
-        value_input_option='USER_ENTERED',
-    )
+    if sheet.col_count < 20:
+        sheet.add_cols(20 - sheet.col_count)
+    if not (sheet.acell('R1').value or '').strip():
+        sheet.update('R1:T1', [['Мастер', 'ID заявки', 'Тип']], value_input_option='RAW')
+    target = existing_swap_row(sheet, uid, 19)
+    if target is None:
+        target = last_swap_row(sheet, 'A:I') + 1
+        if target > sheet.row_count:
+            sheet.add_rows(target - sheet.row_count)
+        sheet.batch_update([
+            {'range': f'A{target}:I{target}', 'values': [[
+                get_msk_now().strftime('%d.%m.%Y %H:%M:%S'),
+                address or '',
+                str(darks_number or ''),
+                (old_data or {}).get('serial', ''),
+                (old_data or {}).get('gos', ''),
+                (old_data or {}).get('iot', ''),
+                (new_data or {}).get('serial', ''),
+                (new_data or {}).get('gos', ''),
+                (new_data or {}).get('iot', ''),
+            ]]},
+            {'range': f'R{target}:T{target}', 'values': [[master or '', uid or '', kind]]},
+        ], value_input_option='RAW')
     try:
         known = frame_numbers()
         taken_key = re.sub(r'\s+', '', str((old_data or {}).get('serial') or ''))
@@ -7810,14 +7837,6 @@ def append_bike_swap(address, darks_number, old_data, new_data, master='', uid='
         sheet.update(f'Q{target}', [[mark]], value_input_option='USER_ENTERED')
     except Exception as exc:
         logger.warning(f'Серийные номера или «Применить» в строку {target} не встали: {exc}')
-    try:
-        if sheet.col_count < 20:
-            sheet.add_cols(20 - sheet.col_count)
-        if not (sheet.acell('R1').value or '').strip():
-            sheet.update('R1:T1', [['Мастер', 'ID заявки', 'Тип']], value_input_option='RAW')
-        sheet.update(f'R{target}:T{target}', [[master or '', uid or '', kind or 'Эвакуация']], value_input_option='USER_ENTERED')
-    except Exception as e:
-        logger.warning(f'Строка {target} записана, мастер и номер заявки в конец не встали: {e}')
     logger.info(f"✅ Замена записана в «{sheet.title}», строка {target}, даркстор {darks_number}")
     db.mirror_replacement({
         'uid': uid,
@@ -7829,39 +7848,44 @@ def append_bike_swap(address, darks_number, old_data, new_data, master='', uid='
         'new': new_data or {},
     })
 
-def write_transit_replacement(uid, master_name, darks_number, address, old_data, new_data):
+def write_swap_report(uid, master, darks, address, old_data, new_data, kind):
+    sheet_client = get_sheet_client()
     try:
-        append_bike_swap(address, darks_number, old_data, new_data, master_name, uid, 'Замена')
-        sheet_client = get_sheet_client()
-        now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
-        try:
-            report_sheet = sheet_client.worksheet("Эвакуация Транзит")
-        except Exception:
-            report_sheet = sheet_client.add_worksheet("Эвакуация Транзит", 100, 20)
-            headers = ['Отметка времени', 'Адрес даркстора', 'Номер даркстора',
-                      'ЗАБРАЛ - Серийный номер', 'ЗАБРАЛ - Гос номер', 'ЗАБРАЛ - Номер айот',
-                      'ОТДАЛ - Серийный номер', 'ОТДАЛ - Гос номер', 'ОТДАЛ - Номер айот']
-            for i, h in enumerate(headers, start=1):
-                report_sheet.update_cell(1, i, h)
-        current_rows = report_sheet.get_all_values()
-        new_row_idx = len(current_rows) + 1
-        updates = [
-            {'range': f'A{new_row_idx}', 'values': [[now]]},
-            {'range': f'B{new_row_idx}', 'values': [[address]]},
-            {'range': f'C{new_row_idx}', 'values': [[darks_number]]},
-            {'range': f'D{new_row_idx}', 'values': [[old_data.get('serial', '')]]},
-            {'range': f'E{new_row_idx}', 'values': [[old_data.get('gos', '')]]},
-            {'range': f'F{new_row_idx}', 'values': [[old_data.get('iot', '')]]},
-            {'range': f'G{new_row_idx}', 'values': [[new_data.get('serial', '')]]},
-            {'range': f'H{new_row_idx}', 'values': [[new_data.get('gos', '')]]},
-            {'range': f'I{new_row_idx}', 'values': [[new_data.get('iot', '')]]}
-        ]
-        report_sheet.batch_update(updates)
-        export_removal_reason(old_data, evacuation_reason(find_cached_ticket(uid) or {'desc': 'Замена'}))
-        logger.info(f"✅ Записана замена велосипеда для заявки {uid}")
-    except Exception as e:
-        logger.error(f"Ошибка записи замены велосипеда: {e}")
-        raise
+        sheet = sheet_client.worksheet('Эвакуация Транзит')
+    except gspread.exceptions.WorksheetNotFound:
+        sheet = sheet_client.add_worksheet('Эвакуация Транзит', 100, 20)
+        headers = ['Отметка времени', 'Мастер', 'ID заявки', 'Адрес даркстора', 'Номер даркстора',
+                   'ЗАБРАЛ - Серийный номер', 'ЗАБРАЛ - Гос номер', 'ЗАБРАЛ - Номер айот',
+                   'ОТДАЛ - Серийный номер', 'ОТДАЛ - Гос номер', 'ОТДАЛ - Номер айот', 'Тип']
+        sheet.update('A1:L1', [headers], value_input_option='RAW')
+    if kind == 'Эвакуация' and existing_swap_row(sheet, uid, 3):
+        # Existing evacuation reports already carry the request ID in C.
+        return
+    if sheet.col_count < 20:
+        sheet.add_cols(20 - sheet.col_count)
+    if existing_swap_row(sheet, uid, 20):
+        return
+    target = last_swap_row(sheet, 'A:L') + 1
+    if target > sheet.row_count:
+        sheet.add_rows(target - sheet.row_count)
+    bikes = [bike.get(field, '') for bike in (old_data, new_data) for field in ('serial', 'gos', 'iot')]
+    now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
+    if kind == 'Эвакуация':
+        values = [now, master, uid, address, darks, *bikes, kind]
+    else:
+        values = [now, address, darks, *bikes]
+    end = 'L' if kind == 'Эвакуация' else 'I'
+    sheet.batch_update([
+        {'range': f'A{target}:{end}{target}', 'values': [values]},
+        {'range': f'T{target}', 'values': [[uid]]},
+    ], value_input_option='RAW')
+
+
+def write_transit_replacement(uid, master_name, darks_number, address, old_data, new_data):
+    append_bike_swap(address, darks_number, old_data, new_data, master_name, uid, 'Замена')
+    write_swap_report(uid, master_name, darks_number, address, old_data, new_data, 'Замена')
+    export_removal_reason(old_data, evacuation_reason(find_cached_ticket(uid) or {'desc': 'Замена'}))
+
 
 @app.route('/master/transit/replace', methods=['POST'])
 @login_required
@@ -7873,23 +7897,17 @@ def transit_replace():
     address = data.get('address', '')
     old_data = data.get('old_data', {})
     new_data = data.get('new_data', {})
-    if not begin_swap(uid):
-        return jsonify({'success': True, 'message': 'Замена уже отправлена'})
+    if not uid or not master_name or not darks_number:
+        return jsonify({'success': False, 'error': 'Недостаточно данных'}), 400
     try:
-        write_transit_replacement(uid, master_name, darks_number, address, old_data, new_data)
-        update_ticket_in_admin_cache(uid, 'done', 'Заменен')
-        add_to_queue({
-            'uid': uid,
-            'source': source_of(uid),
-            'type': 'transit_replace',
-            'data': {'master': master_name, 'darks_number': darks_number}
-        })
-        finish_swap(uid, True)
+        with data_file_lock('replacement'):
+            if not swap_already_done(uid):
+                write_transit_replacement(uid, master_name, darks_number, address, old_data, new_data)
+                close_replacement(uid, master_name, darks_number, 'transit_replace', 'Заменен')
         return jsonify({'success': True, 'message': 'Замена выполнена'})
     except Exception as e:
-        finish_swap(uid, False)
         logger.error(f"Ошибка замены велосипеда: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 # ============================================================
 # ФУНКЦИИ ДЛЯ ЭВАКУАЦИИ
@@ -8026,48 +8044,25 @@ def export_removal_reason(old_data, reason):
         logger.error(f'Не записал причину эвакуации: {e}')
 
 def write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data, reason=''):
-    try:
-        for blob in (old_data, new_data):
-            if isinstance(blob, dict):
-                blob['iot'] = ensure_iot_prefix(blob.get('iot'))
-        append_bike_swap(address, darks_number, old_data, new_data, master_name, uid, 'Эвакуация')
-        sheet_client = get_sheet_client()
-        now = get_msk_now().strftime('%Y-%m-%d %H:%M:%S')
-        
-        try:
-            report_sheet = sheet_client.worksheet("Эвакуация Транзит")
-        except:
-            report_sheet = sheet_client.add_worksheet("Эвакуация Транзит", 100, 20)
-            headers = ['Отметка времени', 'Мастер', 'ID заявки', 'Адрес даркстора', 'Номер даркстора',
-                      'ЗАБРАЛ - Серийный номер', 'ЗАБРАЛ - Гос номер', 'ЗАБРАЛ - Номер айот',
-                      'ОТДАЛ - Серийный номер', 'ОТДАЛ - Гос номер', 'ОТДАЛ - Номер айот', 'Тип']
-            for i, h in enumerate(headers, start=1):
-                report_sheet.update_cell(1, i, h)
-        
-        current_rows = report_sheet.get_all_values()
-        new_row_idx = len(current_rows) + 1
-        
-        updates = [
-            {'range': f'A{new_row_idx}', 'values': [[now]]},
-            {'range': f'B{new_row_idx}', 'values': [[master_name]]},
-            {'range': f'C{new_row_idx}', 'values': [[uid]]},
-            {'range': f'D{new_row_idx}', 'values': [[address]]},
-            {'range': f'E{new_row_idx}', 'values': [[darks_number]]},
-            {'range': f'F{new_row_idx}', 'values': [[old_data.get('serial', '')]]},
-            {'range': f'G{new_row_idx}', 'values': [[old_data.get('gos', '')]]},
-            {'range': f'H{new_row_idx}', 'values': [[old_data.get('iot', '')]]},
-            {'range': f'I{new_row_idx}', 'values': [[new_data.get('serial', '')]]},
-            {'range': f'J{new_row_idx}', 'values': [[new_data.get('gos', '')]]},
-            {'range': f'K{new_row_idx}', 'values': [[new_data.get('iot', '')]]},
-            {'range': f'L{new_row_idx}', 'values': [['Эвакуация']]}
-        ]
-        report_sheet.batch_update(updates)
-        export_removal_reason(old_data, reason)
-        logger.info(f"✅ Записана эвакуация для заявки {uid}")
-        return True, ''
-    except Exception as e:
-        logger.error(f"Ошибка записи эвакуации: {e}")
-        return False, str(e)
+    for bike in (old_data, new_data):
+        bike['iot'] = ensure_iot_prefix(bike.get('iot'))
+    append_bike_swap(address, darks_number, old_data, new_data, master_name, uid, 'Эвакуация')
+    write_swap_report(uid, master_name, darks_number, address, old_data, new_data, 'Эвакуация')
+    export_removal_reason(old_data, reason)
+
+
+def close_replacement(uid, master, darks, event, note, details=None):
+    # Persist the status/report retry before telling the phone the request is closed.
+    add_to_queue({
+        'uid': uid,
+        'source': source_of(uid),
+        'type': event,
+        'data': {'master': master, 'darks_number': darks, **(details or {})},
+    })
+    update_ticket_in_admin_cache(uid, 'done', note, '✅ Выполнено')
+    remove_ticket_from_master_cache(master, uid)
+    mark_swap_done(uid)
+
 
 @app.route('/master/evacuation/replace', methods=['POST'])
 @login_required
@@ -8090,18 +8085,15 @@ def master_evacuation_replace():
         
         if not new_data.get('serial') or not new_data.get('gos') or not new_data.get('iot'):
             return jsonify({'success': False, 'error': 'Заполните все поля НОВОГО велосипеда'}), 400
-        if not begin_swap(uid):
-            return jsonify({'success': True, 'message': 'Замена уже отправлена'})
-        
-        ticket = find_cached_ticket(uid) or {}
-        reason = evacuation_reason(ticket)
-        saved, err = write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data, reason)
-        if not saved:
-            finish_swap(uid, False)
-            return jsonify({'success': False, 'error': err or 'Не удалось записать замену в таблицу'})
-        
-        update_ticket_in_admin_cache(uid, 'done', 'Заменен при эвакуации', '✅ Выполнено')
-        update_status_in_google_sheets(uid, '✅ Выполнено', 'Заменен при эвакуации')
+        with data_file_lock('replacement'):
+            if swap_already_done(uid):
+                return jsonify({'success': True, 'message': 'Замена уже отправлена'})
+            ticket = find_cached_ticket(uid) or {}
+            reason = evacuation_reason(ticket)
+            write_evacuation_to_sheet(uid, master_name, darks_number, address, old_data, new_data, reason)
+            close_replacement(uid, master_name, darks_number, 'evacuation_and_replace',
+                              'Заменен при эвакуации', {'old_data': old_data, 'new_data': new_data})
+
         notify_dark_event(darks_number, f'✅ {old_data.get("gos") or ticket_label(ticket)} заменен и готов к эксплуатации', uid, 'replaced')
         maybe_ask_rating(darks_number, master_name)
         try:
@@ -8123,29 +8115,9 @@ def master_evacuation_replace():
         except Exception as exc:
             logger.warning(f'Уведомление о замене не сохранилось: {exc}')
         
-        add_to_queue({
-            'uid': uid,
-            'source': source_of(uid),
-            'type': 'evacuation_and_replace',
-            'data': {
-                'master': master_name,
-                'darks_number': darks_number,
-                'old_data': old_data,
-                'new_data': new_data
-            }
-        })
-        
-        cache_data = get_master_cache(master_name)
-        if cache_data:
-            tickets = cache_data.get('tickets', [])
-            tickets = [t for t in tickets if t.get('uid') != uid]
-            save_master_cache(master_name, tickets, '')
-        
-        finish_swap(uid, True)
         return jsonify({'success': True, 'message': 'Эвакуация выполнена'})
-        
+
     except Exception as e:
-        finish_swap(uid, False)
         logger.error(f"Ошибка эвакуации: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
